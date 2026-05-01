@@ -40,7 +40,7 @@ HOME_JOINTS = {
 
 SAFE_Z = 0.40
 APPROACH_Z_OFFSET = 0.18
-GRASP_Z_OFFSET = 0.12
+GRASP_Z_OFFSET = 0.3
 COLLISION_MARGIN = 0.02
 MIN_GRASP_CLEARANCE = 0.02
 MIN_TRAVEL_Z = 0.06
@@ -125,8 +125,8 @@ class ClickPickNode(Node):
 
         # Hand-Eye 매트릭스 로드
         calib_file = (
-            Path(get_package_share_directory("dsr_practice"))
-            / "config"
+            Path(get_package_share_directory("macgyvbot"))
+            / "calibration"
             / "T_gripper2camera.npy"
         )
 
@@ -273,22 +273,8 @@ class ClickPickNode(Node):
                 log.error("XY 이동 실패. Pick 시퀀스 중단")
                 return
 
-            # 2. 타겟 상단으로 접근 (offset 적용)
-            log.info("2단계: 타겟 상단 접근")
-            ok = plan_and_execute(
-                self.robot,
-                self.arm,
-                log,
-                pose_goal=make_pose(bx, by, approach_z, ori),
-                params=self.pilz_params,
-            )
-
-            if not ok:
-                log.error("상단 접근 실패. Pick 시퀀스 중단")
-                return
-
-            # 3. 파지 높이로 하강 (offset 적용)
-            log.info("3단계: 파지 높이 하강")
+            # 2. Z 이동(파지 높이)
+            log.info("2단계: Z 이동(파지 높이)")
             ok = plan_and_execute(
                 self.robot,
                 self.arm,
@@ -298,16 +284,16 @@ class ClickPickNode(Node):
             )
 
             if not ok:
-                log.error("파지 높이 하강 실패. Pick 시퀀스 중단")
+                log.error("Z 이동 실패. Pick 시퀀스 중단")
                 return
 
-            # 4. 그리퍼 닫기
-            log.info("4단계: 그리퍼 닫기")
+            # 3. 그리퍼 닫기
+            log.info("3단계: 그리퍼 닫기")
             self.gripper.close_gripper()
             time.sleep(1.0)
 
-            # 5. 안전 높이로 복귀
-            log.info("5단계: 안전 높이 복귀")
+            # 4. 안전 높이로 복귀
+            log.info("4단계: 안전 높이 복귀")
             ok = plan_and_execute(
                 self.robot,
                 self.arm,
@@ -320,8 +306,8 @@ class ClickPickNode(Node):
                 log.error("안전 높이 복귀 실패")
                 return
 
-            # 6. Home 위치 근처로 복귀
-            log.info("6단계: Home XY 복귀")
+            # 5. Home 위치 근처로 복귀
+            log.info("5단계: Home XY 복귀")
             ok = plan_and_execute(
                 self.robot,
                 self.arm,
@@ -334,8 +320,8 @@ class ClickPickNode(Node):
                 log.error("Home 복귀 실패")
                 return
 
-            # 7. 놓기 (Home 위치에서 그리퍼 오픈)
-            log.info("7단계: Home 위치에서 그리퍼 오픈(놓기)")
+            # 6. 놓기 (Home 위치에서 그리퍼 오픈)
+            log.info("6단계: Home 위치에서 그리퍼 오픈(놓기)")
             self.gripper.open_gripper()
             time.sleep(0.8)
 
