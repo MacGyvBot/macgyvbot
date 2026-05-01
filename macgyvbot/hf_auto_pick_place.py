@@ -20,6 +20,7 @@ from moveit.core.robot_state import RobotState
 from moveit.planning import MoveItPy, PlanRequestParameters
 
 from .onrobot import RG
+from .safety import clamp_to_safe_workspace
 
 
 # ═══════════════════════════════════════════
@@ -67,10 +68,23 @@ def make_pose(x, y, z, ori):
     return p
 
 
+def make_safe_pose(x, y, z, ori, logger):
+    safe_x, safe_y, safe_z = clamp_to_safe_workspace(x, y, z, logger)
+    return make_pose(safe_x, safe_y, safe_z, ori)
+
+
 def plan_and_execute(robot, arm, logger, pose_goal=None, state_goal=None, params=None):
     arm.set_start_state_to_current_state()
 
     if pose_goal:
+        x = pose_goal.pose.position.x
+        y = pose_goal.pose.position.y
+        z = pose_goal.pose.position.z
+        sx, sy, sz = clamp_to_safe_workspace(x, y, z, logger)
+        pose_goal.pose.position.x = sx
+        pose_goal.pose.position.y = sy
+        pose_goal.pose.position.z = sz
+
         arm.set_goal_state(
             pose_stamped_msg=pose_goal,
             pose_link=EE_LINK,
@@ -247,25 +261,62 @@ class ClickPickNode(Node):
             )
             grasp_z = min_safe_grasp_z
 
-        cur_z = get_ee_matrix(self.robot)[2, 3]
+        current_pose = get_ee_matrix(self.robot)
+        current_x = current_pose[0, 3]
+        current_y = current_pose[1, 3]
+
+        target_x, target_y, _ = clamp_to_safe_workspace(bx, by, SAFE_Z, log)
+        _, _, travel_z = clamp_to_safe_workspace(target_x, target_y, SAFE_Z, log)
+        _, _, approach_z = clamp_to_safe_workspace(target_x, target_y, approach_z, log)
+        _, _, grasp_z = clamp_to_safe_workspace(target_x, target_y, grasp_z, log)
+
+        if grasp_z > approach_z:
+            log.warn(
+                f"안전영역 적용 후 grasp_z({grasp_z:.3f})가 "
+                f"approach_z({approach_z:.3f})보다 높아 approach_z로 맞춥니다."
+            )
+            grasp_z = approach_z
+
+        should_descend_to_grasp = abs(approach_z - grasp_z) > 0.005
 
         try:
             log.info(
-                f"시퀀스 시작: Target({bx:.3f}, {by:.3f}), "
-                f"depth={z_m:.3f}, approach_z={approach_z:.3f}, grasp_z={grasp_z:.3f}"
+                f"시퀀스 시작: Target({target_x:.3f}, {target_y:.3f}), "
+                f"depth={z_m:.3f}, travel_z={travel_z:.3f}, "
+                f"approach_z={approach_z:.3f}, grasp_z={grasp_z:.3f}"
             )
 
             # 0. 파지 전 그리퍼 오픈
             self.gripper.open_gripper()
             time.sleep(0.5)
 
-            # 1. XY 우선 이동
-            log.info("1단계: XY 수평 이동")
+            # 1. 안전 이동 높이 확보
+            log.info("1단계: 안전 이동 높이 확보")
             ok = plan_and_execute(
                 self.robot,
                 self.arm,
                 log,
-                pose_goal=make_pose(bx, by, cur_z, ori),
+                pose_goal=make_safe_pose(
+                    current_x,
+                    current_y,
+                    travel_z,
+                    ori,
+                    log,
+                ),
+                params=self.pilz_params,
+            )
+
+            if not ok:
+                log.error("안전 이동 높이 확보 실패. Pick 시퀀스 중단")
+                return
+
+            # 2. 안전 높이에서 XY 이동
+            log.info("2단계: 안전 높이에서 XY 수평 이동")
+            ok = plan_and_execute(
+                self.robot,
+                self.arm,
+                log,
+                pose_goal=make_safe_pose(target_x, target_y, travel_z, ori, log),
                 params=self.pilz_params,
             )
 
@@ -273,32 +324,49 @@ class ClickPickNode(Node):
                 log.error("XY 이동 실패. Pick 시퀀스 중단")
                 return
 
-            # 2. Z 이동(파지 높이)
-            log.info("2단계: Z 이동(파지 높이)")
+            # 3. 타겟 상단으로 접근 (offset 적용)
+            log.info("3단계: 타겟 상단 접근")
             ok = plan_and_execute(
                 self.robot,
                 self.arm,
                 log,
-                pose_goal=make_pose(bx, by, grasp_z, ori),
+                pose_goal=make_safe_pose(target_x, target_y, approach_z, ori, log),
                 params=self.pilz_params,
             )
 
             if not ok:
-                log.error("Z 이동 실패. Pick 시퀀스 중단")
+                log.error("상단 접근 실패. Pick 시퀀스 중단")
                 return
 
-            # 3. 그리퍼 닫기
-            log.info("3단계: 그리퍼 닫기")
+            # 4. 파지 높이로 하강 (offset 적용)
+            if should_descend_to_grasp:
+                log.info("4단계: 파지 높이 하강")
+                ok = plan_and_execute(
+                    self.robot,
+                    self.arm,
+                    log,
+                    pose_goal=make_safe_pose(target_x, target_y, grasp_z, ori, log),
+                    params=self.pilz_params,
+                )
+
+                if not ok:
+                    log.error("파지 높이 하강 실패. Pick 시퀀스 중단")
+                    return
+            else:
+                log.info("4단계: approach_z와 grasp_z가 같아 추가 하강 생략")
+
+            # 5. 그리퍼 닫기
+            log.info("5단계: 그리퍼 닫기")
             self.gripper.close_gripper()
             time.sleep(1.0)
 
-            # 4. 안전 높이로 복귀
-            log.info("4단계: 안전 높이 복귀")
+            # 6. 안전 높이로 복귀
+            log.info("6단계: 안전 높이 복귀")
             ok = plan_and_execute(
                 self.robot,
                 self.arm,
                 log,
-                pose_goal=make_pose(bx, by, SAFE_Z, ori),
+                pose_goal=make_safe_pose(target_x, target_y, travel_z, ori, log),
                 params=self.pilz_params,
             )
 
@@ -306,13 +374,19 @@ class ClickPickNode(Node):
                 log.error("안전 높이 복귀 실패")
                 return
 
-            # 5. Home 위치 근처로 복귀
-            log.info("5단계: Home XY 복귀")
+            # 7. Home 위치 근처로 복귀
+            log.info("7단계: Home XY 복귀")
             ok = plan_and_execute(
                 self.robot,
                 self.arm,
                 log,
-                pose_goal=make_pose(self.home_xyz[0], self.home_xyz[1], SAFE_Z, ori),
+                pose_goal=make_safe_pose(
+                    self.home_xyz[0],
+                    self.home_xyz[1],
+                    travel_z,
+                    ori,
+                    log,
+                ),
                 params=self.pilz_params,
             )
 
@@ -320,8 +394,8 @@ class ClickPickNode(Node):
                 log.error("Home 복귀 실패")
                 return
 
-            # 6. 놓기 (Home 위치에서 그리퍼 오픈)
-            log.info("6단계: Home 위치에서 그리퍼 오픈(놓기)")
+            # 8. 놓기 (Home 위치에서 그리퍼 오픈)
+            log.info("8단계: Home 위치에서 그리퍼 오픈(놓기)")
             self.gripper.open_gripper()
             time.sleep(0.8)
 
