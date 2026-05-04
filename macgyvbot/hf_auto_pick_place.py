@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
+import json
 import math
+import threading
 import time
 from pathlib import Path
 
@@ -47,6 +49,12 @@ MIN_GRASP_CLEARANCE = 0.02
 MIN_TRAVEL_Z = 0.06
 MIN_PICK_Z = 0.30
 MAX_DESCENT_FROM_APPROACH = 0.08
+YOLO_MODEL_NAME = "yolov11_best.pt"
+HAND_GRASP_TOPIC = "/human_grasped_tool"
+HAND_GRASP_IMAGE_TOPIC = "/hand_grasp_detection/annotated_image"
+HAND_GRASP_TIMEOUT_SEC = 20.0
+ROBOT_WINDOW_NAME = "YOLO Robot Pick"
+HAND_GRASP_WINDOW_NAME = "Hand Grasp Detection"
 
 
 # ═══════════════════════════════════════════
@@ -115,6 +123,22 @@ def get_ee_matrix(moveit_robot):
     return np.asarray(T, dtype=float)
 
 
+def resolve_model_path(model_name):
+    package_share = Path(get_package_share_directory("macgyvbot"))
+    candidates = [
+        package_share / "models" / model_name,
+        package_share / model_name,
+        Path.cwd() / "models" / model_name,
+        Path.cwd() / model_name,
+    ]
+
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+
+    return model_name
+
+
 # ═══════════════════════════════════════════
 # 메인 노드 클래스
 # ═══════════════════════════════════════════
@@ -130,12 +154,16 @@ class ClickPickNode(Node):
 
         self.picking = False
         self.target_label = None
+        self.pending_pick_thread = None
+        self.human_grasped_tool = False
+        self.last_grasp_result = None
+        self.hand_grasp_image = None
 
         self.home_xyz = None
         self.home_ori = None
 
         # YOLO 모델 로드
-        self.model = YOLO("yolov8n.pt")
+        self.model = YOLO(resolve_model_path(YOLO_MODEL_NAME))
 
         # Hand-Eye 매트릭스 로드
         calib_file = (
@@ -189,10 +217,28 @@ class ClickPickNode(Node):
             10,
         )
 
+        # 사용자 손의 공구 잡기 인식 결과 구독
+        self.create_subscription(
+            String,
+            HAND_GRASP_TOPIC,
+            self._hand_grasp_cb,
+            10,
+        )
+
+        # 사용자 손 인식 annotation 이미지 구독
+        self.create_subscription(
+            Image,
+            HAND_GRASP_IMAGE_TOPIC,
+            self._hand_grasp_image_cb,
+            10,
+        )
+
         self.get_logger().info("노드 초기화 완료")
         self.get_logger().info(
             "객체 입력 예시: ros2 topic pub --once /target_label std_msgs/msg/String \"{data: cup}\""
         )
+        self.get_logger().info(f"잡기 인식 결과 토픽: {HAND_GRASP_TOPIC}")
+        self.get_logger().info(f"잡기 인식 화면 토픽: {HAND_GRASP_IMAGE_TOPIC}")
 
     def _target_label_cb(self, msg):
         val = msg.data.strip()
@@ -208,6 +254,22 @@ class ClickPickNode(Node):
 
         self.target_label = val
         self.get_logger().info(f"타겟 객체 설정: {self.target_label}")
+
+    def _hand_grasp_cb(self, msg):
+        try:
+            result = json.loads(msg.data)
+        except json.JSONDecodeError:
+            self.get_logger().warn(f"잡기 인식 결과 JSON 파싱 실패: {msg.data}")
+            return
+
+        self.last_grasp_result = result
+        self.human_grasped_tool = bool(result.get("human_grasped_tool", False))
+
+    def _hand_grasp_image_cb(self, msg):
+        try:
+            self.hand_grasp_image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
+        except Exception as exc:
+            self.get_logger().warn(f"잡기 인식 화면 변환 실패: {exc}")
 
     def _cam_info_cb(self, msg):
         self.intrinsics = {
@@ -232,7 +294,8 @@ class ClickPickNode(Node):
         return base_xyz
 
     def pick_sequence(self, bx, by, bz, z_m):
-        self.picking = True
+        self.human_grasped_tool = False
+        self.last_grasp_result = None
 
         log = self.get_logger()
         ori = self.home_ori
@@ -394,8 +457,13 @@ class ClickPickNode(Node):
                 log.error("Home 복귀 실패")
                 return
 
-            # 8. 놓기 (Home 위치에서 그리퍼 오픈)
-            log.info("8단계: Home 위치에서 그리퍼 오픈(놓기)")
+            # 8. 사용자 손이 공구를 잡았는지 확인 후 놓기
+            log.info("8단계: 사용자 잡기 인식 대기")
+            if not self.wait_for_human_grasp(log):
+                log.error("사용자 잡기 인식 실패. 그리퍼 릴리즈를 중단합니다.")
+                return
+
+            log.info("9단계: 사용자 잡기 확인 후 그리퍼 오픈(놓기)")
             self.gripper.open_gripper()
             time.sleep(0.8)
 
@@ -404,6 +472,42 @@ class ClickPickNode(Node):
         finally:
             self.picking = False
             self.target_label = None
+            self.human_grasped_tool = False
+
+    def wait_for_human_grasp(self, logger):
+        start_time = time.monotonic()
+
+        while rclpy.ok():
+            if self.human_grasped_tool:
+                logger.info("사용자가 공구를 잡은 것으로 확인됨")
+                return True
+
+            if time.monotonic() - start_time >= HAND_GRASP_TIMEOUT_SEC:
+                logger.warn(
+                    f"{HAND_GRASP_TIMEOUT_SEC:.1f}초 동안 사용자 잡기 인식이 없어 대기 종료"
+                )
+                return False
+
+            time.sleep(0.1)
+
+        return False
+
+    def start_pick_sequence(self, bx, by, bz, z_m):
+        if self.picking:
+            self.get_logger().warn("이미 pick 동작 중이라 새 pick 요청을 무시합니다.")
+            return
+
+        self.picking = True
+        self.pending_pick_thread = threading.Thread(
+            target=self.pick_sequence,
+            args=(bx, by, bz, z_m),
+            daemon=True,
+        )
+        self.pending_pick_thread.start()
+
+    def show_hand_grasp_window(self):
+        if self.hand_grasp_image is not None:
+            cv2.imshow(HAND_GRASP_WINDOW_NAME, self.hand_grasp_image)
 
     def run(self):
         self.get_logger().info("시스템 준비 중... Home으로 이동합니다.")
@@ -463,6 +567,10 @@ class ClickPickNode(Node):
                 continue
 
             if self.picking:
+                cv2.imshow(ROBOT_WINDOW_NAME, self.color_image)
+                self.show_hand_grasp_window()
+                if cv2.waitKey(1) == 27:
+                    break
                 continue
 
             # YOLO 추론
@@ -523,7 +631,7 @@ class ClickPickNode(Node):
                         f"base=({bx:.3f}, {by:.3f}, {bz:.3f})"
                     )
 
-                    self.pick_sequence(bx, by, bz, z_m)
+                    self.start_pick_sequence(bx, by, bz, z_m)
                     break
 
                 if not found:
@@ -531,7 +639,8 @@ class ClickPickNode(Node):
                         f"'{self.target_label}' 탐색 중... 현재 프레임에서는 미검출"
                     )
 
-            cv2.imshow("YOLO Robot Pick", annotated_frame)
+            cv2.imshow(ROBOT_WINDOW_NAME, annotated_frame)
+            self.show_hand_grasp_window()
 
             if cv2.waitKey(1) == 27:
                 break
