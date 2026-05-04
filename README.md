@@ -60,9 +60,27 @@ pip install -r requirements-grasp.txt
 
 ## 자동 pick/place 실행
 
+기본 실행은 YOLO bounding box 중심점을 grasp point로 사용합니다.
+
 ```bash
 ros2 launch macgyvbot hf_auto_pick_place.launch.py
 ```
+
+명시적으로 중심점 모드를 사용할 경우:
+
+```bash
+ros2 launch macgyvbot hf_auto_pick_place.launch.py grasp_point_mode:=center
+```
+
+VLM 기반 grasp point selection을 사용할 경우:
+
+```bash
+ros2 launch macgyvbot hf_auto_pick_place.launch.py grasp_point_mode:=vlm
+```
+
+VLM 모드는 YOLO가 검출한 객체 crop에서 grid 기반 grasp region을 선택한 뒤
+depth로 grasp pixel을 보정합니다. VLM 추론 또는 depth 보정이 실패하면 기존
+중심점 방식으로 fallback합니다.
 
 대상 객체 이름 publish:
 

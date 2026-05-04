@@ -34,6 +34,11 @@ def generate_launch_description():
                 "yolo_model",
                 default_value="yolov11_best.pt",
             ),
+            DeclareLaunchArgument(
+                "grasp_point_mode",
+                default_value="center",
+                description="Grasp point selection mode: center or vlm",
+            ),
             Node(
                 package="macgyvbot",
                 executable="hf_auto_pick_place",  # 👈 새로 만든 파이썬 노드 이름으로 변경!
@@ -42,6 +47,11 @@ def generate_launch_description():
                 parameters=[
                     moveit_config.to_dict(),
                     moveit_py_params,
+                    {
+                        "grasp_point_mode": LaunchConfiguration(
+                            "grasp_point_mode"
+                        ),
+                    },
                 ],
             ),
             Node(

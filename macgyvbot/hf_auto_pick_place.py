@@ -55,6 +55,10 @@ HAND_GRASP_IMAGE_TOPIC = "/hand_grasp_detection/annotated_image"
 HAND_GRASP_TIMEOUT_SEC = 20.0
 ROBOT_WINDOW_NAME = "YOLO Robot Pick"
 HAND_GRASP_WINDOW_NAME = "Hand Grasp Detection"
+GRASP_POINT_MODE_CENTER = "center"
+GRASP_POINT_MODE_VLM = "vlm"
+DEFAULT_GRASP_POINT_MODE = GRASP_POINT_MODE_CENTER
+VLM_GRASP_GRID_SIZES = ((3, 3), (4, 4))
 
 
 # ═══════════════════════════════════════════
@@ -158,9 +162,28 @@ class ClickPickNode(Node):
         self.human_grasped_tool = False
         self.last_grasp_result = None
         self.hand_grasp_image = None
+        self.vlm_grasp_model = None
 
         self.home_xyz = None
         self.home_ori = None
+
+        self.declare_parameter("grasp_point_mode", DEFAULT_GRASP_POINT_MODE)
+        self.grasp_point_mode = (
+            self.get_parameter("grasp_point_mode")
+            .get_parameter_value()
+            .string_value
+            .strip()
+            .lower()
+        )
+        if self.grasp_point_mode not in (
+            GRASP_POINT_MODE_CENTER,
+            GRASP_POINT_MODE_VLM,
+        ):
+            self.get_logger().warn(
+                f"알 수 없는 grasp_point_mode '{self.grasp_point_mode}'. "
+                f"'{GRASP_POINT_MODE_CENTER}'로 대체합니다."
+            )
+            self.grasp_point_mode = GRASP_POINT_MODE_CENTER
 
         # YOLO 모델 로드
         self.model = YOLO(resolve_model_path(YOLO_MODEL_NAME))
@@ -234,6 +257,7 @@ class ClickPickNode(Node):
         )
 
         self.get_logger().info("노드 초기화 완료")
+        self.get_logger().info(f"grasp point mode: {self.grasp_point_mode}")
         self.get_logger().info(
             "객체 입력 예시: ros2 topic pub --once /target_label std_msgs/msg/String \"{data: cup}\""
         )
@@ -292,6 +316,119 @@ class ClickPickNode(Node):
         base_xyz = (base2cam @ coord)[:3]
 
         return base_xyz
+
+    def select_grasp_pixel(self, box, label):
+        b = box.xyxy[0].cpu().numpy()
+
+        if self.grasp_point_mode == GRASP_POINT_MODE_VLM:
+            vlm_pixel = self.select_vlm_grasp_pixel(b, label)
+            if vlm_pixel is not None:
+                return vlm_pixel
+
+            self.get_logger().warn(
+                "VLM grasp point 실패. box 중심점으로 대체합니다."
+            )
+
+        return self.select_box_center_pixel(b)
+
+    def select_box_center_pixel(self, bbox):
+        u = int((bbox[0] + bbox[2]) / 2)
+        v = int((bbox[1] + bbox[3]) / 2)
+        return u, v, GRASP_POINT_MODE_CENTER
+
+    def select_vlm_grasp_pixel(self, bbox, label):
+        x1, y1, x2, y2 = self.clamp_bbox_to_image(bbox, self.color_image)
+
+        if x2 <= x1 or y2 <= y1:
+            self.get_logger().warn("VLM crop bbox가 비어 있습니다.")
+            return None
+
+        try:
+            from PIL import Image as PILImage
+
+            from .grasp_point_detection import VLMModel
+        except ImportError as exc:
+            self.get_logger().warn(f"VLM grasp 모듈 import 실패: {exc}")
+            return None
+
+        if self.vlm_grasp_model is None:
+            self.get_logger().info("VLM grasp 모델을 lazy load 준비합니다.")
+            self.vlm_grasp_model = VLMModel()
+
+        crop_bgr = self.color_image[y1:y2, x1:x2]
+        crop_rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
+        crop_image = PILImage.fromarray(crop_rgb)
+
+        try:
+            result = self.vlm_grasp_model.select_grasp_region(
+                crop_image,
+                object_label=label,
+                user_request=self.target_label,
+                grid_sizes=VLM_GRASP_GRID_SIZES,
+            )
+        except Exception as exc:
+            self.get_logger().warn(f"VLM grasp point 추론 실패: {exc}")
+            return None
+
+        u = x1 + int(round(result.point[0]))
+        v = y1 + int(round(result.point[1]))
+        source = GRASP_POINT_MODE_VLM
+
+        refined = VLMModel.refine_grasp_point_with_depth(
+            self.depth_image,
+            (u, v),
+            focal_px=(self.intrinsics["fx"] + self.intrinsics["fy"]) / 2.0,
+        )
+        if refined is not None:
+            u, v = refined.point
+            source = f"{GRASP_POINT_MODE_VLM}+depth"
+
+        self.get_logger().info(
+            f"VLM grasp point 선택: pixel=({u}, {v}), "
+            f"angle={result.angle_deg:.1f}deg, source={source}"
+        )
+
+        return u, v, source
+
+    @staticmethod
+    def clamp_bbox_to_image(bbox, image):
+        height, width = image.shape[:2]
+        x1 = max(0, min(width - 1, int(math.floor(bbox[0]))))
+        y1 = max(0, min(height - 1, int(math.floor(bbox[1]))))
+        x2 = max(0, min(width, int(math.ceil(bbox[2]))))
+        y2 = max(0, min(height, int(math.ceil(bbox[3]))))
+        return x1, y1, x2, y2
+
+    def pixel_to_base_target(self, u, v, label, source):
+        h, w = self.depth_image.shape[:2]
+
+        if not (0 <= u < w and 0 <= v < h):
+            self.get_logger().warn(
+                f"{source} 픽셀이 depth 이미지 범위를 벗어남: u={u}, v={v}"
+            )
+            return None
+
+        z_raw = self.depth_image[v, u]
+
+        if z_raw == 0:
+            self.get_logger().warn(
+                f"{label} 검출됨, 하지만 {source} depth 값이 0입니다."
+            )
+            return None
+
+        z_m = float(z_raw) / 1000.0
+        cam_x = (u - self.intrinsics["ppx"]) * z_m / self.intrinsics["fx"]
+        cam_y = (v - self.intrinsics["ppy"]) * z_m / self.intrinsics["fy"]
+        bx, by, bz = self.transform_to_base((cam_x, cam_y, z_m))
+
+        self.get_logger().info(
+            f"'{label}' 검출: source={source}, "
+            f"pixel=({u}, {v}), "
+            f"camera=({cam_x:.3f}, {cam_y:.3f}, {z_m:.3f}), "
+            f"base=({bx:.3f}, {by:.3f}, {bz:.3f})"
+        )
+
+        return bx, by, bz, z_m
 
     def pick_sequence(self, bx, by, bz, z_m):
         self.human_grasped_tool = False
@@ -588,47 +725,23 @@ class ClickPickNode(Node):
 
                     found = True
 
-                    b = box.xyxy[0].cpu().numpy()
+                    u, v, source = self.select_grasp_pixel(box, label)
+                    target = self.pixel_to_base_target(u, v, label, source)
 
-                    u = int((b[0] + b[2]) / 2)
-                    v = int((b[1] + b[3]) / 2)
-
-                    h, w = self.depth_image.shape[:2]
-
-                    if not (0 <= u < w and 0 <= v < h):
-                        self.get_logger().warn(
-                            f"검출 중심점이 depth 이미지 범위를 벗어남: u={u}, v={v}"
-                        )
+                    if target is None:
                         continue
 
-                    z_raw = self.depth_image[v, u]
-
-                    if z_raw == 0:
-                        self.get_logger().warn(
-                            f"{self.target_label} 검출됨, 하지만 depth 값이 0입니다."
-                        )
-                        continue
-
-                    z_m = float(z_raw) / 1000.0
-
-                    cam_x = (
-                        (u - self.intrinsics["ppx"])
-                        * z_m
-                        / self.intrinsics["fx"]
-                    )
-                    cam_y = (
-                        (v - self.intrinsics["ppy"])
-                        * z_m
-                        / self.intrinsics["fy"]
-                    )
-
-                    bx, by, bz = self.transform_to_base((cam_x, cam_y, z_m))
-
-                    self.get_logger().info(
-                        f"'{self.target_label}' 검출: "
-                        f"pixel=({u}, {v}), "
-                        f"camera=({cam_x:.3f}, {cam_y:.3f}, {z_m:.3f}), "
-                        f"base=({bx:.3f}, {by:.3f}, {bz:.3f})"
+                    bx, by, bz, z_m = target
+                    cv2.circle(annotated_frame, (u, v), 6, (0, 255, 255), -1)
+                    cv2.putText(
+                        annotated_frame,
+                        source,
+                        (u + 8, v - 8),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.45,
+                        (0, 255, 255),
+                        1,
+                        cv2.LINE_AA,
                     )
 
                     self.start_pick_sequence(bx, by, bz, z_m)
