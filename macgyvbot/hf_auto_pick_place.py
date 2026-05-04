@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import math
+import threading
 import time
 from pathlib import Path
 
@@ -50,7 +51,10 @@ MIN_PICK_Z = 0.30
 MAX_DESCENT_FROM_APPROACH = 0.08
 YOLO_MODEL_NAME = "yolov11_best.pt"
 HAND_GRASP_TOPIC = "/human_grasped_tool"
+HAND_GRASP_IMAGE_TOPIC = "/hand_grasp_detection/annotated_image"
 HAND_GRASP_TIMEOUT_SEC = 20.0
+ROBOT_WINDOW_NAME = "YOLO Robot Pick"
+HAND_GRASP_WINDOW_NAME = "Hand Grasp Detection"
 
 
 # ═══════════════════════════════════════════
@@ -150,8 +154,10 @@ class ClickPickNode(Node):
 
         self.picking = False
         self.target_label = None
+        self.pending_pick_thread = None
         self.human_grasped_tool = False
         self.last_grasp_result = None
+        self.hand_grasp_image = None
 
         self.home_xyz = None
         self.home_ori = None
@@ -219,11 +225,20 @@ class ClickPickNode(Node):
             10,
         )
 
+        # 사용자 손 인식 annotation 이미지 구독
+        self.create_subscription(
+            Image,
+            HAND_GRASP_IMAGE_TOPIC,
+            self._hand_grasp_image_cb,
+            10,
+        )
+
         self.get_logger().info("노드 초기화 완료")
         self.get_logger().info(
             "객체 입력 예시: ros2 topic pub --once /target_label std_msgs/msg/String \"{data: cup}\""
         )
         self.get_logger().info(f"잡기 인식 결과 토픽: {HAND_GRASP_TOPIC}")
+        self.get_logger().info(f"잡기 인식 화면 토픽: {HAND_GRASP_IMAGE_TOPIC}")
 
     def _target_label_cb(self, msg):
         val = msg.data.strip()
@@ -250,6 +265,12 @@ class ClickPickNode(Node):
         self.last_grasp_result = result
         self.human_grasped_tool = bool(result.get("human_grasped_tool", False))
 
+    def _hand_grasp_image_cb(self, msg):
+        try:
+            self.hand_grasp_image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
+        except Exception as exc:
+            self.get_logger().warn(f"잡기 인식 화면 변환 실패: {exc}")
+
     def _cam_info_cb(self, msg):
         self.intrinsics = {
             "fx": msg.k[0],
@@ -273,7 +294,6 @@ class ClickPickNode(Node):
         return base_xyz
 
     def pick_sequence(self, bx, by, bz, z_m):
-        self.picking = True
         self.human_grasped_tool = False
         self.last_grasp_result = None
 
@@ -468,9 +488,26 @@ class ClickPickNode(Node):
                 )
                 return False
 
-            rclpy.spin_once(self, timeout_sec=0.1)
+            time.sleep(0.1)
 
         return False
+
+    def start_pick_sequence(self, bx, by, bz, z_m):
+        if self.picking:
+            self.get_logger().warn("이미 pick 동작 중이라 새 pick 요청을 무시합니다.")
+            return
+
+        self.picking = True
+        self.pending_pick_thread = threading.Thread(
+            target=self.pick_sequence,
+            args=(bx, by, bz, z_m),
+            daemon=True,
+        )
+        self.pending_pick_thread.start()
+
+    def show_hand_grasp_window(self):
+        if self.hand_grasp_image is not None:
+            cv2.imshow(HAND_GRASP_WINDOW_NAME, self.hand_grasp_image)
 
     def run(self):
         self.get_logger().info("시스템 준비 중... Home으로 이동합니다.")
@@ -530,6 +567,10 @@ class ClickPickNode(Node):
                 continue
 
             if self.picking:
+                cv2.imshow(ROBOT_WINDOW_NAME, self.color_image)
+                self.show_hand_grasp_window()
+                if cv2.waitKey(1) == 27:
+                    break
                 continue
 
             # YOLO 추론
@@ -590,7 +631,7 @@ class ClickPickNode(Node):
                         f"base=({bx:.3f}, {by:.3f}, {bz:.3f})"
                     )
 
-                    self.pick_sequence(bx, by, bz, z_m)
+                    self.start_pick_sequence(bx, by, bz, z_m)
                     break
 
                 if not found:
@@ -598,7 +639,8 @@ class ClickPickNode(Node):
                         f"'{self.target_label}' 탐색 중... 현재 프레임에서는 미검출"
                     )
 
-            cv2.imshow("YOLO Robot Pick", annotated_frame)
+            cv2.imshow(ROBOT_WINDOW_NAME, annotated_frame)
+            self.show_hand_grasp_window()
 
             if cv2.waitKey(1) == 27:
                 break
