@@ -1,4 +1,5 @@
 from setuptools import find_packages, setup
+from glob import glob
 
 package_name = 'macgyvbot'
 
@@ -10,6 +11,10 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        ('share/' + package_name + '/launch', glob('launch/*.launch.py')),
+        ('share/' + package_name + '/config', glob('config/*.yaml')),
+        ('share/' + package_name + '/calibration', glob('calibration/*.npy') + glob('calibration/*.md')),
+        ('share/' + package_name + '/models', glob('models/*.pt')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -24,7 +29,9 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'hf_auto_pick_place = dsr_practice.hf_auto_pick_place:main',
+            'macgyvbot = macgyvbot.macgyvbot:main',
+            'hf_auto_pick_place = macgyvbot.hf_auto_pick_place:main',
+            'hand_grasp_detection = macgyvbot.hand_grasp_detection_node:main',
         ],
     },
 )

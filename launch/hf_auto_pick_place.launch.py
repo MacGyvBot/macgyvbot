@@ -23,13 +23,13 @@ def generate_launch_description():
 
     # 🔹 MoveItPy 전용 YAML 추가
     moveit_py_params = PathJoinSubstitution(
-        [FindPackageShare("dsr_practice"), "config", "moveit_py.yaml"]
+        [FindPackageShare("macgyvbot"), "config", "moveit_py.yaml"]
     )
 
     return LaunchDescription(
         [
             Node(
-                package="dsr_practice",
+                package="macgyvbot",
                 executable="hf_auto_pick_place",  # 👈 새로 만든 파이썬 노드 이름으로 변경!
                 output="screen",
                 # MoveIt config + MoveItPy용 설정을 같이 넘김

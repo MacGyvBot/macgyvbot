@@ -1,65 +1,108 @@
-# 🧰 MacGyvBot Template
+# MacGyvBot
 
-MacGyvBot의 `macgyvbot-*` 레포지토리를 만들 때 사용하는 기본 템플릿입니다.
+MacGyvBot은 음성 명령 기반 공구 서랍 관리 로봇팔 어시스턴트를 위한 ROS 2 패키지입니다.
 
-이 템플릿은 “음성 명령 기반 공구 서랍 관리 로봇팔 어시스턴트” 프로젝트의 공통 협업 파일과 기본 디렉터리 구조를 제공합니다.
+현재 저장소는 RealSense 카메라, YOLO 객체 인식, MoveItPy 기반 로봇팔 이동, OnRobot RG2 그리퍼 제어를 함께 다룹니다. 또한 사람이 로봇이 들고 있는 공구를 잡았는지 판단하는 hand-tool grasp detection 노드를 포함합니다.
 
-## 🚀 사용 방법
+## 주요 기능
 
-1. GitHub에서 이 레포지토리를 **Template repository**로 설정합니다.
-2. 새 레포지토리를 만들 때 **Use this template**을 선택합니다.
-3. 생성된 레포의 목적에 맞게 README, 패키지 구조, 설정 파일을 수정합니다.
+- RealSense color/depth 이미지 구독
+- YOLO 기반 공구 및 대상 객체 인식
+- hand landmark와 tool ROI 기반 잡기 상태 판단
+- depth 기반 손-공구 접촉 신호 기본 사용
+- MoveItPy 기반 Doosan M0609 경로 계획 및 실행
+- OnRobot RG2 그리퍼 open/close 제어
+- 안전 작업 영역 클램프 기반 pick sequence 제한
 
-## 📁 기본 구조
-
-```text
-.
-├── .github/
-│   ├── ISSUE_TEMPLATE/
-│   │   ├── bug_report.md
-│   │   ├── feature_request.md
-│   │   ├── task.md
-│   │   ├── experiment.md
-│   │   ├── safety_issue.md
-│   │   └── config.yml
-│   └── PULL_REQUEST_TEMPLATE.md
-├── CONTRIBUTING.md
-├── README.md
-└── .gitignore
-```
-
-## 📦 권장 레포지토리 이름
-
-- `macgyvbot-assistant`
-- `macgyvbot-perception`
-- `macgyvbot-datasets`
-- `macgyvbot-docs`
-- `macgyvbot-vla`
-- `macgyvbot-simulation`
-
-## 🧩 공통 개발 범위
-
-- 🤖 ROS 2 기반 로봇팔 제어
-- 👁️ 공구 인식 및 위치 추정
-- 🎙️ 음성 명령 처리
-- 🧰 서랍 개폐 및 그리퍼 파지 제어
-- 🚚 사용자 손 또는 전달 트레이 방향 안전 전달
-- 🧪 데이터 수집, 라벨링, 모델 학습
-- 🧠 YOLO, GroundingDINO, SAM, OpenVLA 실험
-- 🕹️ 시뮬레이션 및 실제 로봇 테스트
-- 🚨 안전 제어, 실패 복구, 로깅
-
-## 🖥️ 기본 실행 환경
+## 실행 환경
 
 - OS: `Ubuntu 22.04`
-- ROS 2: `ROS2 Humble`
-- Python: `Python 3.10`
-- 카메라: `Intel® RealSense™ Depth Camera D???`
+- ROS 2: `Humble`
+- Python: `3.10`
 - 로봇팔: `Doosan-Robotics-M0609`
 - 그리퍼: `OnRobot RG2`
+- 카메라: `Intel RealSense Depth Camera D435I`
 
-카메라 모델명은 실제 장비 확인 후 각 레포 README와 설정 파일에서 구체화합니다.
+## 설치 및 빌드
 
-## 🤝 기여
+MacGyvBot은 두산로보틱스 ROS 2 패키지와 함께 사용합니다. `macgyvbot` 패키지는 두산로보틱스 워크스페이스의 `doosan-robot2` 아래에 clone한 뒤, `ros2_ws/src` 기준에서 빌드합니다.
+
+```bash
+cd ~/ros2_ws/src/doosan-robot2/
+git clone https://github.com/MacGyvBot/macgyvbot.git
+```
+
+전체 워크스페이스 빌드:
+
+```bash
+cd ~/ros2_ws/src
+colcon build
+```
+
+`macgyvbot` 패키지만 빌드:
+
+```bash
+cd ~/ros2_ws/src
+colcon build --packages-select macgyvbot
+```
+
+빌드 후 source:
+
+```bash
+source ~/ros2_ws/install/setup.bash
+```
+
+잡기 인식 노드를 사용할 경우 Python 패키지도 설치합니다.
+
+```bash
+pip install -r requirements-grasp.txt
+```
+
+## 자동 pick/place 실행
+
+```bash
+ros2 launch macgyvbot hf_auto_pick_place.launch.py
+```
+
+대상 객체 이름 publish:
+
+```bash
+ros2 topic pub --once /target_label std_msgs/msg/String "{data: cup}"
+```
+
+## 잡기 인식 노드 실행
+
+잡기 인식 노드는 기본으로 color 이미지와 aligned depth 이미지를 함께 사용합니다.
+
+```bash
+ros2 launch macgyvbot hand_grasp_detection.launch.py
+```
+
+기본 구독 토픽:
+
+- `/camera/camera/color/image_raw`
+- `/camera/camera/aligned_depth_to_color/image_raw`
+
+기본 발행 토픽:
+
+- `/human_grasped_tool`: `std_msgs/msg/String` JSON 결과
+- `/hand_grasp_detection/annotated_image`: annotation 이미지
+
+커스텀 YOLO 모델을 사용할 경우 launch 파라미터 `yolo_model`에 모델 경로를 지정합니다. 모델 파일은 저장소에 커밋하지 않습니다.
+
+예:
+
+```bash
+ros2 launch macgyvbot hand_grasp_detection.launch.py yolo_model:=/path/to/yolov11_best.pt
+```
+
+## 테스트
+
+```bash
+colcon test --packages-select macgyvbot
+colcon test-result --verbose
+```
+
+## 기여
 
 브랜치, 커밋, PR, 이슈, 안전 규칙은 [CONTRIBUTING.md](./CONTRIBUTING.md)를 따릅니다.
