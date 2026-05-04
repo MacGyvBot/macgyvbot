@@ -110,7 +110,7 @@ def build_depth_grasp_info(
     depth_mm,
     depth_diff_threshold_mm: float,
     min_depth_contact_landmarks: int,
-    roi_margin: int = 40,
+    roi_margin: int = 20,
 ) -> dict:
     """Build optional depth-contact metrics between hand landmarks and the tool ROI."""
     tool_depth = median_depth_in_rect(depth_mm, tool_roi)

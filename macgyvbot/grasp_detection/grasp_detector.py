@@ -12,15 +12,15 @@ from .utils import (
     rect_intersection_area,
 )
 
-GRASP_HOLD_FRAMES = 15
-PINCH_DISTANCE_THRESHOLD = 80
-PALM_TO_TOOL_THRESHOLD = 80
-ROI_MARGIN = 40
-LANDMARK_TO_TOOL_THRESHOLD = 70
-MIN_CONTACT_LANDMARKS = 2
-HAND_TOOL_OVERLAP_THRESHOLD = 0.08
-GRASP_SCORE_THRESHOLD = 3
-DEPTH_GRASP_SCORE_BONUS = 2
+GRASP_HOLD_FRAMES = 22
+PINCH_DISTANCE_THRESHOLD = 65
+PALM_TO_TOOL_THRESHOLD = 55
+ROI_MARGIN = 20
+LANDMARK_TO_TOOL_THRESHOLD = 45
+MIN_CONTACT_LANDMARKS = 4
+HAND_TOOL_OVERLAP_THRESHOLD = 0.15
+GRASP_SCORE_THRESHOLD = 5
+DEPTH_GRASP_SCORE_BONUS = 1
 
 Point = Tuple[int, int]
 Rect = Tuple[int, int, int, int]
@@ -92,8 +92,17 @@ class GraspDetector:
             depth_info=depth_info,
         )
 
-        # Use multiple contact signals instead of relying only on thumb-index pinch.
-        grasp_candidate = hand_near_tool and grasp_score >= GRASP_SCORE_THRESHOLD
+        depth_confirmed = bool(depth_info and depth_info.get("depth_grasp_confirmed", False))
+
+        # Conservative gating:
+        # - a nearby hand is not enough;
+        # - require thumb/index proximity or depth-confirmed contact;
+        # - when depth is available, require depth confirmation.
+        requires_depth_confirmation = bool(depth_info and depth_info.get("depth_available", False))
+        grasp_gate = thumb_or_index_near_roi or depth_confirmed
+        grasp_candidate = hand_near_tool and grasp_score >= GRASP_SCORE_THRESHOLD and grasp_gate
+        if requires_depth_confirmation:
+            grasp_candidate = grasp_candidate and depth_confirmed
 
         if grasp_candidate:
             self.grasp_counter += 1

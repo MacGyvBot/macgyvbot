@@ -63,8 +63,8 @@ def generate_launch_description():
                         "yolo_conf": 0.20,
                         "yolo_imgsz": 640,
                         "max_hands": 2,
-                        "depth_diff_threshold_mm": 50.0,
-                        "depth_min_contact_landmarks": 2,
+                        "depth_diff_threshold_mm": 35.0,
+                        "depth_min_contact_landmarks": 4,
                     }
                 ],
             )
