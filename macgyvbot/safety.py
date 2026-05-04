@@ -3,7 +3,7 @@
 SAFE_X_MIN = 0.0
 SAFE_Y_MIN = -0.3
 SAFE_Y_MAX = 0.3
-SAFE_Z_MIN = 0.27
+SAFE_Z_MIN = 0.24
 
 
 def clamp_to_safe_workspace(x: float, y: float, z: float, logger):
