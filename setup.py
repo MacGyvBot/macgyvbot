@@ -14,6 +14,7 @@ setup(
         ('share/' + package_name + '/launch', glob('launch/*.launch.py')),
         ('share/' + package_name + '/config', glob('config/*.yaml')),
         ('share/' + package_name + '/calibration', glob('calibration/*.npy') + glob('calibration/*.md')),
+        ('share/' + package_name + '/models', glob('models/*.pt')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -28,7 +29,9 @@ setup(
     },
     entry_points={
         'console_scripts': [
+            'macgyvbot = macgyvbot.macgyvbot:main',
             'hf_auto_pick_place = macgyvbot.hf_auto_pick_place:main',
+            'hand_grasp_detection = macgyvbot.hand_grasp_detection_node:main',
         ],
     },
 )
