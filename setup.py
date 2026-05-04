@@ -16,7 +16,7 @@ setup(
         ('share/' + package_name + '/calibration', glob('calibration/*.npy') + glob('calibration/*.md')),
         ('share/' + package_name + '/models', glob('models/*.pt')),
     ],
-    install_requires=['setuptools'],
+    install_requires=['setuptools', 'SpeechRecognition'],
     zip_safe=True,
     maintainer='ssu',
     maintainer_email='ssu@todo.todo',
@@ -32,6 +32,7 @@ setup(
             'macgyvbot = macgyvbot.macgyvbot:main',
             'hf_auto_pick_place = macgyvbot.hf_auto_pick_place:main',
             'hand_grasp_detection = macgyvbot.hand_grasp_detection_node:main',
+            'stt_node = macgyvbot.stt_node:main',
         ],
     },
 )
