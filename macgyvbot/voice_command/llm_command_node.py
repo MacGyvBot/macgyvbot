@@ -1,0 +1,313 @@
+"""Hybrid natural language command interpreter for macgyvbot.
+
+이 노드는 STT가 만든 텍스트(`/stt_text`)를 구독하고, 먼저 빠르고 예측 가능한
+alias/fuzzy matching을 시도한다. 그래도 공구를 확정하지 못하면 LLM에게
+자연어 명령을 제한된 JSON 명령으로 바꾸게 한다.
+
+중요한 설계 원칙:
+- LLM은 로봇을 직접 제어하지 않는다.
+- LLM은 tool_name/action/confidence JSON만 만든다.
+- 노드는 JSON을 검증한 뒤, 허용된 공구와 행동일 때만 ROS topic을 발행한다.
+
+기본 LLM backend는 로컬 Ollama HTTP API이다.
+예:
+    ollama pull qwen2.5:0.5b
+    ollama serve
+"""
+
+import json
+import re
+from urllib import error, request
+
+import rclpy
+from rclpy.node import Node
+from std_msgs.msg import String
+
+from .command_parser import find_action, find_tool
+
+
+ALLOWED_TOOLS = {
+    'screwdriver': '드라이버. 나사를 조이거나 푸는 공구.',
+    'pliers': '플라이어 또는 펜치. 물체를 집거나 잡는 공구.',
+    'hammer': '망치. 못을 박거나 두드리는 공구.',
+    'tape_measure': '줄자. 길이나 치수를 재는 공구.',
+    'unknown': '공구를 확정할 수 없음.',
+}
+
+ALLOWED_ACTIONS = {
+    'bring': '사용자가 공구를 가져오거나 달라고 요청함.',
+    'release': '사용자가 잡고 있는 공구를 놓으라고 요청함.',
+    'stop': '사용자가 정지 또는 중단을 요청함.',
+    'unknown': '행동을 확정할 수 없음.',
+}
+
+
+class LlmCommandNode(Node):
+    def __init__(self):
+        super().__init__('llm_command_node')
+
+        self.declare_parameter('input_topic', '/stt_text')
+        self.declare_parameter('target_label_topic', '/target_label')
+        self.declare_parameter('tool_command_topic', '/tool_command')
+        self.declare_parameter('ollama_url', 'http://localhost:11434/api/generate')
+        self.declare_parameter('model', 'qwen2.5:0.5b')
+        self.declare_parameter('timeout_sec', 8.0)
+        self.declare_parameter('min_confidence', 0.55)
+        self.declare_parameter('use_local_parser', True)
+        self.declare_parameter('use_llm_fallback', True)
+
+        input_topic = self.get_parameter('input_topic').value
+        target_label_topic = self.get_parameter('target_label_topic').value
+        tool_command_topic = self.get_parameter('tool_command_topic').value
+        self._ollama_url = self.get_parameter('ollama_url').value
+        self._model = self.get_parameter('model').value
+        self._timeout_sec = float(self.get_parameter('timeout_sec').value)
+        self._min_confidence = float(self.get_parameter('min_confidence').value)
+        self._use_local_parser = bool(self.get_parameter('use_local_parser').value)
+        self._use_llm_fallback = bool(self.get_parameter('use_llm_fallback').value)
+
+        self._target_label_pub = self.create_publisher(String, target_label_topic, 10)
+        self._tool_command_pub = self.create_publisher(String, tool_command_topic, 10)
+        self.create_subscription(String, input_topic, self._text_cb, 10)
+
+        self.get_logger().info('하이브리드 명령 해석 노드 준비 완료')
+        self.get_logger().info(f'입력 topic: {input_topic}')
+        self.get_logger().info(f'출력 topic: {tool_command_topic}, {target_label_topic}')
+        self.get_logger().info(
+            f'local parser: {"on" if self._use_local_parser else "off"}, '
+            f'LLM fallback: {"on" if self._use_llm_fallback else "off"}'
+        )
+        self.get_logger().info(f'Ollama model: {self._model}')
+
+    def _text_cb(self, msg):
+        text = msg.data.strip()
+        if not text:
+            return
+
+        self.get_logger().info(f'명령 해석 요청: "{text}"')
+
+        if self._use_local_parser:
+            command = self._parse_locally(text)
+            if command is not None:
+                self._publish_command(command)
+                return
+
+        if not self._use_llm_fallback:
+            self.get_logger().warn('local parser 실패, LLM fallback이 꺼져 있어 무시합니다.')
+            return
+
+        self.get_logger().info(f'LLM fallback 요청: "{text}"')
+        parsed = self._parse_with_llm(text)
+        if parsed is None:
+            return
+
+        command = self._validate_command(parsed, text)
+        if command is None:
+            return
+
+        self._publish_command(command)
+
+    def _parse_locally(self, text):
+        tool_name, match_method, match_score, matched_keyword = find_tool(text)
+        action = find_action(text)
+
+        if not tool_name:
+            self.get_logger().info('local parser가 공구를 확정하지 못했습니다.')
+            return None
+
+        command = {
+            'tool_name': tool_name,
+            'action': action,
+            'raw_text': text,
+            'match_method': match_method,
+            'match_score': match_score,
+            'confidence': match_score,
+        }
+
+        if match_method == 'fuzzy':
+            command['matched_keyword'] = matched_keyword
+
+        self.get_logger().info(
+            f'local parser 명령 확정: tool={tool_name}, action={action}, '
+            f'method={match_method}, score={match_score:.2f}'
+        )
+        return command
+
+    def _publish_command(self, command):
+        command_msg = String()
+        command_msg.data = json.dumps(command, ensure_ascii=False)
+        self._tool_command_pub.publish(command_msg)
+
+        if command['action'] == 'bring':
+            target_msg = String()
+            target_msg.data = command['tool_name']
+            self._target_label_pub.publish(target_msg)
+            self.get_logger().info(
+                f'명령 발행: tool={command["tool_name"]}, '
+                f'action={command["action"]}, method={command["match_method"]}, '
+                f'confidence={command["confidence"]:.2f} '
+                '-> /target_label 발행'
+            )
+            return
+
+        self.get_logger().info(
+            f'명령 발행: tool={command["tool_name"]}, '
+            f'action={command["action"]}, method={command["match_method"]}, '
+            f'confidence={command["confidence"]:.2f} '
+            '-> /tool_command만 발행'
+        )
+
+    def _parse_with_llm(self, text):
+        prompt = self._build_prompt(text)
+        payload = {
+            'model': self._model,
+            'prompt': prompt,
+            'stream': False,
+            'options': {
+                'temperature': 0.0,
+            },
+        }
+        data = json.dumps(payload, ensure_ascii=False).encode('utf-8')
+        req = request.Request(
+            self._ollama_url,
+            data=data,
+            headers={'Content-Type': 'application/json'},
+            method='POST',
+        )
+
+        try:
+            with request.urlopen(req, timeout=self._timeout_sec) as response:
+                body = response.read().decode('utf-8')
+        except error.URLError as exc:
+            self.get_logger().error(f'Ollama 요청 실패: {exc}')
+            return None
+        except TimeoutError:
+            self.get_logger().error('Ollama 요청 timeout')
+            return None
+
+        try:
+            ollama_result = json.loads(body)
+        except json.JSONDecodeError as exc:
+            self.get_logger().error(f'Ollama 응답 JSON 파싱 실패: {exc}')
+            return None
+
+        response_text = ollama_result.get('response', '')
+        return self._extract_json(response_text)
+
+    def _build_prompt(self, text):
+        return f"""
+너는 ROS2 로봇팔 프로젝트 macgyvbot의 자연어 명령 해석기다.
+사용자 문장을 허용된 JSON 명령 하나로만 변환한다.
+
+허용 tool_name:
+- screwdriver: {ALLOWED_TOOLS['screwdriver']}
+- pliers: {ALLOWED_TOOLS['pliers']}
+- hammer: {ALLOWED_TOOLS['hammer']}
+- tape_measure: {ALLOWED_TOOLS['tape_measure']}
+- unknown: {ALLOWED_TOOLS['unknown']}
+
+허용 action:
+- bring: {ALLOWED_ACTIONS['bring']}
+- release: {ALLOWED_ACTIONS['release']}
+- stop: {ALLOWED_ACTIONS['stop']}
+- unknown: {ALLOWED_ACTIONS['unknown']}
+
+규칙:
+- 반드시 JSON만 출력한다.
+- 다른 설명 문장을 출력하지 않는다.
+- tool_name은 허용 목록 중 하나만 사용한다.
+- action은 허용 목록 중 하나만 사용한다.
+- confidence는 0.0부터 1.0 사이 숫자다.
+- "그 조이는 거", "나사 돌리는 거"는 screwdriver에 가깝다.
+- "못 박는 거", "두드리는 거"는 hammer에 가깝다.
+- "길이 재는 거", "치수 재는 거"는 tape_measure에 가깝다.
+- "집는 거", "잡는 거", "펜치 같은 거"는 pliers에 가깝다.
+
+예시:
+입력: 드라이버 가져다줘
+출력: {{"tool_name":"screwdriver","action":"bring","confidence":0.95}}
+
+입력: 그 조이는 거 가져와
+출력: {{"tool_name":"screwdriver","action":"bring","confidence":0.80}}
+
+입력: 길이 재는 거 줘
+출력: {{"tool_name":"tape_measure","action":"bring","confidence":0.82}}
+
+입력: 멈춰
+출력: {{"tool_name":"unknown","action":"stop","confidence":0.90}}
+
+입력: {text}
+출력:
+""".strip()
+
+    def _extract_json(self, response_text):
+        cleaned = response_text.strip()
+        if cleaned.startswith('```'):
+            cleaned = re.sub(r'^```(?:json)?', '', cleaned).strip()
+            cleaned = re.sub(r'```$', '', cleaned).strip()
+
+        match = re.search(r'\{.*\}', cleaned, flags=re.DOTALL)
+        if not match:
+            self.get_logger().error(f'LLM 응답에서 JSON을 찾지 못했습니다: {response_text}')
+            return None
+
+        try:
+            return json.loads(match.group(0))
+        except json.JSONDecodeError as exc:
+            self.get_logger().error(f'LLM JSON 파싱 실패: {exc}, raw={response_text}')
+            return None
+
+    def _validate_command(self, parsed, raw_text):
+        tool_name = str(parsed.get('tool_name', 'unknown')).strip()
+        action = str(parsed.get('action', 'unknown')).strip()
+
+        try:
+            confidence = float(parsed.get('confidence', 0.0))
+        except (TypeError, ValueError):
+            confidence = 0.0
+
+        if tool_name not in ALLOWED_TOOLS:
+            self.get_logger().warn(f'허용되지 않은 tool_name: {tool_name}')
+            tool_name = 'unknown'
+
+        if action not in ALLOWED_ACTIONS:
+            self.get_logger().warn(f'허용되지 않은 action: {action}')
+            action = 'unknown'
+
+        confidence = max(0.0, min(1.0, confidence))
+
+        if confidence < self._min_confidence:
+            self.get_logger().warn(
+                f'LLM confidence가 낮아 명령을 무시합니다: '
+                f'{confidence:.2f} < {self._min_confidence:.2f}'
+            )
+            return None
+
+        if action == 'bring' and tool_name == 'unknown':
+            self.get_logger().warn('bring 명령이지만 공구를 확정하지 못해 무시합니다.')
+            return None
+
+        return {
+            'tool_name': tool_name,
+            'action': action,
+            'raw_text': raw_text,
+            'match_method': 'llm',
+            'match_score': confidence,
+            'confidence': confidence,
+        }
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = LlmCommandNode()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()
