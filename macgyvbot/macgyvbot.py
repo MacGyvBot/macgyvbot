@@ -21,6 +21,7 @@ from cv_bridge import CvBridge
 from moveit.core.robot_state import RobotState
 from moveit.planning import MoveItPy, PlanRequestParameters
 
+from .graspnet_pose import GraspNetPoseBuffer, parameter_to_bool
 from .onrobot import RG
 from .safety import clamp_to_safe_workspace
 
@@ -47,6 +48,9 @@ YOLO_MODEL_NAME = "yolov11_best.pt"
 HAND_GRASP_TOPIC = "/human_grasped_tool"
 HAND_GRASP_IMAGE_TOPIC = "/hand_grasp_detection/annotated_image"
 HAND_GRASP_TIMEOUT_SEC = 20.0
+GRASPNET_POSE_TOPIC = "/graspnet/target_pose"
+GRASPNET_POSE_TIMEOUT_SEC = 1.0
+GRASPNET_TARGET_DISTANCE_TOLERANCE_M = 0.12
 ROBOT_WINDOW_NAME = "YOLO Robot Pick"
 HAND_GRASP_WINDOW_NAME = "Hand Grasp Detection"
 CAMERA_INFO_TOPIC = "/camera/camera/color/camera_info"
@@ -197,6 +201,34 @@ class ClickPickNode(Node):
                 HAND_GRASP_IMAGE_TOPIC,
             ).value
         )
+        self.graspnet_pose_topic = str(
+            self.declare_parameter("graspnet_pose_topic", GRASPNET_POSE_TOPIC).value
+        )
+        self.use_graspnet_orientation = parameter_to_bool(
+            self.declare_parameter("use_graspnet_orientation", True).value
+        )
+        self.use_graspnet_position = parameter_to_bool(
+            self.declare_parameter("use_graspnet_position", False).value
+        )
+        self.graspnet_pose_timeout_sec = float(
+            self.declare_parameter(
+                "graspnet_pose_timeout_sec",
+                GRASPNET_POSE_TIMEOUT_SEC,
+            ).value
+        )
+        self.graspnet_target_distance_tolerance_m = float(
+            self.declare_parameter(
+                "graspnet_target_distance_tolerance_m",
+                GRASPNET_TARGET_DISTANCE_TOLERANCE_M,
+            ).value
+        )
+        self.graspnet_pose_buffer = GraspNetPoseBuffer(
+            base_frame=BASE_FRAME,
+            timeout_sec=self.graspnet_pose_timeout_sec,
+            target_distance_tolerance_m=self.graspnet_target_distance_tolerance_m,
+            use_orientation=self.use_graspnet_orientation,
+            use_position=self.use_graspnet_position,
+        )
 
         # YOLO 모델 로드
         self.model = YOLO(resolve_model_path(self.yolo_model_name))
@@ -269,6 +301,13 @@ class ClickPickNode(Node):
             10,
         )
 
+        self.create_subscription(
+            PoseStamped,
+            self.graspnet_pose_topic,
+            self._graspnet_pose_cb,
+            10,
+        )
+
         self.get_logger().info("노드 초기화 완료")
         self.get_logger().info(
             "객체 입력 예시: ros2 topic pub --once /target_label std_msgs/msg/String \"{data: cup}\""
@@ -278,6 +317,7 @@ class ClickPickNode(Node):
         self.get_logger().info(f"Depth 토픽: {self.depth_topic}")
         self.get_logger().info(f"잡기 인식 결과 토픽: {self.hand_grasp_topic}")
         self.get_logger().info(f"잡기 인식 화면 토픽: {self.hand_grasp_image_topic}")
+        self.get_logger().info(f"GraspNet pose 토픽: {self.graspnet_pose_topic}")
 
     def _target_label_cb(self, msg):
         val = msg.data.strip()
@@ -310,6 +350,9 @@ class ClickPickNode(Node):
         except Exception as exc:
             self.get_logger().warn(f"잡기 인식 화면 변환 실패: {exc}")
 
+    def _graspnet_pose_cb(self, msg):
+        self.graspnet_pose_buffer.update(msg, self.get_logger())
+
     def _cam_info_cb(self, msg):
         self.intrinsics = {
             "fx": msg.k[0],
@@ -333,12 +376,16 @@ class ClickPickNode(Node):
 
         return base_xyz
 
+    def select_grasp_pose(self, yolo_xyz, logger):
+        return self.graspnet_pose_buffer.select(yolo_xyz, self.home_ori, logger)
+
     def pick_sequence(self, bx, by, bz, z_m):
         self.human_grasped_tool = False
         self.last_grasp_result = None
 
         log = self.get_logger()
-        ori = self.home_ori
+        target_xyz, ori, using_graspnet_pose = self.select_grasp_pose((bx, by, bz), log)
+        bx, by, bz = target_xyz
 
         approach_z = bz + APPROACH_Z_OFFSET
         grasp_z = bz
@@ -362,7 +409,8 @@ class ClickPickNode(Node):
             log.info(
                 f"시퀀스 시작: Target({target_x:.3f}, {target_y:.3f}), "
                 f"depth={z_m:.3f}, travel_z={travel_z:.3f}, "
-                f"approach_z={approach_z:.3f}, grasp_z={grasp_z:.3f}"
+                f"approach_z={approach_z:.3f}, grasp_z={grasp_z:.3f}, "
+                f"graspnet_pose={using_graspnet_pose}"
             )
 
             # 0. 파지 전 그리퍼 오픈

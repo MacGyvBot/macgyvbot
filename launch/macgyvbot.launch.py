@@ -35,6 +35,18 @@ def generate_launch_description():
                 "yolo_model",
                 default_value="yolov11_best.pt",
             ),
+            DeclareLaunchArgument(
+                "graspnet_pose_topic",
+                default_value="/graspnet/target_pose",
+            ),
+            DeclareLaunchArgument(
+                "use_graspnet_orientation",
+                default_value="true",
+            ),
+            DeclareLaunchArgument(
+                "use_graspnet_position",
+                default_value="false",
+            ),
             Node(
                 package="macgyvbot",
                 executable="macgyvbot",
@@ -52,6 +64,15 @@ def generate_launch_description():
                         "target_label_topic": "/target_label",
                         "hand_grasp_topic": "/human_grasped_tool",
                         "hand_grasp_image_topic": "/hand_grasp_detection/annotated_image",
+                        "graspnet_pose_topic": LaunchConfiguration("graspnet_pose_topic"),
+                        "use_graspnet_orientation": LaunchConfiguration(
+                            "use_graspnet_orientation"
+                        ),
+                        "use_graspnet_position": LaunchConfiguration(
+                            "use_graspnet_position"
+                        ),
+                        "graspnet_pose_timeout_sec": 1.0,
+                        "graspnet_target_distance_tolerance_m": 0.12,
                     },
                 ],
             ),

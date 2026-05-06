@@ -70,6 +70,16 @@ ros2 launch macgyvbot hf_auto_pick_place.launch.py
 ros2 topic pub --once /target_label std_msgs/msg/String "{data: cup}"
 ```
 
+## GraspNet 자세 연동
+
+`macgyvbot.launch.py`는 GraspNet이 발행하는 `geometry_msgs/msg/PoseStamped`를 받아 pick orientation에 반영합니다.
+
+```bash
+ros2 launch macgyvbot macgyvbot.launch.py graspnet_pose_topic:=/graspnet/target_pose
+```
+
+GraspNet pose는 기본적으로 `/graspnet/target_pose`에서 받고, `header.frame_id`는 `base_link`여야 합니다. pose가 1초보다 오래됐거나 YOLO 타겟과 12cm 이상 떨어져 있으면 Home orientation으로 fallback합니다. 위치까지 GraspNet pose로 보정하려면 `use_graspnet_position:=true`로 실행합니다.
+
 ## 잡기 인식 노드 실행
 
 잡기 인식 노드는 기본으로 color 이미지와 aligned depth 이미지를 함께 사용합니다.
