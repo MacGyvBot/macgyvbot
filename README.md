@@ -25,6 +25,8 @@ MacGyvBot은 음성 명령 기반 공구 서랍 관리 로봇팔 어시스턴트
 
 ## 설치 및 빌드
 
+[Doosan ROS 2 Manual(Humble)](https://doosanrobotics.github.io/doosan-robotics-ros-manual/humble/installation.html)
+
 MacGyvBot은 두산로보틱스 ROS 2 패키지와 함께 사용합니다. `macgyvbot` 패키지는 두산로보틱스 워크스페이스의 `doosan-robot2` 아래에 clone한 뒤, `ros2_ws/src` 기준에서 빌드합니다.
 
 ```bash
@@ -32,67 +34,122 @@ cd ~/ros2_ws/src/doosan-robot2/
 git clone https://github.com/MacGyvBot/macgyvbot.git
 ```
 
+Python 패키지 설치:
+
+```bash
+pip install -r requirements.txt
+```
+
 전체 워크스페이스 빌드:
 
 ```bash
-cd ~/ros2_ws/src
+cd ~/ros2_ws
 colcon build
 ```
 
 `macgyvbot` 패키지만 빌드:
 
 ```bash
-cd ~/ros2_ws/src
+cd ~/ros2_ws
 colcon build --packages-select macgyvbot
 ```
 
 빌드 후 source:
 
 ```bash
+source /opt/ros/humble/setup.bash
 source ~/ros2_ws/install/setup.bash
+source ~/ros2_ws/src/doosan-robot2/install/setup.bash
 ```
 
-잡기 인식 노드를 사용할 경우 Python 패키지도 설치합니다.
+## 전체 파이프라인 실행
+
+각 터미널은 새로 열 때마다 ROS 2, `ros2_ws`, Doosan MoveIt 환경을 source한 뒤 실행합니다.
+
+### Terminal 1: Doosan M0609 + MoveIt 실행
 
 ```bash
-pip install -r requirements-grasp.txt
+source /opt/ros/humble/setup.bash
+source ~/ros2_ws/install/setup.bash
+source ~/ros2_ws/src/doosan-robot2/install/setup.bash
+
+ros2 launch dsr_bringup2 dsr_bringup2_moveit.launch.py \
+  mode:=real \
+  model:=m0609 \
+  host:=192.168.1.100
 ```
 
-## 자동 pick/place 실행
+### Terminal 2: RealSense 카메라 실행
 
 기본 실행은 YOLO bounding box 중심점을 grasp point로 사용합니다.
 
 ```bash
-ros2 launch macgyvbot hf_auto_pick_place.launch.py
+source /opt/ros/humble/setup.bash
+source ~/ros2_ws/install/setup.bash
+source ~/ros2_ws/src/doosan-robot2/install/setup.bash
+
+ros2 launch realsense2_camera rs_align_depth_launch.py \
+  depth_module.depth_profile:=640x480x30 \
+  rgb_camera.color_profile:=640x480x30 \
+  initial_reset:=true \
+  align_depth.enable:=true
+```
+
+### Terminal 3: MacGyvBot 메인 파이프라인 실행
+
+기본 실행은 `center` grasp point mode를 사용합니다.
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/ros2_ws/install/setup.bash
+source ~/ros2_ws/src/doosan-robot2/install/setup.bash
+
+ros2 launch macgyvbot macgyvbot.launch.py
 ```
 
 명시적으로 중심점 모드를 사용할 경우:
 
 ```bash
-ros2 launch macgyvbot hf_auto_pick_place.launch.py grasp_point_mode:=center
+source /opt/ros/humble/setup.bash
+source ~/ros2_ws/install/setup.bash
+source ~/ros2_ws/src/doosan-robot2/install/setup.bash
+
+ros2 launch macgyvbot macgyvbot.launch.py grasp_point_mode:=center
 ```
 
 VLM 기반 grasp point selection을 사용할 경우:
 
 ```bash
-ros2 launch macgyvbot hf_auto_pick_place.launch.py grasp_point_mode:=vlm
+source /opt/ros/humble/setup.bash
+source ~/ros2_ws/install/setup.bash
+source ~/ros2_ws/src/doosan-robot2/install/setup.bash
+
+ros2 launch macgyvbot macgyvbot.launch.py grasp_point_mode:=vlm
 ```
 
-VLM 모드는 YOLO가 검출한 객체 crop에서 grid 기반 grasp region을 선택한 뒤
-depth로 grasp pixel을 보정합니다. VLM 추론 또는 depth 보정이 실패하면 기존
-중심점 방식으로 fallback합니다.
+VLM 모드는 YOLO가 검출한 객체 crop에서 grid 기반 grasp region을 선택한 뒤 depth로 grasp pixel을 보정합니다. VLM 추론 또는 depth 보정이 실패하면 기존 중심점 방식으로 fallback합니다.
 
-대상 객체 이름 publish:
+### Terminal 4: 대상 공구 요청
 
 ```bash
-ros2 topic pub --once /target_label std_msgs/msg/String "{data: cup}"
+source /opt/ros/humble/setup.bash
+source ~/ros2_ws/install/setup.bash
+source ~/ros2_ws/src/doosan-robot2/install/setup.bash
+
+ros2 topic pub --once /target_label std_msgs/msg/String "{data: screwdriver}"
 ```
+
+사용 가능한 공구 label은 학습한 YOLO 모델의 class 이름과 같아야 합니다. 현재 예시는 `hammer`, `screwdriver`, `pliers`, `tape_measure`를 기준으로 합니다.
 
 ## 잡기 인식 노드 실행
 
-잡기 인식 노드는 기본으로 color 이미지와 aligned depth 이미지를 함께 사용합니다.
+`macgyvbot.launch.py`는 hand grasp detection 노드를 함께 실행합니다. 잡기 인식 노드만 단독으로 확인할 때는 아래 명령을 사용합니다.
 
 ```bash
+source /opt/ros/humble/setup.bash
+source ~/ros2_ws/install/setup.bash
+source ~/ros2_ws/src/doosan-robot2/install/setup.bash
+
 ros2 launch macgyvbot hand_grasp_detection.launch.py
 ```
 

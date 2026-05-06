@@ -6,7 +6,7 @@
 출력:
 - /stt_text: STT 원문 텍스트
 - /stt_result: 수업 예제와 호환되는 STT 원문 텍스트
-- /target_label: 기존 hf_auto_pick_place.py가 바로 받는 YOLO target label
+- /target_label: macgyvbot 노드가 바로 받는 YOLO target label
 - /tool_command: 공구명/action/raw_text를 담은 JSON 문자열
 
 현재 인식 대상 공구:
@@ -266,7 +266,7 @@ class SttNode(Node):
         command_msg.data = json.dumps(command, ensure_ascii=False)
         self._tool_command_pub.publish(command_msg)
 
-        # 기존 hf_auto_pick_place.py는 /target_label 하나만 구독한다.
+        # macgyvbot 노드는 /target_label 하나만 구독한다.
         # release만 단독으로 말한 경우에는 새 pick을 시작하지 않도록 target_label은 보내지 않는다.
         if action == 'bring':
             target_msg = String()

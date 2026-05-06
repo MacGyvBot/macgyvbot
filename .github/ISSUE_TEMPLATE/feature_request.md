@@ -30,7 +30,7 @@ assignees: ""
 
 ## 📦 관련 레포지토리/모듈
 
-- [ ] macgyvbot-assistant
+- [ ] macgyvbot
 - [ ] macgyvbot-perception
 - [ ] macgyvbot-datasets
 - [ ] macgyvbot-docs
