@@ -43,7 +43,7 @@ pip install -r requirements.txt
 전체 워크스페이스 빌드:
 
 ```bash
-cd ~/ros2_ws/src
+cd ~/ros2_ws
 colcon build
 ```
 
@@ -57,44 +57,73 @@ colcon build --packages-select macgyvbot
 빌드 후 source:
 
 ```bash
+source /opt/ros/humble/setup.bash
 source ~/ros2_ws/install/setup.bash
+source ~/ros2_ws/src/doosan-robot2/install/setup.bash
 ```
 
 ## 전체 파이프라인 실행
-`Doosan-Robotics-M0609` 연결
+
+각 터미널은 새로 열 때마다 ROS 2, `ros2_ws`, Doosan MoveIt 환경을 source한 뒤 실행합니다.
+
+### Terminal 1: Doosan M0609 + MoveIt 실행
+
 ```bash
+source /opt/ros/humble/setup.bash
+source ~/ros2_ws/install/setup.bash
+source ~/ros2_ws/src/doosan-robot2/install/setup.bash
+
 ros2 launch dsr_bringup2 dsr_bringup2_moveit.launch.py \
-mode:=real model:=m0609 host:=192.168.1.100
+  mode:=real \
+  model:=m0609 \
+  host:=192.168.1.100
 ```
-카메라 실행
+
+### Terminal 2: RealSense 카메라 실행
+
 ```bash
+source /opt/ros/humble/setup.bash
+source ~/ros2_ws/install/setup.bash
+source ~/ros2_ws/src/doosan-robot2/install/setup.bash
+
 ros2 launch realsense2_camera rs_align_depth_launch.py \
-depth_module.depth_profile:=640x480x30 \
-rgb_camera.color_profile:=640x480x30 \
-initial_reset:=true align_depth.enable:=true
+  depth_module.depth_profile:=640x480x30 \
+  rgb_camera.color_profile:=640x480x30 \
+  initial_reset:=true \
+  align_depth.enable:=true
 ```
-메인 파이프라인 실행
+
+### Terminal 3: MacGyvBot 메인 파이프라인 실행
+
 ```bash
+source /opt/ros/humble/setup.bash
+source ~/ros2_ws/install/setup.bash
+source ~/ros2_ws/src/doosan-robot2/install/setup.bash
+
 ros2 launch macgyvbot macgyvbot.launch.py
 ```
 
-## 자동 pick/place 실행
+### Terminal 4: 대상 공구 요청
 
 ```bash
-ros2 launch macgyvbot hf_auto_pick_place.launch.py
+source /opt/ros/humble/setup.bash
+source ~/ros2_ws/install/setup.bash
+source ~/ros2_ws/src/doosan-robot2/install/setup.bash
+
+ros2 topic pub --once /target_label std_msgs/msg/String "{data: screwdriver}"
 ```
 
-대상 객체 이름 publish:
-
-```bash
-ros2 topic pub --once /target_label std_msgs/msg/String "{data: cup}"
-```
+사용 가능한 공구 label은 학습한 YOLO 모델의 class 이름과 같아야 합니다. 현재 예시는 `hammer`, `screwdriver`, `pliers`, `tape_measure`를 기준으로 합니다.
 
 ## 잡기 인식 노드 실행
 
-잡기 인식 노드는 기본으로 color 이미지와 aligned depth 이미지를 함께 사용합니다.
+`macgyvbot.launch.py`는 hand grasp detection 노드를 함께 실행합니다. 잡기 인식 노드만 단독으로 확인할 때는 아래 명령을 사용합니다.
 
 ```bash
+source /opt/ros/humble/setup.bash
+source ~/ros2_ws/install/setup.bash
+source ~/ros2_ws/src/doosan-robot2/install/setup.bash
+
 ros2 launch macgyvbot hand_grasp_detection.launch.py
 ```
 
