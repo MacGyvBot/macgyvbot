@@ -78,7 +78,7 @@ ros2 topic pub --once /target_label std_msgs/msg/String "{data: cup}"
 ros2 launch macgyvbot macgyvbot.launch.py graspnet_pose_topic:=/graspnet/target_pose
 ```
 
-GraspNet pose는 기본적으로 `/graspnet/target_pose`에서 받고, `header.frame_id`는 `base_link`여야 합니다. pose가 1초보다 오래됐거나 YOLO 타겟과 12cm 이상 떨어져 있으면 Home orientation으로 fallback합니다. 위치까지 GraspNet pose로 보정하려면 `use_graspnet_position:=true`로 실행합니다.
+GraspNet pose는 기본적으로 `/graspnet/target_pose`에서 받습니다. `header.frame_id`가 `base_link`면 그대로 쓰고, camera frame이면 hand-eye calibration으로 `base_link` pose로 변환합니다. pick 시작 전 최대 2초 동안 GraspNet pose를 기다리고, pose가 1초보다 오래됐거나 YOLO 타겟과 12cm 이상 떨어져 있으면 Home orientation으로 fallback합니다. 위치까지 GraspNet pose로 보정하려면 `use_graspnet_position:=true`로 실행합니다.
 
 ## 잡기 인식 노드 실행
 

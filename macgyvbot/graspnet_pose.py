@@ -73,6 +73,12 @@ class GraspNetPoseBuffer:
         self.last_pose = msg
         self.last_pose_time = time.monotonic()
 
+    def has_fresh_pose(self):
+        if self.last_pose is None or self.last_pose_time is None:
+            return False
+
+        return time.monotonic() - self.last_pose_time <= self.timeout_sec
+
     def select(self, yolo_xyz, fallback_orientation, logger):
         target_xyz = np.array(yolo_xyz, dtype=float)
 

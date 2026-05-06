@@ -72,6 +72,7 @@ def generate_launch_description():
                             "use_graspnet_position"
                         ),
                         "graspnet_pose_timeout_sec": 1.0,
+                        "graspnet_wait_timeout_sec": 2.0,
                         "graspnet_target_distance_tolerance_m": 0.12,
                     },
                 ],

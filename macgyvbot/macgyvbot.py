@@ -50,6 +50,7 @@ HAND_GRASP_IMAGE_TOPIC = "/hand_grasp_detection/annotated_image"
 HAND_GRASP_TIMEOUT_SEC = 20.0
 GRASPNET_POSE_TOPIC = "/graspnet/target_pose"
 GRASPNET_POSE_TIMEOUT_SEC = 1.0
+GRASPNET_WAIT_TIMEOUT_SEC = 2.0
 GRASPNET_TARGET_DISTANCE_TOLERANCE_M = 0.12
 ROBOT_WINDOW_NAME = "YOLO Robot Pick"
 HAND_GRASP_WINDOW_NAME = "Hand Grasp Detection"
@@ -216,6 +217,12 @@ class ClickPickNode(Node):
                 GRASPNET_POSE_TIMEOUT_SEC,
             ).value
         )
+        self.graspnet_wait_timeout_sec = float(
+            self.declare_parameter(
+                "graspnet_wait_timeout_sec",
+                GRASPNET_WAIT_TIMEOUT_SEC,
+            ).value
+        )
         self.graspnet_target_distance_tolerance_m = float(
             self.declare_parameter(
                 "graspnet_target_distance_tolerance_m",
@@ -351,7 +358,11 @@ class ClickPickNode(Node):
             self.get_logger().warn(f"잡기 인식 화면 변환 실패: {exc}")
 
     def _graspnet_pose_cb(self, msg):
-        self.graspnet_pose_buffer.update(msg, self.get_logger())
+        pose_msg = self.transform_graspnet_pose_to_base(msg)
+        if pose_msg is None:
+            return
+
+        self.graspnet_pose_buffer.update(pose_msg, self.get_logger())
 
     def _cam_info_cb(self, msg):
         self.intrinsics = {
@@ -376,14 +387,80 @@ class ClickPickNode(Node):
 
         return base_xyz
 
+    def transform_graspnet_pose_to_base(self, msg):
+        frame_id = msg.header.frame_id
+        if not frame_id or frame_id == BASE_FRAME:
+            return msg
+
+        try:
+            base2cam = get_ee_matrix(self.robot) @ self.gripper2cam
+            cam2grasp = np.eye(4, dtype=float)
+            cam2grasp[:3, 3] = [
+                msg.pose.position.x,
+                msg.pose.position.y,
+                msg.pose.position.z,
+            ]
+            cam2grasp[:3, :3] = Rotation.from_quat(
+                [
+                    msg.pose.orientation.x,
+                    msg.pose.orientation.y,
+                    msg.pose.orientation.z,
+                    msg.pose.orientation.w,
+                ]
+            ).as_matrix()
+
+            base2grasp = base2cam @ cam2grasp
+            qx, qy, qz, qw = Rotation.from_matrix(base2grasp[:3, :3]).as_quat()
+
+            pose_msg = PoseStamped()
+            pose_msg.header = msg.header
+            pose_msg.header.frame_id = BASE_FRAME
+            pose_msg.pose.position.x = float(base2grasp[0, 3])
+            pose_msg.pose.position.y = float(base2grasp[1, 3])
+            pose_msg.pose.position.z = float(base2grasp[2, 3])
+            pose_msg.pose.orientation.x = float(qx)
+            pose_msg.pose.orientation.y = float(qy)
+            pose_msg.pose.orientation.z = float(qz)
+            pose_msg.pose.orientation.w = float(qw)
+            self.get_logger().debug(
+                f"GraspNet pose를 {frame_id}에서 {BASE_FRAME}으로 변환했습니다."
+            )
+            return pose_msg
+        except Exception as exc:
+            self.get_logger().warn(f"GraspNet pose base 변환 실패: {exc}")
+            return None
+
     def select_grasp_pose(self, yolo_xyz, logger):
         return self.graspnet_pose_buffer.select(yolo_xyz, self.home_ori, logger)
+
+    def wait_for_graspnet_pose(self, logger):
+        if not self.use_graspnet_orientation:
+            return
+
+        if self.graspnet_pose_buffer.has_fresh_pose():
+            return
+
+        start_time = time.monotonic()
+        logger.info(
+            f"GraspNet pose 대기 중... 최대 {self.graspnet_wait_timeout_sec:.1f}초"
+        )
+        while rclpy.ok():
+            if self.graspnet_pose_buffer.has_fresh_pose():
+                logger.info("GraspNet pose 수신 완료")
+                return
+
+            if time.monotonic() - start_time >= self.graspnet_wait_timeout_sec:
+                logger.warn("GraspNet pose 대기 시간 초과. Home orientation으로 진행합니다.")
+                return
+
+            time.sleep(0.05)
 
     def pick_sequence(self, bx, by, bz, z_m):
         self.human_grasped_tool = False
         self.last_grasp_result = None
 
         log = self.get_logger()
+        self.wait_for_graspnet_pose(log)
         target_xyz, ori, using_graspnet_pose = self.select_grasp_pose((bx, by, bz), log)
         bx, by, bz = target_xyz
 
