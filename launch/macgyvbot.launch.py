@@ -36,7 +36,7 @@ def generate_launch_description():
             ),
             Node(
                 package="macgyvbot",
-                executable="hf_auto_pick_place",  # 👈 새로 만든 파이썬 노드 이름으로 변경!
+                executable="macgyvbot",
                 output="screen",
                 # MoveIt config + MoveItPy용 설정을 같이 넘김
                 parameters=[

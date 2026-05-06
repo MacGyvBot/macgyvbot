@@ -3,7 +3,7 @@
 이 launch는 사용자 입력을 자연어 명령으로 해석하는 부분만 실행한다.
 기본값은 마이크 STT 입력이고, `use_cli_ui:=true use_stt:=false`로 실행하면
 터미널 챗봇 형태로 문장을 직접 입력할 수 있다.
-기존 pick-and-place 실행은 별도 터미널에서 `hf_auto_pick_place.launch.py`를
+기존 pick-and-place 실행은 별도 터미널에서 `macgyvbot.launch.py`를
 실행한다.
 """
 

@@ -142,9 +142,9 @@ def resolve_model_path(model_name):
 # ═══════════════════════════════════════════
 # 메인 노드 클래스
 # ═══════════════════════════════════════════
-class ClickPickNode(Node):
+class MacGyvBotNode(Node):
     def __init__(self):
-        super().__init__("yolo_pick_moveit_node")
+        super().__init__("macgyvbot_node")
 
         self.bridge = CvBridge()
 
@@ -292,6 +292,67 @@ class ClickPickNode(Node):
         base_xyz = (base2cam @ coord)[:3]
 
         return base_xyz
+
+    def return_tool_to_original_position(self, target_x, target_y, travel_z, grasp_z, ori, logger):
+        logger.info("반환 1단계: 원래 공구 위치 상단으로 이동")
+        ok = plan_and_execute(
+            self.robot,
+            self.arm,
+            logger,
+            pose_goal=make_safe_pose(target_x, target_y, travel_z, ori, logger),
+            params=self.pilz_params,
+        )
+        if not ok:
+            logger.error("원래 공구 위치 상단 이동 실패. 공구를 잡은 상태로 중단합니다.")
+            return False
+
+        logger.info("반환 2단계: 원래 공구 위치로 하강")
+        ok = plan_and_execute(
+            self.robot,
+            self.arm,
+            logger,
+            pose_goal=make_safe_pose(target_x, target_y, grasp_z, ori, logger),
+            params=self.pilz_params,
+        )
+        if not ok:
+            logger.error("원래 공구 위치 하강 실패. 공구를 잡은 상태로 중단합니다.")
+            return False
+
+        logger.info("반환 3단계: 원래 위치에 공구 놓기")
+        self.gripper.open_gripper()
+        time.sleep(0.8)
+
+        logger.info("반환 4단계: 공구를 놓은 뒤 안전 높이로 복귀")
+        ok = plan_and_execute(
+            self.robot,
+            self.arm,
+            logger,
+            pose_goal=make_safe_pose(target_x, target_y, travel_z, ori, logger),
+            params=self.pilz_params,
+        )
+        if not ok:
+            logger.error("공구를 놓은 뒤 안전 높이 복귀 실패")
+            return False
+
+        logger.info("반환 5단계: Home 위치로 복귀")
+        ok = plan_and_execute(
+            self.robot,
+            self.arm,
+            logger,
+            pose_goal=make_safe_pose(
+                self.home_xyz[0],
+                self.home_xyz[1],
+                travel_z,
+                ori,
+                logger,
+            ),
+            params=self.pilz_params,
+        )
+        if not ok:
+            logger.error("공구 반환 후 Home 복귀 실패")
+            return False
+
+        return True
 
     def pick_sequence(self, bx, by, bz, z_m):
         self.human_grasped_tool = False
@@ -460,7 +521,15 @@ class ClickPickNode(Node):
             # 8. 사용자 손이 공구를 잡았는지 확인 후 놓기
             log.info("8단계: 사용자 잡기 인식 대기")
             if not self.wait_for_human_grasp(log):
-                log.error("사용자 잡기 인식 실패. 그리퍼 릴리즈를 중단합니다.")
+                log.error("사용자 잡기 인식 실패. 원래 공구 위치로 반환합니다.")
+                self.return_tool_to_original_position(
+                    target_x,
+                    target_y,
+                    travel_z,
+                    grasp_z,
+                    ori,
+                    log,
+                )
                 return
 
             log.info("9단계: 사용자 잡기 확인 후 그리퍼 오픈(놓기)")
@@ -651,7 +720,7 @@ class ClickPickNode(Node):
 def main():
     rclpy.init()
 
-    node = ClickPickNode()
+    node = MacGyvBotNode()
 
     try:
         node.run()
