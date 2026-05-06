@@ -50,7 +50,7 @@ colcon build
 `macgyvbot` 패키지만 빌드:
 
 ```bash
-cd ~/ros2_ws/src
+cd ~/ros2_ws
 colcon build --packages-select macgyvbot
 ```
 
@@ -63,15 +63,19 @@ source ~/ros2_ws/install/setup.bash
 ## 전체 파이프라인 실행
 `Doosan-Robotics-M0609` 연결
 ```bash
-ros2 launch dsr_bringup2 dsr_bringup2_moveit.launch.py mode:=real model:=m0609 host:=192.168.1.100
+ros2 launch dsr_bringup2 dsr_bringup2_moveit.launch.py \
+mode:=real model:=m0609 host:=192.168.1.100
 ```
 카메라 실행
 ```bash
-ros2 launch realsense2_camera rs_align_depth_launch.py depth_module.depth_profile:=640x480x30 rgb_camera.color_profile:=640x480x30 initial_reset:=true align_depth.enable:=true
+ros2 launch realsense2_camera rs_align_depth_launch.py \
+depth_module.depth_profile:=640x480x30 \
+rgb_camera.color_profile:=640x480x30 \
+initial_reset:=true align_depth.enable:=true
 ```
 메인 파이프라인 실행
 ```bash
-ros2 launch macgyvbot macgyvbot.py
+ros2 launch macgyvbot macgyvbot.launch.py
 ```
 
 ## 자동 pick/place 실행
