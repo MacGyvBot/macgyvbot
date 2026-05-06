@@ -44,6 +44,12 @@ HOME_JOINTS = {
 
 SAFE_Z = 0.40
 APPROACH_Z_OFFSET = 0.18
+GRASP_Z_OFFSET = 0.3
+COLLISION_MARGIN = 0.02
+MIN_GRASP_CLEARANCE = 0.02
+MIN_TRAVEL_Z = 0.06
+MIN_PICK_Z = 0.30
+MAX_DESCENT_FROM_APPROACH = 0.08
 YOLO_MODEL_NAME = "yolov11_best.pt"
 HAND_GRASP_TOPIC = "/human_grasped_tool"
 HAND_GRASP_IMAGE_TOPIC = "/hand_grasp_detection/annotated_image"
@@ -54,10 +60,10 @@ GRASPNET_WAIT_TIMEOUT_SEC = 2.0
 GRASPNET_TARGET_DISTANCE_TOLERANCE_M = 0.12
 ROBOT_WINDOW_NAME = "YOLO Robot Pick"
 HAND_GRASP_WINDOW_NAME = "Hand Grasp Detection"
-CAMERA_INFO_TOPIC = "/camera/camera/color/camera_info"
-COLOR_TOPIC = "/camera/camera/color/image_raw"
-DEPTH_TOPIC = "/camera/camera/aligned_depth_to_color/image_raw"
-TARGET_LABEL_TOPIC = "/target_label"
+GRASP_POINT_MODE_CENTER = "center"
+GRASP_POINT_MODE_VLM = "vlm"
+DEFAULT_GRASP_POINT_MODE = GRASP_POINT_MODE_CENTER
+VLM_GRASP_GRID_SIZES = ((3, 3), (4, 4))
 
 
 # ═══════════════════════════════════════════
@@ -142,30 +148,17 @@ def resolve_model_path(model_name):
     return model_name
 
 
-def depth_value_to_meters(raw_depth, encoding):
-    depth = float(raw_depth)
-
-    if not np.isfinite(depth) or depth <= 0.0:
-        return None
-
-    if encoding in ("32FC1", "64FC1"):
-        return depth
-
-    return depth / 1000.0
-
-
 # ═══════════════════════════════════════════
 # 메인 노드 클래스
 # ═══════════════════════════════════════════
-class ClickPickNode(Node):
+class MacGyvBotNode(Node):
     def __init__(self):
-        super().__init__("yolo_pick_moveit_node")
+        super().__init__("macgyvbot_node")
 
         self.bridge = CvBridge()
 
         self.color_image = None
         self.depth_image = None
-        self.depth_encoding = None
         self.intrinsics = None
 
         self.picking = False
@@ -174,34 +167,29 @@ class ClickPickNode(Node):
         self.human_grasped_tool = False
         self.last_grasp_result = None
         self.hand_grasp_image = None
+        self.vlm_grasp_model = None
 
         self.home_xyz = None
         self.home_ori = None
 
-        self.yolo_model_name = str(
-            self.declare_parameter("yolo_model", YOLO_MODEL_NAME).value
+        self.declare_parameter("grasp_point_mode", DEFAULT_GRASP_POINT_MODE)
+        self.grasp_point_mode = (
+            self.get_parameter("grasp_point_mode")
+            .get_parameter_value()
+            .string_value
+            .strip()
+            .lower()
         )
-        self.camera_info_topic = str(
-            self.declare_parameter("camera_info_topic", CAMERA_INFO_TOPIC).value
-        )
-        self.color_topic = str(
-            self.declare_parameter("color_topic", COLOR_TOPIC).value
-        )
-        self.depth_topic = str(
-            self.declare_parameter("depth_topic", DEPTH_TOPIC).value
-        )
-        self.target_label_topic = str(
-            self.declare_parameter("target_label_topic", TARGET_LABEL_TOPIC).value
-        )
-        self.hand_grasp_topic = str(
-            self.declare_parameter("hand_grasp_topic", HAND_GRASP_TOPIC).value
-        )
-        self.hand_grasp_image_topic = str(
-            self.declare_parameter(
-                "hand_grasp_image_topic",
-                HAND_GRASP_IMAGE_TOPIC,
-            ).value
-        )
+        if self.grasp_point_mode not in (
+            GRASP_POINT_MODE_CENTER,
+            GRASP_POINT_MODE_VLM,
+        ):
+            self.get_logger().warn(
+                f"알 수 없는 grasp_point_mode '{self.grasp_point_mode}'. "
+                f"'{GRASP_POINT_MODE_CENTER}'로 대체합니다."
+            )
+            self.grasp_point_mode = GRASP_POINT_MODE_CENTER
+
         self.graspnet_pose_topic = str(
             self.declare_parameter("graspnet_pose_topic", GRASPNET_POSE_TOPIC).value
         )
@@ -238,7 +226,7 @@ class ClickPickNode(Node):
         )
 
         # YOLO 모델 로드
-        self.model = YOLO(resolve_model_path(self.yolo_model_name))
+        self.model = YOLO(resolve_model_path(YOLO_MODEL_NAME))
 
         # Hand-Eye 매트릭스 로드
         calib_file = (
@@ -265,21 +253,21 @@ class ClickPickNode(Node):
         # 카메라 구독
         self.create_subscription(
             CameraInfo,
-            self.camera_info_topic,
+            "/camera/camera/color/camera_info",
             self._cam_info_cb,
             10,
         )
 
         self.create_subscription(
             Image,
-            self.color_topic,
+            "/camera/camera/color/image_raw",
             self._color_cb,
             10,
         )
 
         self.create_subscription(
             Image,
-            self.depth_topic,
+            "/camera/camera/aligned_depth_to_color/image_raw",
             self._depth_cb,
             10,
         )
@@ -287,7 +275,7 @@ class ClickPickNode(Node):
         # 객체명 입력용 토픽 구독
         self.create_subscription(
             String,
-            self.target_label_topic,
+            "/target_label",
             self._target_label_cb,
             10,
         )
@@ -295,7 +283,7 @@ class ClickPickNode(Node):
         # 사용자 손의 공구 잡기 인식 결과 구독
         self.create_subscription(
             String,
-            self.hand_grasp_topic,
+            HAND_GRASP_TOPIC,
             self._hand_grasp_cb,
             10,
         )
@@ -303,7 +291,7 @@ class ClickPickNode(Node):
         # 사용자 손 인식 annotation 이미지 구독
         self.create_subscription(
             Image,
-            self.hand_grasp_image_topic,
+            HAND_GRASP_IMAGE_TOPIC,
             self._hand_grasp_image_cb,
             10,
         )
@@ -316,14 +304,12 @@ class ClickPickNode(Node):
         )
 
         self.get_logger().info("노드 초기화 완료")
+        self.get_logger().info(f"grasp point mode: {self.grasp_point_mode}")
         self.get_logger().info(
             "객체 입력 예시: ros2 topic pub --once /target_label std_msgs/msg/String \"{data: cup}\""
         )
-        self.get_logger().info(f"YOLO 모델: {self.yolo_model_name}")
-        self.get_logger().info(f"Color 토픽: {self.color_topic}")
-        self.get_logger().info(f"Depth 토픽: {self.depth_topic}")
-        self.get_logger().info(f"잡기 인식 결과 토픽: {self.hand_grasp_topic}")
-        self.get_logger().info(f"잡기 인식 화면 토픽: {self.hand_grasp_image_topic}")
+        self.get_logger().info(f"잡기 인식 결과 토픽: {HAND_GRASP_TOPIC}")
+        self.get_logger().info(f"잡기 인식 화면 토픽: {HAND_GRASP_IMAGE_TOPIC}")
         self.get_logger().info(f"GraspNet pose 토픽: {self.graspnet_pose_topic}")
 
     def _target_label_cb(self, msg):
@@ -377,7 +363,6 @@ class ClickPickNode(Node):
 
     def _depth_cb(self, msg):
         self.depth_image = self.bridge.imgmsg_to_cv2(msg, "passthrough")
-        self.depth_encoding = msg.encoding
 
     def transform_to_base(self, cam_xyz):
         coord = np.append(np.array(cam_xyz), 1.0)
@@ -455,6 +440,180 @@ class ClickPickNode(Node):
 
             time.sleep(0.05)
 
+    def select_grasp_pixel(self, box, label):
+        b = box.xyxy[0].cpu().numpy()
+
+        if self.grasp_point_mode == GRASP_POINT_MODE_VLM:
+            vlm_pixel = self.select_vlm_grasp_pixel(b, label)
+            if vlm_pixel is not None:
+                return vlm_pixel
+
+            self.get_logger().warn(
+                "VLM grasp point 실패. box 중심점으로 대체합니다."
+            )
+
+        return self.select_box_center_pixel(b)
+
+    def select_box_center_pixel(self, bbox):
+        u = int((bbox[0] + bbox[2]) / 2)
+        v = int((bbox[1] + bbox[3]) / 2)
+        return u, v, GRASP_POINT_MODE_CENTER
+
+    def select_vlm_grasp_pixel(self, bbox, label):
+        x1, y1, x2, y2 = self.clamp_bbox_to_image(bbox, self.color_image)
+
+        if x2 <= x1 or y2 <= y1:
+            self.get_logger().warn("VLM crop bbox가 비어 있습니다.")
+            return None
+
+        try:
+            from PIL import Image as PILImage
+
+            from .grasp_point_detection import VLMModel
+        except ImportError as exc:
+            self.get_logger().warn(f"VLM grasp 모듈 import 실패: {exc}")
+            return None
+
+        if self.vlm_grasp_model is None:
+            self.get_logger().info("VLM grasp 모델을 lazy load 준비합니다.")
+            self.vlm_grasp_model = VLMModel()
+
+        crop_bgr = self.color_image[y1:y2, x1:x2]
+        crop_rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
+        crop_image = PILImage.fromarray(crop_rgb)
+
+        try:
+            result = self.vlm_grasp_model.select_grasp_region(
+                crop_image,
+                object_label=label,
+                user_request=self.target_label,
+                grid_sizes=VLM_GRASP_GRID_SIZES,
+            )
+        except Exception as exc:
+            self.get_logger().warn(f"VLM grasp point 추론 실패: {exc}")
+            return None
+
+        u = x1 + int(round(result.point[0]))
+        v = y1 + int(round(result.point[1]))
+        source = GRASP_POINT_MODE_VLM
+
+        refined = VLMModel.refine_grasp_point_with_depth(
+            self.depth_image,
+            (u, v),
+            focal_px=(self.intrinsics["fx"] + self.intrinsics["fy"]) / 2.0,
+        )
+        if refined is not None:
+            u, v = refined.point
+            source = f"{GRASP_POINT_MODE_VLM}+depth"
+
+        self.get_logger().info(
+            f"VLM grasp point 선택: pixel=({u}, {v}), "
+            f"angle={result.angle_deg:.1f}deg, source={source}"
+        )
+
+        return u, v, source
+
+    @staticmethod
+    def clamp_bbox_to_image(bbox, image):
+        height, width = image.shape[:2]
+        x1 = max(0, min(width - 1, int(math.floor(bbox[0]))))
+        y1 = max(0, min(height - 1, int(math.floor(bbox[1]))))
+        x2 = max(0, min(width, int(math.ceil(bbox[2]))))
+        y2 = max(0, min(height, int(math.ceil(bbox[3]))))
+        return x1, y1, x2, y2
+
+    def pixel_to_base_target(self, u, v, label, source):
+        h, w = self.depth_image.shape[:2]
+
+        if not (0 <= u < w and 0 <= v < h):
+            self.get_logger().warn(
+                f"{source} 픽셀이 depth 이미지 범위를 벗어남: u={u}, v={v}"
+            )
+            return None
+
+        z_raw = self.depth_image[v, u]
+
+        if z_raw == 0:
+            self.get_logger().warn(
+                f"{label} 검출됨, 하지만 {source} depth 값이 0입니다."
+            )
+            return None
+
+        z_m = float(z_raw) / 1000.0
+        cam_x = (u - self.intrinsics["ppx"]) * z_m / self.intrinsics["fx"]
+        cam_y = (v - self.intrinsics["ppy"]) * z_m / self.intrinsics["fy"]
+        bx, by, bz = self.transform_to_base((cam_x, cam_y, z_m))
+
+        self.get_logger().info(
+            f"'{label}' 검출: source={source}, "
+            f"pixel=({u}, {v}), "
+            f"camera=({cam_x:.3f}, {cam_y:.3f}, {z_m:.3f}), "
+            f"base=({bx:.3f}, {by:.3f}, {bz:.3f})"
+        )
+
+        return bx, by, bz, z_m
+
+    def return_tool_to_original_position(self, target_x, target_y, travel_z, grasp_z, ori, logger):
+        logger.info("반환 1단계: 원래 공구 위치 상단으로 이동")
+        ok = plan_and_execute(
+            self.robot,
+            self.arm,
+            logger,
+            pose_goal=make_safe_pose(target_x, target_y, travel_z, ori, logger),
+            params=self.pilz_params,
+        )
+        if not ok:
+            logger.error("원래 공구 위치 상단 이동 실패. 공구를 잡은 상태로 중단합니다.")
+            return False
+
+        logger.info("반환 2단계: 원래 공구 위치로 하강")
+        ok = plan_and_execute(
+            self.robot,
+            self.arm,
+            logger,
+            pose_goal=make_safe_pose(target_x, target_y, grasp_z, ori, logger),
+            params=self.pilz_params,
+        )
+        if not ok:
+            logger.error("원래 공구 위치 하강 실패. 공구를 잡은 상태로 중단합니다.")
+            return False
+
+        logger.info("반환 3단계: 원래 위치에 공구 놓기")
+        self.gripper.open_gripper()
+        time.sleep(0.8)
+
+        logger.info("반환 4단계: 공구를 놓은 뒤 안전 높이로 복귀")
+        ok = plan_and_execute(
+            self.robot,
+            self.arm,
+            logger,
+            pose_goal=make_safe_pose(target_x, target_y, travel_z, ori, logger),
+            params=self.pilz_params,
+        )
+        if not ok:
+            logger.error("공구를 놓은 뒤 안전 높이 복귀 실패")
+            return False
+
+        logger.info("반환 5단계: Home 위치로 복귀")
+        ok = plan_and_execute(
+            self.robot,
+            self.arm,
+            logger,
+            pose_goal=make_safe_pose(
+                self.home_xyz[0],
+                self.home_xyz[1],
+                travel_z,
+                ori,
+                logger,
+            ),
+            params=self.pilz_params,
+        )
+        if not ok:
+            logger.error("공구 반환 후 Home 복귀 실패")
+            return False
+
+        return True
+
     def pick_sequence(self, bx, by, bz, z_m):
         self.human_grasped_tool = False
         self.last_grasp_result = None
@@ -464,21 +623,45 @@ class ClickPickNode(Node):
         target_xyz, ori, using_graspnet_pose = self.select_grasp_pose((bx, by, bz), log)
         bx, by, bz = target_xyz
 
-        approach_z = bz + APPROACH_Z_OFFSET
-        grasp_z = bz
+        # Depth 기반 안전 파지 높이 계산
+        # z_m: camera->object depth (m)
+        # base/object z 좌표(bz) 기준으로 너무 과도한 하강을 막고
+        # 최소 여유 간격을 유지하도록 제한한다.
+        safe_grasp_offset = max(
+            GRASP_Z_OFFSET,
+            z_m * 0.35 + MIN_GRASP_CLEARANCE,
+        )
+        safe_grasp_offset += COLLISION_MARGIN
+
+        approach_z = bz + APPROACH_Z_OFFSET + COLLISION_MARGIN
+        grasp_z = bz + safe_grasp_offset
+        grasp_z = max(grasp_z, MIN_TRAVEL_Z, MIN_PICK_Z)
+        if grasp_z > approach_z:
+            grasp_z = approach_z - 0.01
+        # 급격한 하강 제한: 보정 오차로 과도하게 내려가는 것을 방지
+        min_safe_grasp_z = approach_z - MAX_DESCENT_FROM_APPROACH
+        if grasp_z < min_safe_grasp_z:
+            log.warn(
+                f"grasp_z({grasp_z:.3f})가 과도하게 낮아 "
+                f"하강 제한 적용: {min_safe_grasp_z:.3f}"
+            )
+            grasp_z = min_safe_grasp_z
 
         current_pose = get_ee_matrix(self.robot)
         current_x = current_pose[0, 3]
         current_y = current_pose[1, 3]
 
-        target_x, target_y, travel_z = clamp_to_safe_workspace(
-            bx,
-            by,
-            SAFE_Z,
-            log,
-        )
+        target_x, target_y, _ = clamp_to_safe_workspace(bx, by, SAFE_Z, log)
+        _, _, travel_z = clamp_to_safe_workspace(target_x, target_y, SAFE_Z, log)
         _, _, approach_z = clamp_to_safe_workspace(target_x, target_y, approach_z, log)
         _, _, grasp_z = clamp_to_safe_workspace(target_x, target_y, grasp_z, log)
+
+        if grasp_z > approach_z:
+            log.warn(
+                f"안전영역 적용 후 grasp_z({grasp_z:.3f})가 "
+                f"approach_z({approach_z:.3f})보다 높아 approach_z로 맞춥니다."
+            )
+            grasp_z = approach_z
 
         should_descend_to_grasp = abs(approach_z - grasp_z) > 0.005
 
@@ -601,55 +784,15 @@ class ClickPickNode(Node):
             # 8. 사용자 손이 공구를 잡았는지 확인 후 놓기
             log.info("8단계: 사용자 잡기 인식 대기")
             if not self.wait_for_human_grasp(log):
-                log.error("사용자 잡기 인식 실패. 공구를 원래 위치로 되돌립니다.")
-
-                log.info("8-1단계: 원래 위치 상단으로 복귀")
-                ok = plan_and_execute(
-                    self.robot,
-                    self.arm,
+                log.error("사용자 잡기 인식 실패. 원래 공구 위치로 반환합니다.")
+                self.return_tool_to_original_position(
+                    target_x,
+                    target_y,
+                    travel_z,
+                    grasp_z,
+                    ori,
                     log,
-                    pose_goal=make_safe_pose(target_x, target_y, travel_z, ori, log),
-                    params=self.pilz_params,
                 )
-
-                if not ok:
-                    log.error("원래 위치 상단 복귀 실패. 공구를 잡은 상태로 중단합니다.")
-                    return
-
-                log.info("8-2단계: 원래 파지 위치로 하강")
-                ok = plan_and_execute(
-                    self.robot,
-                    self.arm,
-                    log,
-                    pose_goal=make_safe_pose(target_x, target_y, grasp_z, ori, log),
-                    params=self.pilz_params,
-                )
-
-                if not ok:
-                    log.error("원래 파지 위치 하강 실패. 공구를 잡은 상태로 중단합니다.")
-                    return
-
-                log.info("8-3단계: 원래 위치에 공구 놓기")
-                self.gripper.open_gripper()
-                time.sleep(0.8)
-
-                log.info("8-4단계: 공구를 놓은 뒤 Home 위치로 복귀")
-                ok = plan_and_execute(
-                    self.robot,
-                    self.arm,
-                    log,
-                    pose_goal=make_safe_pose(
-                        self.home_xyz[0],
-                        self.home_xyz[1],
-                        travel_z,
-                        ori,
-                        log,
-                    ),
-                    params=self.pilz_params,
-                )
-
-                if not ok:
-                    log.error("공구 반환 후 Home 복귀 실패")
                 return
 
             log.info("9단계: 사용자 잡기 확인 후 그리퍼 오픈(놓기)")
@@ -777,48 +920,23 @@ class ClickPickNode(Node):
 
                     found = True
 
-                    b = box.xyxy[0].cpu().numpy()
+                    u, v, source = self.select_grasp_pixel(box, label)
+                    target = self.pixel_to_base_target(u, v, label, source)
 
-                    u = int((b[0] + b[2]) / 2)
-                    v = int((b[1] + b[3]) / 2)
-
-                    h, w = self.depth_image.shape[:2]
-
-                    if not (0 <= u < w and 0 <= v < h):
-                        self.get_logger().warn(
-                            f"검출 중심점이 depth 이미지 범위를 벗어남: u={u}, v={v}"
-                        )
+                    if target is None:
                         continue
 
-                    z_m = depth_value_to_meters(
-                        self.depth_image[v, u],
-                        self.depth_encoding,
-                    )
-
-                    if z_m is None:
-                        self.get_logger().warn(
-                            f"{self.target_label} 검출됨, 하지만 유효한 depth 값이 없습니다."
-                        )
-                        continue
-
-                    cam_x = (
-                        (u - self.intrinsics["ppx"])
-                        * z_m
-                        / self.intrinsics["fx"]
-                    )
-                    cam_y = (
-                        (v - self.intrinsics["ppy"])
-                        * z_m
-                        / self.intrinsics["fy"]
-                    )
-
-                    bx, by, bz = self.transform_to_base((cam_x, cam_y, z_m))
-
-                    self.get_logger().info(
-                        f"'{self.target_label}' 검출: "
-                        f"pixel=({u}, {v}), "
-                        f"camera=({cam_x:.3f}, {cam_y:.3f}, {z_m:.3f}), "
-                        f"base=({bx:.3f}, {by:.3f}, {bz:.3f})"
+                    bx, by, bz, z_m = target
+                    cv2.circle(annotated_frame, (u, v), 6, (0, 255, 255), -1)
+                    cv2.putText(
+                        annotated_frame,
+                        source,
+                        (u + 8, v - 8),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.45,
+                        (0, 255, 255),
+                        1,
+                        cv2.LINE_AA,
                     )
 
                     self.start_pick_sequence(bx, by, bz, z_m)
@@ -841,7 +959,7 @@ class ClickPickNode(Node):
 def main():
     rclpy.init()
 
-    node = ClickPickNode()
+    node = MacGyvBotNode()
 
     try:
         node.run()

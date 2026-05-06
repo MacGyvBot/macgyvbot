@@ -6,7 +6,6 @@ from launch.substitutions import PathJoinSubstitution
 from launch_ros.substitutions import FindPackageShare
 from moveit_configs_utils import MoveItConfigsBuilder
 
-
 def generate_launch_description():
     # Doosan M0609 MoveIt 기본 설정 (URDF, SRDF, kinematics, controllers 등)
     moveit_config = (
@@ -36,6 +35,11 @@ def generate_launch_description():
                 default_value="yolov11_best.pt",
             ),
             DeclareLaunchArgument(
+                "grasp_point_mode",
+                default_value="center",
+                description="Grasp point selection mode: center or vlm",
+            ),
+            DeclareLaunchArgument(
                 "graspnet_pose_topic",
                 default_value="/graspnet/target_pose",
             ),
@@ -50,20 +54,15 @@ def generate_launch_description():
             Node(
                 package="macgyvbot",
                 executable="macgyvbot",
-                name="macgyvbot_node",
                 output="screen",
                 # MoveIt config + MoveItPy용 설정을 같이 넘김
                 parameters=[
                     moveit_config.to_dict(),
                     moveit_py_params,
                     {
-                        "yolo_model": LaunchConfiguration("yolo_model"),
-                        "color_topic": "/camera/camera/color/image_raw",
-                        "depth_topic": "/camera/camera/aligned_depth_to_color/image_raw",
-                        "camera_info_topic": "/camera/camera/color/camera_info",
-                        "target_label_topic": "/target_label",
-                        "hand_grasp_topic": "/human_grasped_tool",
-                        "hand_grasp_image_topic": "/hand_grasp_detection/annotated_image",
+                        "grasp_point_mode": LaunchConfiguration(
+                            "grasp_point_mode"
+                        ),
                         "graspnet_pose_topic": LaunchConfiguration("graspnet_pose_topic"),
                         "use_graspnet_orientation": LaunchConfiguration(
                             "use_graspnet_orientation"
