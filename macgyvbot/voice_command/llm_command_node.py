@@ -49,6 +49,7 @@ class LlmCommandNode(Node):
         self.declare_parameter('input_topic', '/stt_text')
         self.declare_parameter('target_label_topic', '/target_label')
         self.declare_parameter('tool_command_topic', '/tool_command')
+        self.declare_parameter('command_feedback_topic', '/command_feedback')
         self.declare_parameter('ollama_url', 'http://localhost:11434/api/generate')
         self.declare_parameter('model', 'qwen2.5:0.5b')
         self.declare_parameter('timeout_sec', 8.0)
@@ -59,6 +60,7 @@ class LlmCommandNode(Node):
         input_topic = self.get_parameter('input_topic').value
         target_label_topic = self.get_parameter('target_label_topic').value
         tool_command_topic = self.get_parameter('tool_command_topic').value
+        command_feedback_topic = self.get_parameter('command_feedback_topic').value
         self._ollama_url = self.get_parameter('ollama_url').value
         self._model = self.get_parameter('model').value
         self._timeout_sec = float(self.get_parameter('timeout_sec').value)
@@ -68,11 +70,15 @@ class LlmCommandNode(Node):
 
         self._target_label_pub = self.create_publisher(String, target_label_topic, 10)
         self._tool_command_pub = self.create_publisher(String, tool_command_topic, 10)
+        self._feedback_pub = self.create_publisher(String, command_feedback_topic, 10)
         self.create_subscription(String, input_topic, self._text_cb, 10)
 
         self.get_logger().info('하이브리드 명령 해석 노드 준비 완료')
         self.get_logger().info(f'입력 topic: {input_topic}')
-        self.get_logger().info(f'출력 topic: {tool_command_topic}, {target_label_topic}')
+        self.get_logger().info(
+            f'출력 topic: {tool_command_topic}, {target_label_topic}, '
+            f'{command_feedback_topic}'
+        )
         self.get_logger().info(
             f'local parser: {"on" if self._use_local_parser else "off"}, '
             f'LLM fallback: {"on" if self._use_llm_fallback else "off"}'
@@ -94,11 +100,23 @@ class LlmCommandNode(Node):
 
         if not self._use_llm_fallback:
             self.get_logger().warn('local parser 실패, LLM fallback이 꺼져 있어 무시합니다.')
+            self._publish_feedback(
+                status='rejected',
+                raw_text=text,
+                reason='local_parser_failed',
+                message='공구를 확정하지 못했습니다. 다시 말해주세요.',
+            )
             return
 
         self.get_logger().info(f'LLM fallback 요청: "{text}"')
         parsed = self._parse_with_llm(text)
         if parsed is None:
+            self._publish_feedback(
+                status='rejected',
+                raw_text=text,
+                reason='llm_failed',
+                message='자연어 해석에 실패했습니다. 다시 말해주세요.',
+            )
             return
 
         command = self._validate_command(parsed, text)
@@ -137,6 +155,13 @@ class LlmCommandNode(Node):
         command_msg = String()
         command_msg.data = json.dumps(command, ensure_ascii=False)
         self._tool_command_pub.publish(command_msg)
+        self._publish_feedback(
+            status='accepted',
+            raw_text=command.get('raw_text', ''),
+            reason='command_accepted',
+            message='명령을 올바른 입력으로 판단했습니다.',
+            command=command,
+        )
 
         if command['action'] == 'bring':
             target_msg = String()
@@ -156,6 +181,20 @@ class LlmCommandNode(Node):
             f'confidence={command["confidence"]:.2f} '
             '-> /tool_command만 발행'
         )
+
+    def _publish_feedback(self, status, raw_text, reason, message, command=None):
+        payload = {
+            'status': status,
+            'raw_text': raw_text,
+            'reason': reason,
+            'message': message,
+        }
+        if command is not None:
+            payload['command'] = command
+
+        msg = String()
+        msg.data = json.dumps(payload, ensure_ascii=False)
+        self._feedback_pub.publish(msg)
 
     def _parse_with_llm(self, text):
         prompt = self._build_prompt(text)
@@ -281,10 +320,50 @@ class LlmCommandNode(Node):
                 f'LLM confidence가 낮아 명령을 무시합니다: '
                 f'{confidence:.2f} < {self._min_confidence:.2f}'
             )
+            self._publish_feedback(
+                status='rejected',
+                raw_text=raw_text,
+                reason='low_confidence',
+                message='명령 확신도가 낮습니다. 공구 이름을 더 명확히 말해주세요.',
+                command={
+                    'tool_name': tool_name,
+                    'action': action,
+                    'confidence': confidence,
+                    'match_method': 'llm',
+                },
+            )
+            return None
+
+        if action == 'unknown':
+            self.get_logger().warn('행동을 확정하지 못해 명령을 무시합니다.')
+            self._publish_feedback(
+                status='rejected',
+                raw_text=raw_text,
+                reason='unknown_action',
+                message='무엇을 해야 하는지 확정하지 못했습니다. 다시 입력해주세요.',
+                command={
+                    'tool_name': tool_name,
+                    'action': action,
+                    'confidence': confidence,
+                    'match_method': 'llm',
+                },
+            )
             return None
 
         if action == 'bring' and tool_name == 'unknown':
             self.get_logger().warn('bring 명령이지만 공구를 확정하지 못해 무시합니다.')
+            self._publish_feedback(
+                status='rejected',
+                raw_text=raw_text,
+                reason='unknown_tool',
+                message='가져올 공구를 확정하지 못했습니다. 다시 입력해주세요.',
+                command={
+                    'tool_name': tool_name,
+                    'action': action,
+                    'confidence': confidence,
+                    'match_method': 'llm',
+                },
+            )
             return None
 
         return {
