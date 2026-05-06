@@ -25,11 +25,19 @@ MacGyvBot은 음성 명령 기반 공구 서랍 관리 로봇팔 어시스턴트
 
 ## 설치 및 빌드
 
+[Doosan ROS 2 Manual(Humble)](https://doosanrobotics.github.io/doosan-robotics-ros-manual/humble/installation.html)
+
 MacGyvBot은 두산로보틱스 ROS 2 패키지와 함께 사용합니다. `macgyvbot` 패키지는 두산로보틱스 워크스페이스의 `doosan-robot2` 아래에 clone한 뒤, `ros2_ws/src` 기준에서 빌드합니다.
 
 ```bash
 cd ~/ros2_ws/src/doosan-robot2/
 git clone https://github.com/MacGyvBot/macgyvbot.git
+```
+
+Python 패키지 설치:
+
+```bash
+pip install -r requirements.txt
 ```
 
 전체 워크스페이스 빌드:
@@ -52,10 +60,18 @@ colcon build --packages-select macgyvbot
 source ~/ros2_ws/install/setup.bash
 ```
 
-잡기 인식 노드를 사용할 경우 Python 패키지도 설치합니다.
-
+## 전체 파이프라인 실행
+`Doosan-Robotics-M0609` 연결
 ```bash
-pip install -r requirements-grasp.txt
+ros2 launch dsr_bringup2 dsr_bringup2_moveit.launch.py mode:=real model:=m0609 host:=192.168.1.100
+```
+카메라 실행
+```bash
+ros2 launch realsense2_camera rs_align_depth_launch.py depth_module.depth_profile:=640x480x30 rgb_camera.color_profile:=640x480x30 initial_reset:=true align_depth.enable:=true
+```
+메인 파이프라인 실행
+```bash
+ros2 launch macgyvbot macgyvbot.py
 ```
 
 ## 자동 pick/place 실행
