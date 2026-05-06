@@ -9,18 +9,27 @@ from __future__ import annotations
 import json
 import importlib.util
 import math
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
 import torch
 from PIL import Image, ImageDraw, ImageFont
-from transformers import AutoModelForImageTextToText, AutoProcessor
+from transformers import AutoProcessor
+
+try:
+    # Available in newer transformers.
+    from transformers import AutoModelForImageTextToText as _AutoVLMModel
+except ImportError:
+    # Backward-compatible fallback for older transformers (e.g., 4.40.x).
+    from transformers import AutoModelForVision2Seq as _AutoVLMModel
 
 
 DEFAULT_VLM_MODEL = "HuggingFaceTB/SmolVLM2-2.2B-Instruct"
 DEFAULT_MAX_IMAGE_SIZE = 640
 DEFAULT_GRID_SIZES = ((3, 3), (4, 4), (5, 5))
+DEFAULT_LOCAL_MODEL_ROOT = Path(__file__).resolve().parents[1] / "models" / "vlm"
 
 
 @dataclass(frozen=True)
@@ -86,6 +95,7 @@ class VLMModel:
         self.max_image_size = max_image_size
         self.max_new_tokens = max_new_tokens
         self.use_4bit = use_4bit
+        self.local_model_root = DEFAULT_LOCAL_MODEL_ROOT
 
         self.processor = None
         self.model = None
@@ -106,14 +116,15 @@ class VLMModel:
         if self.model is not None and self.processor is not None:
             return
 
-        self.processor = AutoProcessor.from_pretrained(self.model_id)
+        model_source = self._resolve_model_source()
+        self.processor = AutoProcessor.from_pretrained(model_source)
         has_accelerate = importlib.util.find_spec("accelerate") is not None
         has_bitsandbytes = importlib.util.find_spec("bitsandbytes") is not None
         device_map = "auto" if self.device == "cuda" and has_accelerate else None
         quant_config = self._make_quantization_config(has_bitsandbytes)
 
         model_kwargs = {
-            "torch_dtype": self.torch_dtype,
+            "dtype": self.torch_dtype,
             "device_map": device_map,
             "low_cpu_mem_usage": True,
             "attn_implementation": "sdpa",
@@ -121,8 +132,8 @@ class VLMModel:
         if quant_config is not None:
             model_kwargs["quantization_config"] = quant_config
 
-        self.model = AutoModelForImageTextToText.from_pretrained(
-            self.model_id,
+        self.model = _AutoVLMModel.from_pretrained(
+            model_source,
             **model_kwargs,
         )
 
@@ -130,6 +141,13 @@ class VLMModel:
             self.model.to(self.device)
 
         self.model.eval()
+
+    def _resolve_model_source(self):
+        # Prefer pre-downloaded local weights under models/vlm/<org>__<model>.
+        local_dir = self.local_model_root / self.model_id.replace("/", "__")
+        if local_dir.exists():
+            return str(local_dir)
+        return self.model_id
 
     def unload(self):
         """Release VRAM/RAM when the VLM is no longer needed."""
