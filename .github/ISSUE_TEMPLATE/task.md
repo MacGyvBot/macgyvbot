@@ -32,7 +32,7 @@ assignees: ""
 
 ## 📦 담당 레포지토리
 
-- [ ] macgyvbot-assistant
+- [ ] macgyvbot
 - [ ] macgyvbot-perception
 - [ ] macgyvbot-datasets
 - [ ] macgyvbot-docs

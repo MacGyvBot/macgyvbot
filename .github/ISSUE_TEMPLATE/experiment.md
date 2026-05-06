@@ -24,7 +24,7 @@ assignees: ""
 - Python 버전: `Python 3.10`
 - 모델:
 - 데이터셋 버전:
-- 카메라 정보: `Intel® RealSense™ Depth Camera D???`
+- 카메라 정보: `Intel® RealSense™ Depth Camera D435I`
 - 로봇팔 정보: `Doosan-Robotics-M0609`
 - 그리퍼 정보: `OnRobot RG2`
 - 로봇/시뮬레이터:
