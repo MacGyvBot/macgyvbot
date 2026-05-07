@@ -144,6 +144,169 @@ ros2 launch macgyvbot macgyvbot.launch.py \
 
 GraspNet pose는 별도 추론 노드가 `/graspnet/target_pose`에 `geometry_msgs/msg/PoseStamped`로 발행해야 합니다. `header.frame_id`가 `base_link`면 그대로 쓰고, camera frame이면 hand-eye calibration으로 `base_link` pose로 변환합니다.
 
+## GraspNet mock pose node 실행
+
+GraspNet checkpoint 없이 통합 경로만 확인할 때는 mock mode를 사용합니다. mock pose는 기본적으로 `base_link` frame에 publish되며, 기존 MacGyvBot 파이프라인에서는 `use_graspnet_position:=false`로 두고 orientation만 사용합니다.
+
+### Terminal 1: mock pose publish
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/ros2_ws/install/setup.bash
+source ~/ros2_ws/src/doosan-robot2/install/setup.bash
+
+ros2 launch macgyvbot graspnet_inference.launch.py use_mock:=true
+```
+
+### Terminal 2: pose 확인
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/ros2_ws/install/setup.bash
+source ~/ros2_ws/src/doosan-robot2/install/setup.bash
+
+ros2 topic echo /graspnet/target_pose
+```
+
+### Terminal 3: MacGyvBot 연결
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/ros2_ws/install/setup.bash
+source ~/ros2_ws/src/doosan-robot2/install/setup.bash
+
+ros2 launch macgyvbot macgyvbot.launch.py \
+  grasp_point_mode:=center \
+  graspnet_pose_topic:=/graspnet/target_pose \
+  use_graspnet_orientation:=true \
+  use_graspnet_position:=false \
+  graspnet_wait_timeout_sec:=5.0 \
+  graspnet_pose_timeout_sec:=2.0
+```
+
+### Terminal 4: GraspNet 연결 테스트 요청
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/ros2_ws/install/setup.bash
+source ~/ros2_ws/src/doosan-robot2/install/setup.bash
+
+ros2 topic pub --once /target_label std_msgs/msg/String "{data: screwdriver}"
+```
+
+camera frame pose를 사용할 경우 MacGyvBot main node 또는 별도 TF 변환 노드에서 `base_link` 변환이 필요합니다. 초기 실험은 `base_link` mock pose 또는 hand-eye 보정 완료 후 사용합니다.
+
+## 실제 GraspNet inference 설정
+
+실제 GraspNet 모델을 사용할 때는 `macgyvbot` 저장소에 baseline 코드나 checkpoint를 commit하지 않습니다. 공식 baseline 저장소를 워크스페이스 밖에 clone하고, node 실행 시 `graspnet_baseline_path`와 `checkpoint_path`를 넘겨 사용합니다.
+
+공식 GraspNet baseline:
+
+- https://github.com/graspnet/graspnet-baseline
+- https://github.com/graspnet/graspnetAPI
+
+### 1. GraspNet baseline clone
+
+```bash
+mkdir -p ~/third_party
+cd ~/third_party
+git clone https://github.com/graspnet/graspnet-baseline.git
+```
+
+### 2. GraspNet Python 의존성 설치
+
+ROS 2 Humble에서 사용하는 Python 환경과 같은 환경에 설치해야 합니다.
+
+```bash
+cd ~/ros2_ws/src/doosan-robot2/macgyvbot
+pip install -r requirements-graspnet.txt
+```
+
+baseline 자체 의존성도 설치합니다.
+
+```bash
+cd ~/third_party/graspnet-baseline
+pip install -r requirements.txt
+```
+
+CUDA extension을 빌드합니다. CUDA/PyTorch 버전이 맞지 않으면 여기서 실패하므로, 먼저 `python -c "import torch; print(torch.cuda.is_available())"`로 GPU 인식을 확인합니다.
+
+```bash
+cd ~/third_party/graspnet-baseline/pointnet2
+python setup.py install
+
+cd ~/third_party/graspnet-baseline/knn
+python setup.py install
+```
+
+필요하면 `graspnetAPI`를 source 설치로 덮어씁니다.
+
+```bash
+cd ~/third_party
+git clone https://github.com/graspnet/graspnetAPI.git
+cd graspnetAPI
+pip install .
+```
+
+### 3. checkpoint 다운로드
+
+공식 baseline README의 pretrained weights에서 RealSense용 `checkpoint-rs.tar`를 받습니다. D435i/RealSense 입력을 쓰므로 우선 `checkpoint-rs.tar`를 권장합니다.
+
+```bash
+mkdir -p ~/models/graspnet
+# checkpoint-rs.tar 파일을 ~/models/graspnet/checkpoint-rs.tar 로 둡니다.
+```
+
+checkpoint 파일은 크기가 크므로 git에 추가하지 않습니다.
+
+### 4. 실제 GraspNet node 실행
+
+실제 inference는 RGB-D point cloud를 camera frame에서 만들기 때문에 `camera_frame`은 camera optical frame으로 지정합니다. MacGyvBot main node는 camera frame pose를 hand-eye calibration으로 `base_link` pose로 변환한 뒤 사용합니다.
+
+Terminal 1:
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/ros2_ws/install/setup.bash
+source ~/ros2_ws/src/doosan-robot2/install/setup.bash
+
+ros2 launch macgyvbot graspnet_inference.launch.py \
+  use_mock:=false \
+  graspnet_baseline_path:=~/third_party/graspnet-baseline \
+  checkpoint_path:=~/models/graspnet/checkpoint-rs.tar \
+  camera_frame:=camera_color_optical_frame \
+  device:=cuda:0 \
+  collision_thresh:=-1.0
+```
+
+Terminal 2:
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/ros2_ws/install/setup.bash
+source ~/ros2_ws/src/doosan-robot2/install/setup.bash
+
+ros2 topic echo /graspnet/target_pose
+```
+
+Terminal 3:
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/ros2_ws/install/setup.bash
+source ~/ros2_ws/src/doosan-robot2/install/setup.bash
+
+ros2 launch macgyvbot macgyvbot.launch.py \
+  grasp_point_mode:=center \
+  graspnet_pose_topic:=/graspnet/target_pose \
+  use_graspnet_orientation:=true \
+  use_graspnet_position:=false \
+  graspnet_wait_timeout_sec:=5.0 \
+  graspnet_pose_timeout_sec:=2.0
+```
+
+초기 실험에서는 `use_graspnet_position:=false`를 유지합니다. GraspNet position을 실제 로봇 목표 좌표로 쓰려면 hand-eye calibration, depth scale, camera frame 이름, 안전영역 clamp가 모두 맞는지 확인한 뒤 별도 테스트에서 켭니다.
+
 ### Terminal 4: 대상 공구 요청
 
 ```bash

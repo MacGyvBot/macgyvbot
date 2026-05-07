@@ -1,5 +1,9 @@
 opencv-python
 mediapipe==0.10.21
 numpy
+scipy
 ultralytics
 pyrealsense2
+
+# Optional for real GraspNet inference:
+# pip install -r requirements-graspnet.txt
