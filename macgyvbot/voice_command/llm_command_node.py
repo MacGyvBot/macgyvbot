@@ -41,6 +41,31 @@ ALLOWED_ACTIONS = {
     'unknown': '행동을 확정할 수 없음.',
 }
 
+YES_WORDS = {
+    '네',
+    '예',
+    '응',
+    '어',
+    '맞아',
+    '맞습니다',
+    '그래',
+    '오케이',
+    'ok',
+    'yes',
+    'ㅇㅇ',
+}
+
+NO_WORDS = {
+    '아니',
+    '아니요',
+    '아냐',
+    '틀려',
+    '취소',
+    'cancel',
+    'no',
+    'ㄴㄴ',
+}
+
 
 class LlmCommandNode(Node):
     def __init__(self):
@@ -67,6 +92,7 @@ class LlmCommandNode(Node):
         self._min_confidence = float(self.get_parameter('min_confidence').value)
         self._use_local_parser = bool(self.get_parameter('use_local_parser').value)
         self._use_llm_fallback = bool(self.get_parameter('use_llm_fallback').value)
+        self._pending_command = None
 
         self._target_label_pub = self.create_publisher(String, target_label_topic, 10)
         self._tool_command_pub = self.create_publisher(String, tool_command_topic, 10)
@@ -91,6 +117,9 @@ class LlmCommandNode(Node):
             return
 
         self.get_logger().info(f'명령 해석 요청: "{text}"')
+
+        if self._handle_pending_confirmation(text):
+            return
 
         if self._use_local_parser:
             command = self._parse_locally(text)
@@ -152,6 +181,7 @@ class LlmCommandNode(Node):
         return command
 
     def _publish_command(self, command):
+        command['status'] = 'accepted'
         command_msg = String()
         command_msg.data = json.dumps(command, ensure_ascii=False)
         self._tool_command_pub.publish(command_msg)
@@ -159,7 +189,7 @@ class LlmCommandNode(Node):
             status='accepted',
             raw_text=command.get('raw_text', ''),
             reason='command_accepted',
-            message='명령을 올바른 입력으로 판단했습니다.',
+            message=self._build_accepted_message(command),
             command=command,
         )
 
@@ -181,6 +211,85 @@ class LlmCommandNode(Node):
             f'confidence={command["confidence"]:.2f} '
             '-> /tool_command만 발행'
         )
+
+    def _handle_pending_confirmation(self, text):
+        if self._pending_command is None:
+            return False
+
+        if self._is_yes(text):
+            command = self._pending_command
+            command['raw_text'] = command.get('raw_text', '')
+            command['confirmed_by'] = text
+            self._pending_command = None
+            self._publish_command(command)
+            return True
+
+        if self._is_no(text):
+            command = self._pending_command
+            self._pending_command = None
+            self._publish_feedback(
+                status='cancelled',
+                raw_text=text,
+                reason='confirmation_no',
+                message='알겠습니다. 이전 추정 명령은 실행하지 않겠습니다.',
+                command=command,
+            )
+            return True
+
+        self._pending_command = None
+        self._publish_feedback(
+            status='cancelled',
+            raw_text=text,
+            reason='new_command_received',
+            message='이전 확인 질문은 취소하고 새 명령으로 이해해볼게요.',
+        )
+        return False
+
+    def _is_yes(self, text):
+        normalized = self._normalize_answer(text)
+        return any(word in normalized for word in YES_WORDS)
+
+    def _is_no(self, text):
+        normalized = self._normalize_answer(text)
+        return any(word in normalized for word in NO_WORDS)
+
+    def _normalize_answer(self, text):
+        return (text or '').strip().lower().replace(' ', '')
+
+    def _request_confirmation(self, raw_text, command, reason, question):
+        command['status'] = 'pending_confirmation'
+        self._pending_command = command
+        self._publish_feedback(
+            status='pending_confirmation',
+            raw_text=raw_text,
+            reason=reason,
+            message=question,
+            command=command,
+        )
+
+    def _build_accepted_message(self, command):
+        tool_name = command.get('tool_name', 'unknown')
+        action = command.get('action', 'unknown')
+
+        if action == 'bring':
+            return f'{tool_name}를 가져오라는 뜻으로 이해했습니다.'
+        if action == 'release':
+            return f'{tool_name}를 놓으라는 뜻으로 이해했습니다.'
+        if action == 'stop':
+            return '정지 명령으로 이해했습니다.'
+        return '명령을 올바른 입력으로 판단했습니다.'
+
+    def _build_confirmation_question(self, command):
+        tool_name = command.get('tool_name', 'unknown')
+        action = command.get('action', 'unknown')
+
+        if tool_name != 'unknown' and action == 'bring':
+            return f'{tool_name}를 가져오라는 뜻이 맞나요? 네 또는 아니오로 답해주세요.'
+        if tool_name != 'unknown' and action == 'release':
+            return f'{tool_name}를 놓으라는 뜻이 맞나요? 네 또는 아니오로 답해주세요.'
+        if tool_name != 'unknown':
+            return f'{tool_name}를 가져오라는 뜻인가요? 네 또는 아니오로 답해주세요.'
+        return '명령을 확신하기 어렵습니다. 다시 입력해주세요.'
 
     def _publish_feedback(self, status, raw_text, reason, message, command=None):
         payload = {
@@ -315,38 +424,56 @@ class LlmCommandNode(Node):
 
         confidence = max(0.0, min(1.0, confidence))
 
+        candidate_command = {
+            'tool_name': tool_name,
+            'action': action,
+            'raw_text': raw_text,
+            'match_method': 'llm',
+            'match_score': confidence,
+            'confidence': confidence,
+        }
+
         if confidence < self._min_confidence:
             self.get_logger().warn(
                 f'LLM confidence가 낮아 명령을 무시합니다: '
                 f'{confidence:.2f} < {self._min_confidence:.2f}'
             )
+            if tool_name != 'unknown' and action != 'unknown':
+                self._request_confirmation(
+                    raw_text=raw_text,
+                    command=candidate_command,
+                    reason='low_confidence',
+                    question=self._build_confirmation_question(candidate_command),
+                )
+                return None
+
             self._publish_feedback(
                 status='rejected',
                 raw_text=raw_text,
                 reason='low_confidence',
                 message='명령 확신도가 낮습니다. 공구 이름을 더 명확히 말해주세요.',
-                command={
-                    'tool_name': tool_name,
-                    'action': action,
-                    'confidence': confidence,
-                    'match_method': 'llm',
-                },
+                command=candidate_command,
             )
             return None
 
         if action == 'unknown':
             self.get_logger().warn('행동을 확정하지 못해 명령을 무시합니다.')
+            if tool_name != 'unknown':
+                candidate_command['action'] = 'bring'
+                self._request_confirmation(
+                    raw_text=raw_text,
+                    command=candidate_command,
+                    reason='unknown_action',
+                    question=self._build_confirmation_question(candidate_command),
+                )
+                return None
+
             self._publish_feedback(
                 status='rejected',
                 raw_text=raw_text,
                 reason='unknown_action',
                 message='무엇을 해야 하는지 확정하지 못했습니다. 다시 입력해주세요.',
-                command={
-                    'tool_name': tool_name,
-                    'action': action,
-                    'confidence': confidence,
-                    'match_method': 'llm',
-                },
+                command=candidate_command,
             )
             return None
 
@@ -356,24 +483,12 @@ class LlmCommandNode(Node):
                 status='rejected',
                 raw_text=raw_text,
                 reason='unknown_tool',
-                message='가져올 공구를 확정하지 못했습니다. 다시 입력해주세요.',
-                command={
-                    'tool_name': tool_name,
-                    'action': action,
-                    'confidence': confidence,
-                    'match_method': 'llm',
-                },
+                message='어떤 공구를 가져올지 확실하지 않습니다. 드라이버, 플라이어, 망치, 줄자 중에서 다시 말해주세요.',
+                command=candidate_command,
             )
             return None
 
-        return {
-            'tool_name': tool_name,
-            'action': action,
-            'raw_text': raw_text,
-            'match_method': 'llm',
-            'match_score': confidence,
-            'confidence': confidence,
-        }
+        return candidate_command
 
 
 def main(args=None):
