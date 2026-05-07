@@ -5,7 +5,6 @@ from sensor_msgs.msg import CameraInfo
 from macgyvbot.graspnet_inference_node import (
     build_point_cloud,
     depth_image_to_meters,
-    make_mock_pose,
     make_pose_from_grasp,
     normalize_quaternion,
 )
@@ -24,45 +23,6 @@ def test_normalize_quaternion():
     assert qy == 1.0
     assert qz == 0.0
     assert qw == 0.0
-
-
-def test_make_mock_pose_returns_pose_stamped():
-    stamp = PoseStamped().header.stamp
-    stamp.sec = 1
-    stamp.nanosec = 2
-
-    pose = make_mock_pose(
-        stamp=stamp,
-        frame_id="base_link",
-        x=0.45,
-        y=0.0,
-        z=0.20,
-    )
-
-    assert isinstance(pose, PoseStamped)
-    assert pose.header.stamp.sec == 1
-    assert pose.header.stamp.nanosec == 2
-    assert pose.header.frame_id == "base_link"
-    assert pose.pose.position.x == 0.45
-    assert pose.pose.position.y == 0.0
-    assert pose.pose.position.z == 0.20
-    assert pose.pose.orientation.x == 0.0
-    assert pose.pose.orientation.y == 1.0
-    assert pose.pose.orientation.z == 0.0
-    assert pose.pose.orientation.w == 0.0
-
-
-def test_make_mock_pose_uses_frame_id_parameter():
-    stamp = PoseStamped().header.stamp
-    pose = make_mock_pose(
-        stamp=stamp,
-        frame_id="camera_color_optical_frame",
-        x=0.1,
-        y=0.2,
-        z=0.3,
-    )
-
-    assert pose.header.frame_id == "camera_color_optical_frame"
 
 
 def test_depth_image_to_meters_handles_uint16_mm():

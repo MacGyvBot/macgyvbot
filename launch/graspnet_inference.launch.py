@@ -7,16 +7,24 @@ from launch_ros.actions import Node
 def generate_launch_description():
     return LaunchDescription(
         [
-            DeclareLaunchArgument("use_mock", default_value="true"),
-            DeclareLaunchArgument("checkpoint_path", default_value=""),
-            DeclareLaunchArgument("graspnet_baseline_path", default_value=""),
+            DeclareLaunchArgument(
+                "checkpoint_path",
+                default_value="~/models/graspnet/checkpoint-rs.tar",
+            ),
+            DeclareLaunchArgument(
+                "graspnet_baseline_path",
+                default_value="~/third_party/graspnet-baseline",
+            ),
             DeclareLaunchArgument("pose_topic", default_value="/graspnet/target_pose"),
-            DeclareLaunchArgument("camera_frame", default_value="base_link"),
+            DeclareLaunchArgument(
+                "camera_frame",
+                default_value="camera_color_optical_frame",
+            ),
             DeclareLaunchArgument("num_point", default_value="20000"),
             DeclareLaunchArgument("num_view", default_value="300"),
             DeclareLaunchArgument("collision_thresh", default_value="-1.0"),
             DeclareLaunchArgument("voxel_size", default_value="0.01"),
-            DeclareLaunchArgument("device", default_value="auto"),
+            DeclareLaunchArgument("device", default_value="cuda:0"),
             Node(
                 package="macgyvbot",
                 executable="graspnet_inference",
@@ -24,7 +32,6 @@ def generate_launch_description():
                 output="screen",
                 parameters=[
                     {
-                        "use_mock": LaunchConfiguration("use_mock"),
                         "checkpoint_path": LaunchConfiguration("checkpoint_path"),
                         "graspnet_baseline_path": LaunchConfiguration(
                             "graspnet_baseline_path"

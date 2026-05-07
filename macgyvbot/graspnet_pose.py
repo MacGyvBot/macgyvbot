@@ -5,16 +5,6 @@ import time
 import numpy as np
 
 
-def parameter_to_bool(value):
-    if isinstance(value, bool):
-        return value
-
-    if isinstance(value, str):
-        return value.strip().lower() in ("1", "true", "yes", "on")
-
-    return bool(value)
-
-
 def pose_orientation_to_dict(pose):
     return {
         "x": float(pose.orientation.x),

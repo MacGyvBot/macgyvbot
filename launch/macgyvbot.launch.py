@@ -1,10 +1,17 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration
+from launch.conditions import IfCondition
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 from launch.substitutions import PathJoinSubstitution
 from launch_ros.substitutions import FindPackageShare
 from moveit_configs_utils import MoveItConfigsBuilder
+
+DEFAULT_GRASPNET_BASELINE_PATH = "~/third_party/graspnet-baseline"
+DEFAULT_GRASPNET_CHECKPOINT_PATH = "~/models/graspnet/checkpoint-rs.tar"
+DEFAULT_GRASPNET_CAMERA_FRAME = "camera_color_optical_frame"
+DEFAULT_GRASPNET_DEVICE = "cuda:0"
+
 
 def generate_launch_description():
     # Doosan M0609 MoveIt 기본 설정 (URDF, SRDF, kinematics, controllers 등)
@@ -37,19 +44,7 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "grasp_point_mode",
                 default_value="center",
-                description="Grasp point selection mode: center or vlm",
-            ),
-            DeclareLaunchArgument(
-                "graspnet_pose_topic",
-                default_value="/graspnet/target_pose",
-            ),
-            DeclareLaunchArgument(
-                "use_graspnet_orientation",
-                default_value="true",
-            ),
-            DeclareLaunchArgument(
-                "use_graspnet_position",
-                default_value="false",
+                description="Grasp point mode: center, vlm, or graspnet",
             ),
             Node(
                 package="macgyvbot",
@@ -63,17 +58,35 @@ def generate_launch_description():
                         "grasp_point_mode": LaunchConfiguration(
                             "grasp_point_mode"
                         ),
-                        "graspnet_pose_topic": LaunchConfiguration("graspnet_pose_topic"),
-                        "use_graspnet_orientation": LaunchConfiguration(
-                            "use_graspnet_orientation"
-                        ),
-                        "use_graspnet_position": LaunchConfiguration(
-                            "use_graspnet_position"
-                        ),
+                        "graspnet_pose_topic": "/graspnet/target_pose",
                         "graspnet_pose_timeout_sec": 1.0,
-                        "graspnet_wait_timeout_sec": 2.0,
+                        "graspnet_wait_timeout_sec": 5.0,
                         "graspnet_target_distance_tolerance_m": 0.12,
                     },
+                ],
+            ),
+            Node(
+                package="macgyvbot",
+                executable="graspnet_inference",
+                name="graspnet_inference_node",
+                output="screen",
+                condition=IfCondition(
+                    PythonExpression(
+                        [
+                            "'",
+                            LaunchConfiguration("grasp_point_mode"),
+                            "' == 'graspnet'",
+                        ]
+                    )
+                ),
+                parameters=[
+                    {
+                        "checkpoint_path": DEFAULT_GRASPNET_CHECKPOINT_PATH,
+                        "graspnet_baseline_path": DEFAULT_GRASPNET_BASELINE_PATH,
+                        "pose_topic": "/graspnet/target_pose",
+                        "camera_frame": DEFAULT_GRASPNET_CAMERA_FRAME,
+                        "device": DEFAULT_GRASPNET_DEVICE,
+                    }
                 ],
             ),
             Node(

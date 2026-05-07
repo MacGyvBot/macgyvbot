@@ -16,16 +16,6 @@ from scipy.spatial.transform import Rotation
 from std_msgs.msg import String
 
 
-def parameter_to_bool(value) -> bool:
-    if isinstance(value, bool):
-        return value
-
-    if isinstance(value, str):
-        return value.strip().lower() in ("1", "true", "yes", "on")
-
-    return bool(value)
-
-
 def normalize_quaternion(
     x: float,
     y: float,
@@ -37,29 +27,6 @@ def normalize_quaternion(
         return 0.0, 0.0, 0.0, 1.0
 
     return x / norm, y / norm, z / norm, w / norm
-
-
-def make_mock_pose(
-    *,
-    stamp,
-    frame_id: str,
-    x: float,
-    y: float,
-    z: float,
-) -> PoseStamped:
-    pose = PoseStamped()
-    pose.header.stamp = stamp
-    pose.header.frame_id = frame_id
-    pose.pose.position.x = float(x)
-    pose.pose.position.y = float(y)
-    pose.pose.position.z = float(z)
-
-    qx, qy, qz, qw = normalize_quaternion(0.0, 1.0, 0.0, 0.0)
-    pose.pose.orientation.x = qx
-    pose.pose.orientation.y = qy
-    pose.pose.orientation.z = qz
-    pose.pose.orientation.w = qw
-    return pose
 
 
 def depth_image_to_meters(depth_image: np.ndarray, encoding: str) -> np.ndarray:
@@ -120,9 +87,6 @@ class GraspNetInferenceNode(Node):
         self.checkpoint_path = str(
             self.declare_parameter("checkpoint_path", "").value
         )
-        self.use_mock = parameter_to_bool(
-            self.declare_parameter("use_mock", True).value
-        )
         self.publish_rate_hz = float(
             self.declare_parameter("publish_rate_hz", 5.0).value
         )
@@ -161,11 +125,11 @@ class GraspNetInferenceNode(Node):
             self.declare_parameter("pose_topic", "/graspnet/target_pose").value
         )
         self.camera_frame = str(
-            self.declare_parameter("camera_frame", "base_link").value
+            self.declare_parameter(
+                "camera_frame",
+                "camera_color_optical_frame",
+            ).value
         )
-        self.mock_x = float(self.declare_parameter("mock_x", 0.45).value)
-        self.mock_y = float(self.declare_parameter("mock_y", 0.0).value)
-        self.mock_z = float(self.declare_parameter("mock_z", 0.20).value)
         self.min_depth_m = float(self.declare_parameter("min_depth_m", 0.15).value)
         self.max_depth_m = float(self.declare_parameter("max_depth_m", 1.20).value)
 
@@ -200,12 +164,11 @@ class GraspNetInferenceNode(Node):
         timer_period = 1.0 / max(self.publish_rate_hz, 1e-6)
         self.create_timer(timer_period, self._timer_cb)
 
-        if not self.use_mock:
-            self.model = self._load_graspnet_model()
+        self.model = self._load_graspnet_model()
 
         self.get_logger().info(
-            f"GraspNet inference node started: use_mock={self.use_mock}, "
-            f"pose_topic={self.pose_topic}, frame={self.camera_frame}"
+            f"GraspNet inference node started: pose_topic={self.pose_topic}, "
+            f"frame={self.camera_frame}"
         )
 
     def _color_cb(self, msg: Image) -> None:
@@ -221,32 +184,20 @@ class GraspNetInferenceNode(Node):
         self.target_label = msg.data.strip()
 
     def _timer_cb(self) -> None:
-        if self.use_mock:
-            pose = self.create_mock_pose()
-        else:
-            pose = self.predict_grasp_pose(
-                self.latest_color_msg,
-                self.latest_depth_msg,
-                self.latest_camera_info_msg,
-                self.target_label,
-            )
+        pose = self.predict_grasp_pose(
+            self.latest_color_msg,
+            self.latest_depth_msg,
+            self.latest_camera_info_msg,
+            self.target_label,
+        )
 
         if pose is not None:
             self.pose_pub.publish(pose)
 
-    def create_mock_pose(self) -> PoseStamped:
-        return make_mock_pose(
-            stamp=self.get_clock().now().to_msg(),
-            frame_id=self.camera_frame,
-            x=self.mock_x,
-            y=self.mock_y,
-            z=self.mock_z,
-        )
-
     def _load_graspnet_model(self):
         if not self.checkpoint_path:
             self.get_logger().error(
-                "checkpoint_path is empty. Set use_mock:=true or provide checkpoint_path."
+                "checkpoint_path is empty. Provide a GraspNet checkpoint_path."
             )
             return None
 

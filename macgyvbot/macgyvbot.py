@@ -21,7 +21,7 @@ from cv_bridge import CvBridge
 from moveit.core.robot_state import RobotState
 from moveit.planning import MoveItPy, PlanRequestParameters
 
-from .graspnet_pose import GraspNetPoseBuffer, parameter_to_bool
+from .graspnet_pose import GraspNetPoseBuffer
 from .onrobot import RG
 from .safety import clamp_to_safe_workspace
 
@@ -62,6 +62,7 @@ ROBOT_WINDOW_NAME = "YOLO Robot Pick"
 HAND_GRASP_WINDOW_NAME = "Hand Grasp Detection"
 GRASP_POINT_MODE_CENTER = "center"
 GRASP_POINT_MODE_VLM = "vlm"
+GRASP_POINT_MODE_GRASPNET = "graspnet"
 DEFAULT_GRASP_POINT_MODE = GRASP_POINT_MODE_CENTER
 VLM_GRASP_GRID_SIZES = ((3, 3), (4, 4))
 
@@ -183,6 +184,7 @@ class MacGyvBotNode(Node):
         if self.grasp_point_mode not in (
             GRASP_POINT_MODE_CENTER,
             GRASP_POINT_MODE_VLM,
+            GRASP_POINT_MODE_GRASPNET,
         ):
             self.get_logger().warn(
                 f"알 수 없는 grasp_point_mode '{self.grasp_point_mode}'. "
@@ -193,11 +195,8 @@ class MacGyvBotNode(Node):
         self.graspnet_pose_topic = str(
             self.declare_parameter("graspnet_pose_topic", GRASPNET_POSE_TOPIC).value
         )
-        self.use_graspnet_orientation = parameter_to_bool(
-            self.declare_parameter("use_graspnet_orientation", True).value
-        )
-        self.use_graspnet_position = parameter_to_bool(
-            self.declare_parameter("use_graspnet_position", False).value
+        self.graspnet_mode_enabled = (
+            self.grasp_point_mode == GRASP_POINT_MODE_GRASPNET
         )
         self.graspnet_pose_timeout_sec = float(
             self.declare_parameter(
@@ -221,8 +220,8 @@ class MacGyvBotNode(Node):
             base_frame=BASE_FRAME,
             timeout_sec=self.graspnet_pose_timeout_sec,
             target_distance_tolerance_m=self.graspnet_target_distance_tolerance_m,
-            use_orientation=self.use_graspnet_orientation,
-            use_position=self.use_graspnet_position,
+            use_orientation=self.graspnet_mode_enabled,
+            use_position=False,
         )
 
         # YOLO 모델 로드
@@ -419,7 +418,7 @@ class MacGyvBotNode(Node):
         return self.graspnet_pose_buffer.select(yolo_xyz, self.home_ori, logger)
 
     def wait_for_graspnet_pose(self, logger):
-        if not self.use_graspnet_orientation:
+        if self.grasp_point_mode != GRASP_POINT_MODE_GRASPNET:
             return
 
         if self.graspnet_pose_buffer.has_fresh_pose():
@@ -442,6 +441,9 @@ class MacGyvBotNode(Node):
 
     def select_grasp_pixel(self, box, label):
         b = box.xyxy[0].cpu().numpy()
+
+        if self.grasp_point_mode == GRASP_POINT_MODE_GRASPNET:
+            return self.select_box_center_pixel(b)
 
         if self.grasp_point_mode == GRASP_POINT_MODE_VLM:
             vlm_pixel = self.select_vlm_grasp_pixel(b, label)
