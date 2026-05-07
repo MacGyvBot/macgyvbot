@@ -81,6 +81,8 @@ ros2 launch dsr_bringup2 dsr_bringup2_moveit.launch.py \
 
 ### Terminal 2: RealSense 카메라 실행
 
+기본 실행은 YOLO bounding box 중심점을 grasp point로 사용합니다.
+
 ```bash
 source /opt/ros/humble/setup.bash
 source ~/ros2_ws/install/setup.bash
@@ -95,6 +97,8 @@ ros2 launch realsense2_camera rs_align_depth_launch.py \
 
 ### Terminal 3: MacGyvBot 메인 파이프라인 실행
 
+기본 실행은 `center` grasp point mode를 사용합니다.
+
 ```bash
 source /opt/ros/humble/setup.bash
 source ~/ros2_ws/install/setup.bash
@@ -102,6 +106,28 @@ source ~/ros2_ws/src/doosan-robot2/install/setup.bash
 
 ros2 launch macgyvbot macgyvbot.launch.py
 ```
+
+명시적으로 중심점 모드를 사용할 경우:
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/ros2_ws/install/setup.bash
+source ~/ros2_ws/src/doosan-robot2/install/setup.bash
+
+ros2 launch macgyvbot macgyvbot.launch.py grasp_point_mode:=center
+```
+
+VLM 기반 grasp point selection을 사용할 경우:
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/ros2_ws/install/setup.bash
+source ~/ros2_ws/src/doosan-robot2/install/setup.bash
+
+ros2 launch macgyvbot macgyvbot.launch.py grasp_point_mode:=vlm
+```
+
+VLM 모드는 YOLO가 검출한 객체 crop에서 grid 기반 grasp region을 선택한 뒤 depth로 grasp pixel을 보정합니다. VLM 추론 또는 depth 보정이 실패하면 기존 중심점 방식으로 fallback합니다.
 
 `macgyvbot.launch.py`는 로봇 메인 노드, hand grasp detection, STT, LLM command node를 함께 실행합니다. CLI UI는 로그와 입력이 섞이지 않도록 별도 터미널에서 실행합니다.
 

@@ -55,6 +55,11 @@ def generate_launch_description():
                 default_value="qwen2.5:0.5b",
                 description="Ollama command parser에 사용할 로컬 LLM 모델명",
             ),
+            DeclareLaunchArgument(
+                "grasp_point_mode",
+                default_value="center",
+                description="Grasp point selection mode: center or vlm",
+            ),
             Node(
                 package="macgyvbot",
                 executable="macgyvbot",
@@ -63,6 +68,11 @@ def generate_launch_description():
                 parameters=[
                     moveit_config.to_dict(),
                     moveit_py_params,
+                    {
+                        "grasp_point_mode": LaunchConfiguration(
+                            "grasp_point_mode"
+                        ),
+                    },
                 ],
             ),
             Node(
