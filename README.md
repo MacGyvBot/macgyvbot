@@ -129,7 +129,7 @@ ros2 launch macgyvbot macgyvbot.launch.py grasp_point_mode:=vlm
 
 VLM 모드는 YOLO가 검출한 객체 crop에서 grid 기반 grasp region을 선택한 뒤 depth로 grasp pixel을 보정합니다. VLM 추론 또는 depth 보정이 실패하면 기존 중심점 방식으로 fallback합니다.
 
-GraspNet 기반 orientation selection을 사용할 경우:
+GraspNet 통합 모드를 사용할 경우:
 
 ```bash
 source /opt/ros/humble/setup.bash
@@ -142,16 +142,9 @@ ros2 launch macgyvbot macgyvbot.launch.py \
 
 `grasp_point_mode:=graspnet`은 YOLO + depth로 target position을 잡고, GraspNet pose에서 orientation을 받아 보정합니다. GraspNet position은 기본 이동 목표로 사용하지 않습니다.
 
-## 실제 GraspNet inference 설정
+GraspNet 통합 모드는 기본 경로의 실제 baseline/checkpoint를 사용합니다. baseline 코드는 `~/third_party/graspnet-baseline`, checkpoint는 `~/models/graspnet/checkpoint-rs.tar`에 둡니다. baseline 코드와 checkpoint 파일은 저장소에 커밋하지 않습니다.
 
-GraspNet은 항상 실제 baseline/checkpoint를 사용합니다. `macgyvbot` 저장소에 baseline 코드나 checkpoint를 commit하지 않습니다. 공식 baseline 저장소와 checkpoint는 아래 기본 경로에 둡니다.
-
-공식 GraspNet baseline:
-
-- https://github.com/graspnet/graspnet-baseline
-- https://github.com/graspnet/graspnetAPI
-
-### 1. GraspNet baseline clone
+GraspNet baseline 설치:
 
 ```bash
 mkdir -p ~/third_party
@@ -159,23 +152,17 @@ cd ~/third_party
 git clone https://github.com/graspnet/graspnet-baseline.git
 ```
 
-### 2. GraspNet Python 의존성 설치
-
-ROS 2 Humble에서 사용하는 Python 환경과 같은 환경에 설치해야 합니다.
+GraspNet Python 의존성 설치:
 
 ```bash
 cd ~/ros2_ws/src/doosan-robot2/macgyvbot
 pip install -r requirements-graspnet.txt
-```
 
-baseline 자체 의존성도 설치합니다.
-
-```bash
 cd ~/third_party/graspnet-baseline
 pip install -r requirements.txt
 ```
 
-CUDA extension을 빌드합니다. CUDA/PyTorch 버전이 맞지 않으면 여기서 실패하므로, 먼저 `python -c "import torch; print(torch.cuda.is_available())"`로 GPU 인식을 확인합니다.
+CUDA extension 빌드:
 
 ```bash
 cd ~/third_party/graspnet-baseline/pointnet2
@@ -194,53 +181,13 @@ cd graspnetAPI
 pip install .
 ```
 
-### 3. checkpoint 다운로드
-
-공식 baseline README의 pretrained weights에서 RealSense용 `checkpoint-rs.tar`를 받습니다. D435i/RealSense 입력을 쓰므로 우선 `checkpoint-rs.tar`를 권장합니다.
+checkpoint 준비:
 
 ```bash
 mkdir -p ~/models/graspnet
-# checkpoint-rs.tar 파일을 ~/models/graspnet/checkpoint-rs.tar 로 둡니다.
+# 공식 GraspNet baseline pretrained weights에서 RealSense용 checkpoint-rs.tar를 받아
+# ~/models/graspnet/checkpoint-rs.tar 로 둡니다.
 ```
-
-checkpoint 파일은 크기가 크므로 git에 추가하지 않습니다.
-
-### 4. GraspNet mode 실행
-
-`macgyvbot.launch.py`에서 `grasp_point_mode:=graspnet`을 주면 GraspNet inference node도 함께 실행됩니다. 실제 inference는 RGB-D point cloud를 camera frame에서 만들고, MacGyvBot main node는 camera frame pose를 hand-eye calibration으로 `base_link` pose로 변환한 뒤 사용합니다.
-
-GraspNet pose topic만 단독 확인할 경우:
-
-```bash
-source /opt/ros/humble/setup.bash
-source ~/ros2_ws/install/setup.bash
-source ~/ros2_ws/src/doosan-robot2/install/setup.bash
-
-ros2 launch macgyvbot graspnet_inference.launch.py
-```
-
-다른 터미널에서 pose를 확인합니다.
-
-```bash
-source /opt/ros/humble/setup.bash
-source ~/ros2_ws/install/setup.bash
-source ~/ros2_ws/src/doosan-robot2/install/setup.bash
-
-ros2 topic echo /graspnet/target_pose
-```
-
-MacGyvBot과 함께 통합 실행할 경우:
-
-```bash
-source /opt/ros/humble/setup.bash
-source ~/ros2_ws/install/setup.bash
-source ~/ros2_ws/src/doosan-robot2/install/setup.bash
-
-ros2 launch macgyvbot macgyvbot.launch.py \
-  grasp_point_mode:=graspnet
-```
-
-GraspNet mode에서는 position은 YOLO + depth 기준을 유지하고 orientation만 GraspNet pose를 적용합니다. GraspNet position을 실제 로봇 목표 좌표로 쓰려면 hand-eye calibration, depth scale, camera frame 이름, 안전영역 clamp가 모두 맞는지 확인한 뒤 별도 변경으로 분리합니다.
 
 ### Terminal 4: 대상 공구 요청
 
