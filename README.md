@@ -103,17 +103,91 @@ source ~/ros2_ws/src/doosan-robot2/install/setup.bash
 ros2 launch macgyvbot macgyvbot.launch.py
 ```
 
-### Terminal 4: 대상 공구 요청
+`macgyvbot.launch.py`는 로봇 메인 노드, hand grasp detection, STT, LLM command node를 함께 실행합니다. CLI UI는 로그와 입력이 섞이지 않도록 별도 터미널에서 실행합니다.
+
+### Terminal 4: Ollama 서버 실행
+
+LLM fallback을 사용하려면 Ollama 서버와 모델이 필요합니다. 이미 서버가 실행 중이면 이 터미널은 생략할 수 있습니다.
+
+최초 설치:
+
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+```
+
+```bash
+ollama pull qwen2.5:0.5b
+ollama serve
+```
+
+### Terminal 5: 음성 명령 CLI UI 실행
 
 ```bash
 source /opt/ros/humble/setup.bash
 source ~/ros2_ws/install/setup.bash
 source ~/ros2_ws/src/doosan-robot2/install/setup.bash
 
+ros2 run macgyvbot voice_command_ui_node
+```
+
+CLI UI는 `/stt_text`, `/command_feedback`, `/tool_command`, `/target_label`을 확인하며 사용자 입력도 `/stt_text`로 발행합니다.
+
+예:
+
+```text
+You > 드라이버 가져다줘
+You > 그 조이는 거 가져와
+You > 망치 줘
+```
+
+흐름:
+
+```text
+voice_command_ui_node 또는 stt_node
+  -> /stt_text
+  -> llm_command_node
+  -> /tool_command
+  -> /target_label
+  -> macgyvbot
+```
+
+마이크 STT 없이 CLI 입력만 테스트하려면 Terminal 3에서 STT를 끄고 실행합니다.
+
+```bash
+ros2 launch macgyvbot macgyvbot.launch.py use_stt:=false
+```
+
+## 수동 대상 공구 요청
+
+음성 명령 파이프라인을 거치지 않고 기존 방식으로 대상 공구를 직접 요청할 수도 있습니다.
+
+```bash
 ros2 topic pub --once /target_label std_msgs/msg/String "{data: screwdriver}"
 ```
 
 사용 가능한 공구 label은 학습한 YOLO 모델의 class 이름과 같아야 합니다. 현재 예시는 `hammer`, `screwdriver`, `pliers`, `tape_measure`를 기준으로 합니다.
+
+## 음성 명령 노드만 단독 테스트
+
+로봇 메인 파이프라인 없이 STT와 LLM command node만 확인할 때는 아래 명령을 사용합니다. CLI UI는 별도 터미널에서 실행합니다.
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/ros2_ws/install/setup.bash
+source ~/ros2_ws/src/doosan-robot2/install/setup.bash
+
+ros2 launch macgyvbot voice_command.launch.py
+```
+
+다른 터미널:
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/ros2_ws/install/setup.bash
+source ~/ros2_ws/src/doosan-robot2/install/setup.bash
+
+ros2 run macgyvbot voice_command_ui_node
+```
 
 ## 잡기 인식 노드 실행
 
