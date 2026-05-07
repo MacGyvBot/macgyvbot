@@ -129,6 +129,32 @@ ros2 launch macgyvbot macgyvbot.launch.py grasp_point_mode:=vlm
 
 VLM 모드는 YOLO가 검출한 객체 crop에서 grid 기반 grasp region을 선택한 뒤 depth로 grasp pixel을 보정합니다. VLM 추론 또는 depth 보정이 실패하면 기존 중심점 방식으로 fallback합니다.
 
+VLA 기반 최종 grasp pose 보정을 사용할 경우:
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/ros2_ws/install/setup.bash
+source ~/ros2_ws/src/doosan-robot2/install/setup.bash
+
+ros2 launch macgyvbot macgyvbot.launch.py grasp_point_mode:=vla
+```
+
+VLA 모드는 YOLO와 depth로 객체의 base 좌표를 구한 뒤, 기존 방식처럼 grasp 높이까지 먼저 접근합니다. 이후 바로 잡지 않고 z를 조금 다시 올린 switch pose에서 현재 카메라 영상과 end-effector 상태를 VLA에 넣어 최종 grasp pose를 보정합니다. VLA 추론이나 최종 pose 이동이 실패하면 기존 grasp pose로 fallback합니다.
+
+## 내부 구조
+
+`grasp_point_mode`에 따라 grasp 단계가 다음처럼 달라집니다.
+
+- `center`: YOLO bounding box 중심점을 grasp pixel로 사용하고 그대로 pick을 진행합니다.
+- `vlm`: YOLO crop 이미지에서 VLM이 grasp region을 고르고, depth 보정을 거쳐 grasp pixel을 만든 뒤 pick을 진행합니다.
+- `vla`: grasp pixel은 YOLO/depth 결과를 사용해 기존 방식대로 먼저 접근한 뒤, z를 조금 올린 switch pose에서 VLA가 로봇팔의 최종 grasp pose를 제안합니다.
+
+관련 코드 구조:
+
+- `macgyvbot/macgyvbot/macgyvbot.py`: pick sequence 전체를 담당하며, `center`, `vlm`, `vla` 모드 분기를 포함합니다.
+- `macgyvbot/macgyvbot/grasp_point_detection.py`: VLM 기반 grasp point 선택 모듈입니다.
+- `macgyvbot/macgyvbot/grasp_point_vla.py`: VLA 기반 최종 grasp pose 보정 모듈입니다.
+
 ### Terminal 4: 대상 공구 요청
 
 ```bash

@@ -37,7 +37,7 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "grasp_point_mode",
                 default_value="center",
-                description="Grasp point selection mode: center or vlm",
+                description="Grasp point selection mode: center, vlm, or vla",
             ),
             Node(
                 package="macgyvbot",

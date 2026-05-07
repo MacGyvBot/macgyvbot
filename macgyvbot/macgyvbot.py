@@ -4,7 +4,6 @@ import math
 import threading
 import time
 from pathlib import Path
-
 import cv2
 import numpy as np
 import rclpy
@@ -49,6 +48,7 @@ MIN_GRASP_CLEARANCE = 0.02
 MIN_TRAVEL_Z = 0.06
 MIN_PICK_Z = 0.30
 MAX_DESCENT_FROM_APPROACH = 0.08
+VLA_SWITCH_Z_OFFSET = 0.03
 YOLO_MODEL_NAME = "yolov11_best.pt"
 HAND_GRASP_TOPIC = "/human_grasped_tool"
 HAND_GRASP_IMAGE_TOPIC = "/hand_grasp_detection/annotated_image"
@@ -57,6 +57,7 @@ ROBOT_WINDOW_NAME = "YOLO Robot Pick"
 HAND_GRASP_WINDOW_NAME = "Hand Grasp Detection"
 GRASP_POINT_MODE_CENTER = "center"
 GRASP_POINT_MODE_VLM = "vlm"
+GRASP_POINT_MODE_VLA = "vla"
 DEFAULT_GRASP_POINT_MODE = GRASP_POINT_MODE_CENTER
 VLM_GRASP_GRID_SIZES = ((3, 3), (4, 4))
 
@@ -83,6 +84,15 @@ def make_pose(x, y, z, ori):
 def make_safe_pose(x, y, z, ori, logger):
     safe_x, safe_y, safe_z = clamp_to_safe_workspace(x, y, z, logger)
     return make_pose(safe_x, safe_y, safe_z, ori)
+
+
+def quat_to_ori_dict(quat_xyzw):
+    return {
+        "x": float(quat_xyzw[0]),
+        "y": float(quat_xyzw[1]),
+        "z": float(quat_xyzw[2]),
+        "w": float(quat_xyzw[3]),
+    }
 
 
 def plan_and_execute(robot, arm, logger, pose_goal=None, state_goal=None, params=None):
@@ -163,6 +173,7 @@ class MacGyvBotNode(Node):
         self.last_grasp_result = None
         self.hand_grasp_image = None
         self.vlm_grasp_model = None
+        self.vla_state_model = None
 
         self.home_xyz = None
         self.home_ori = None
@@ -178,6 +189,7 @@ class MacGyvBotNode(Node):
         if self.grasp_point_mode not in (
             GRASP_POINT_MODE_CENTER,
             GRASP_POINT_MODE_VLM,
+            GRASP_POINT_MODE_VLA,
         ):
             self.get_logger().warn(
                 f"알 수 없는 grasp_point_mode '{self.grasp_point_mode}'. "
@@ -491,12 +503,124 @@ class MacGyvBotNode(Node):
 
         return True
 
-    def pick_sequence(self, bx, by, bz, z_m):
+    def refine_grasp_pose_with_vla(
+        self,
+        target_x,
+        target_y,
+        switch_z,
+        label,
+        bbox,
+        object_xyz,
+    ):
+        if self.grasp_point_mode != GRASP_POINT_MODE_VLA:
+            return None
+
+        if self.color_image is None:
+            self.get_logger().warn("VLA grasp 생략: color image가 없습니다.")
+            return None
+
+        try:
+            from .grasp_point_vla import (
+                DetectedObjectContext,
+                Pose3D,
+                RobotArmState,
+                VLAStateModel,
+            )
+        except ImportError as exc:
+            self.get_logger().warn(f"VLA grasp 모듈 import 실패: {exc}")
+            return None
+
+        if self.vla_state_model is None:
+            self.get_logger().info("VLA grasp 모델을 lazy load 준비합니다.")
+            self.vla_state_model = VLAStateModel()
+
+        ee_matrix = get_ee_matrix(self.robot)
+        ee_quat = Rotation.from_matrix(ee_matrix[:3, :3]).as_quat()
+        current_state = RobotArmState(
+            ee_pose=Pose3D(
+                position_xyz=(
+                    float(ee_matrix[0, 3]),
+                    float(ee_matrix[1, 3]),
+                    float(ee_matrix[2, 3]),
+                ),
+                quaternion_xyzw=tuple(float(v) for v in ee_quat),
+            ),
+        )
+
+        bbox_xyxy = None
+        if bbox is not None:
+            bbox_xyxy = self.clamp_bbox_to_image(bbox, self.color_image)
+
+        object_context = DetectedObjectContext(
+            label=label,
+            base_position_xyz=(
+                float(object_xyz[0]),
+                float(object_xyz[1]),
+                float(object_xyz[2]),
+            ),
+            bbox_xyxy=bbox_xyxy,
+            switch_offset_z_m=max(switch_z - float(object_xyz[2]), 0.0),
+            task_instruction=self.target_label,
+        )
+
+        try:
+            proposal = self.vla_state_model.propose_grasp_state(
+                self.color_image,
+                current_state=current_state,
+                object_context=object_context,
+            )
+        except Exception as exc:
+            self.get_logger().warn(f"VLA grasp 상태 추론 실패: {exc}")
+            return None
+
+        final_pose = proposal.recommended_state.ee_pose
+        final_xyz = final_pose.position_xyz
+        final_ori = quat_to_ori_dict(final_pose.quaternion_xyzw)
+
+        self.get_logger().info(
+            f"VLA final grasp pose: x={final_xyz[0]:.3f}, "
+            f"y={final_xyz[1]:.3f}, z={final_xyz[2]:.3f}, "
+            f"gripper={proposal.action.gripper}"
+        )
+        if proposal.notes:
+            self.get_logger().info(f"VLA notes: {'; '.join(proposal.notes)}")
+
+        ok = plan_and_execute(
+            self.robot,
+            self.arm,
+            self.get_logger(),
+            pose_goal=make_safe_pose(
+                final_xyz[0],
+                final_xyz[1],
+                final_xyz[2],
+                final_ori,
+                self.get_logger(),
+            ),
+            params=self.pilz_params,
+        )
+        if not ok:
+            self.get_logger().warn("VLA final grasp pose 이동 실패. 기존 grasp pose를 사용합니다.")
+            return None
+
+        return {
+            "x": float(final_xyz[0]),
+            "y": float(final_xyz[1]),
+            "z": float(final_xyz[2]),
+            "ori": final_ori,
+            "proposal": proposal,
+        }
+
+    def pick_sequence(self, bx, by, bz, z_m, label=None, bbox=None):
         self.human_grasped_tool = False
         self.last_grasp_result = None
 
         log = self.get_logger()
         ori = self.home_ori
+        final_target_x = bx
+        final_target_y = by
+        final_grasp_z = bz
+        final_ori = ori
+        switch_z = None
 
         # Depth 기반 안전 파지 높이 계산
         # z_m: camera->object depth (m)
@@ -537,6 +661,9 @@ class MacGyvBotNode(Node):
                 f"approach_z({approach_z:.3f})보다 높아 approach_z로 맞춥니다."
             )
             grasp_z = approach_z
+
+        if self.grasp_point_mode == GRASP_POINT_MODE_VLA:
+            switch_z = min(approach_z, grasp_z + VLA_SWITCH_Z_OFFSET)
 
         should_descend_to_grasp = abs(approach_z - grasp_z) > 0.005
 
@@ -618,6 +745,48 @@ class MacGyvBotNode(Node):
 
             # 5. 그리퍼 닫기
             log.info("5단계: 그리퍼 닫기")
+            if label is not None:
+                if self.grasp_point_mode == GRASP_POINT_MODE_VLA and switch_z is not None:
+                    log.info(f"VLA switch pose로 상승: z={switch_z:.3f}")
+                    ok = plan_and_execute(
+                        self.robot,
+                        self.arm,
+                        log,
+                        pose_goal=make_safe_pose(
+                            target_x,
+                            target_y,
+                            switch_z,
+                            ori,
+                            log,
+                        ),
+                        params=self.pilz_params,
+                    )
+                    if not ok:
+                        log.warn("VLA switch pose 이동 실패. 기존 grasp pose에서 계속 진행합니다.")
+                        switch_z = grasp_z
+
+                vla_result = self.refine_grasp_pose_with_vla(
+                    target_x=target_x,
+                    target_y=target_y,
+                    switch_z=(switch_z if switch_z is not None else grasp_z),
+                    label=label,
+                    bbox=bbox,
+                    object_xyz=(bx, by, bz),
+                )
+                if vla_result is not None:
+                    final_target_x = vla_result["x"]
+                    final_target_y = vla_result["y"]
+                    final_grasp_z = vla_result["z"]
+                    final_ori = vla_result["ori"]
+                else:
+                    final_target_x = target_x
+                    final_target_y = target_y
+                    final_grasp_z = grasp_z
+            else:
+                final_target_x = target_x
+                final_target_y = target_y
+                final_grasp_z = grasp_z
+
             self.gripper.close_gripper()
             time.sleep(1.0)
 
@@ -627,7 +796,13 @@ class MacGyvBotNode(Node):
                 self.robot,
                 self.arm,
                 log,
-                pose_goal=make_safe_pose(target_x, target_y, travel_z, ori, log),
+                pose_goal=make_safe_pose(
+                    final_target_x,
+                    final_target_y,
+                    travel_z,
+                    final_ori,
+                    log,
+                ),
                 params=self.pilz_params,
             )
 
@@ -660,11 +835,11 @@ class MacGyvBotNode(Node):
             if not self.wait_for_human_grasp(log):
                 log.error("사용자 잡기 인식 실패. 원래 공구 위치로 반환합니다.")
                 self.return_tool_to_original_position(
-                    target_x,
-                    target_y,
+                    final_target_x,
+                    final_target_y,
                     travel_z,
-                    grasp_z,
-                    ori,
+                    final_grasp_z,
+                    final_ori,
                     log,
                 )
                 return
@@ -698,7 +873,7 @@ class MacGyvBotNode(Node):
 
         return False
 
-    def start_pick_sequence(self, bx, by, bz, z_m):
+    def start_pick_sequence(self, bx, by, bz, z_m, label=None, bbox=None):
         if self.picking:
             self.get_logger().warn("이미 pick 동작 중이라 새 pick 요청을 무시합니다.")
             return
@@ -706,7 +881,7 @@ class MacGyvBotNode(Node):
         self.picking = True
         self.pending_pick_thread = threading.Thread(
             target=self.pick_sequence,
-            args=(bx, by, bz, z_m),
+            args=(bx, by, bz, z_m, label, bbox),
             daemon=True,
         )
         self.pending_pick_thread.start()
@@ -813,7 +988,14 @@ class MacGyvBotNode(Node):
                         cv2.LINE_AA,
                     )
 
-                    self.start_pick_sequence(bx, by, bz, z_m)
+                    self.start_pick_sequence(
+                        bx,
+                        by,
+                        bz,
+                        z_m,
+                        label=label,
+                        bbox=box.xyxy[0].cpu().numpy(),
+                    )
                     break
 
                 if not found:
