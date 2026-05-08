@@ -82,7 +82,7 @@ class VoiceCommandUiNode(Node):
             msg.data = text
             self._last_cli_text = text
             self._text_pub.publish(msg)
-            self._print_line('사용자 입력', text)
+            self._print_user(text)
 
     def _stt_text_cb(self, msg):
         text = msg.data.strip()
@@ -90,11 +90,10 @@ class VoiceCommandUiNode(Node):
             return
 
         if text == self._last_cli_text:
-            self._print_line('입력 문장', text)
             self._last_cli_text = ''
             return
 
-        self._print_line('음성 인식', text)
+        self._print_user(text, source='voice')
 
     def _tool_command_cb(self, msg):
         try:
@@ -115,16 +114,15 @@ class VoiceCommandUiNode(Node):
         except (TypeError, ValueError):
             confidence_text = str(confidence)
 
-        self._print_line(
-            '해석 결과',
-            f'tool={tool_name}, action={action}, '
-            f'method={method}, confidence={confidence_text}',
+        self._print_system(
+            f'parsed: tool={tool_name}, action={action}, '
+            f'method={method}, confidence={confidence_text}'
         )
         self._print_prompt()
 
     def _target_label_cb(self, msg):
         self._last_target_label = msg.data
-        self._print_line('실행 요청', f'{msg.data} pick 명령을 로봇 파이프라인으로 보냈습니다.')
+        self._print_bot(f'{msg.data} pick 명령을 로봇에게 보냈습니다.')
 
     def _feedback_cb(self, msg):
         try:
@@ -139,19 +137,27 @@ class VoiceCommandUiNode(Node):
         reason = feedback.get('reason', 'unknown')
 
         if status == 'accepted':
-            self._print_line('판단', message or '올바른 명령으로 판단했습니다.')
+            self._print_bot(message or '명령을 이해했습니다.')
             return
 
-        if status == 'rejected':
-            self._print_line(
-                '재입력 요청',
-                f'{message or "명령을 이해하지 못했습니다."} '
-                f'(reason={reason})',
-            )
+        if status == 'pending_confirmation':
+            self._print_bot(message or '제가 이해한 명령이 맞나요? 네 또는 아니오로 답해주세요.')
             self._print_prompt()
             return
 
-        self._print_line('피드백', f'{message} (status={status}, reason={reason})')
+        if status == 'cancelled':
+            self._print_bot(message or '알겠습니다. 실행하지 않겠습니다.')
+            self._print_prompt()
+            return
+
+        if status == 'rejected':
+            self._print_bot(message or '명령을 이해하지 못했습니다. 다시 입력해주세요.')
+            self._print_system(f'reason={reason}')
+            self._print_prompt()
+            return
+
+        self._print_bot(message or '상태를 확인했습니다.')
+        self._print_system(f'status={status}, reason={reason}')
         self._print_prompt()
 
     def _robot_status_cb(self, msg):
@@ -162,7 +168,7 @@ class VoiceCommandUiNode(Node):
         try:
             status = json.loads(status_text)
         except json.JSONDecodeError:
-            self._print_line('로봇 상태', status_text)
+            self._print_system(f'robot: {status_text}')
             self._print_prompt()
             return
 
@@ -171,30 +177,39 @@ class VoiceCommandUiNode(Node):
         message = status.get('message', '')
 
         if state in ('done', 'completed', 'success'):
-            self._print_line('완료', message or f'{tool_name} 전달 동작이 완료되었습니다.')
+            self._print_bot(message or f'{tool_name} 전달 동작이 완료되었습니다.')
         elif state in ('failed', 'error'):
-            self._print_line('실패', message or f'{tool_name} 동작 중 문제가 발생했습니다.')
+            self._print_bot(message or f'{tool_name} 동작 중 문제가 발생했습니다.')
         else:
-            self._print_line('로봇 상태', message or f'{tool_name}: {state}')
+            self._print_system(message or f'{tool_name}: {state}')
         self._print_prompt()
 
     def _print_banner(self):
         sys.stdout.write('\n')
-        sys.stdout.write('==============================\n')
-        sys.stdout.write(' MacGyvBot Voice Command UI\n')
-        sys.stdout.write('==============================\n')
+        sys.stdout.write('========================================\n')
+        sys.stdout.write(' MacGyvBot Assistant\n')
+        sys.stdout.write('========================================\n')
         sys.stdout.write('예: 드라이버 가져다줘 / 그 조이는 거 가져와 / 망치 줘\n')
-        sys.stdout.write('지원 공구: screwdriver, pliers, hammer, tape_measure\n')
+        sys.stdout.write('확인 질문에는 네 또는 아니오로 답해주세요.\n')
         sys.stdout.flush()
 
-    def _print_line(self, title, message):
-        sys.stdout.write(f'\n[{title}] {message}\n')
+    def _print_user(self, message, source='keyboard'):
+        label = 'You' if source == 'keyboard' else 'You (voice)'
+        sys.stdout.write(f'\n{label}: {message}\n')
+        sys.stdout.flush()
+
+    def _print_bot(self, message):
+        sys.stdout.write(f'Bot: {message}\n')
+        sys.stdout.flush()
+
+    def _print_system(self, message):
+        sys.stdout.write(f'  - {message}\n')
         sys.stdout.flush()
 
     def _print_prompt(self):
         if self._stop_event.is_set():
             return
-        sys.stdout.write('\n[MacGyvBot] 명령 입력 > ')
+        sys.stdout.write('\nYou > ')
         sys.stdout.flush()
 
     def destroy_node(self):
