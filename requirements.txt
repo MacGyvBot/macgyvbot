@@ -1,5 +1,12 @@
 opencv-python
 mediapipe==0.10.21
 numpy
+scipy>=1.14.0
 ultralytics
 pyrealsense2
+Pillow
+torch
+transformers>=4.40.0
+huggingface_hub
+accelerate
+bitsandbytes

@@ -197,6 +197,8 @@ class MacGyvBotNode(Node):
             )
             self.grasp_point_mode = GRASP_POINT_MODE_CENTER
 
+        self._preload_vla_or_fallback_to_center()
+
         # YOLO 모델 로드
         self.model = YOLO(resolve_model_path(YOLO_MODEL_NAME))
 
@@ -290,6 +292,22 @@ class MacGyvBotNode(Node):
 
         self.target_label = val
         self.get_logger().info(f"타겟 객체 설정: {self.target_label}")
+
+    def _preload_vla_or_fallback_to_center(self):
+        if self.grasp_point_mode != GRASP_POINT_MODE_VLA:
+            return
+
+        self.get_logger().info(
+            "VLA 모드가 선택되어 시작 시점에 VLA 가중치 로드를 확인합니다."
+        )
+        if self.ensure_vla_state_model_loaded() is not None:
+            return
+
+        self.get_logger().warn(
+            "VLA 가중치 로드에 실패하여 grasp_point_mode를 "
+            f"'{GRASP_POINT_MODE_CENTER}'로 fallback합니다."
+        )
+        self.grasp_point_mode = GRASP_POINT_MODE_CENTER
 
     def _hand_grasp_cb(self, msg):
         try:
@@ -670,6 +688,7 @@ class MacGyvBotNode(Node):
         final_grasp_z = bz
         final_ori = ori
         switch_z = None
+        moved_to_vla_switch_pose = False
 
         # Depth 기반 안전 파지 높이 계산
         # z_m: camera->object depth (m)
@@ -813,6 +832,8 @@ class MacGyvBotNode(Node):
                     if not ok:
                         log.warn("VLA switch pose 이동 실패. 기존 grasp pose에서 계속 진행합니다.")
                         switch_z = grasp_z
+                    else:
+                        moved_to_vla_switch_pose = abs(switch_z - grasp_z) > 0.005
 
                 vla_result = self.refine_grasp_pose_with_vla(
                     target_x=target_x,
@@ -831,6 +852,26 @@ class MacGyvBotNode(Node):
                     final_target_x = target_x
                     final_target_y = target_y
                     final_grasp_z = grasp_z
+                    if moved_to_vla_switch_pose:
+                        log.info(
+                            "VLA 보정 실패 또는 생략. 기존 grasp pose로 다시 하강합니다."
+                        )
+                        ok = plan_and_execute(
+                            self.robot,
+                            self.arm,
+                            log,
+                            pose_goal=make_safe_pose(
+                                target_x,
+                                target_y,
+                                grasp_z,
+                                ori,
+                                log,
+                            ),
+                            params=self.pilz_params,
+                        )
+                        if not ok:
+                            log.error("기존 grasp pose 재하강 실패. Pick 시퀀스 중단")
+                            return
             else:
                 final_target_x = target_x
                 final_target_y = target_y

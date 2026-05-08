@@ -22,6 +22,7 @@ gripper command. Joint positions can be carried alongside as metadata.
 from __future__ import annotations
 
 import importlib.util
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
@@ -32,6 +33,7 @@ from scipy.spatial.transform import Rotation
 
 DEFAULT_VLA_MODEL = "openvla/openvla-7b"
 DEFAULT_UNNORM_KEY = "bridge_orig"
+DEFAULT_LOCAL_MODEL_ROOT = Path(__file__).resolve().parents[1] / "models" / "vla"
 
 
 @dataclass(frozen=True)
@@ -107,6 +109,7 @@ class VLAConfig:
     """Runtime settings for the VLA adapter."""
 
     model_id: str = DEFAULT_VLA_MODEL
+    local_model_root: Path = DEFAULT_LOCAL_MODEL_ROOT
     unnorm_key: str | None = DEFAULT_UNNORM_KEY
     use_4bit: bool = True
     trust_remote_code: bool = True
@@ -139,13 +142,15 @@ class VLAStateModel:
         if self.model is not None and self.processor is not None:
             return
 
+        model_source = self._resolve_local_model_source()
         self._ensure_runtime_dependencies()
 
         from transformers import AutoModelForVision2Seq, AutoProcessor
 
         self.processor = AutoProcessor.from_pretrained(
-            self.config.model_id,
+            model_source,
             trust_remote_code=self.config.trust_remote_code,
+            local_files_only=True,
         )
 
         has_accelerate = importlib.util.find_spec("accelerate") is not None
@@ -157,6 +162,7 @@ class VLAStateModel:
             "torch_dtype": self.torch_dtype,
             "low_cpu_mem_usage": True,
             "trust_remote_code": self.config.trust_remote_code,
+            "local_files_only": True,
         }
         if device_map is not None:
             model_kwargs["device_map"] = device_map
@@ -168,7 +174,7 @@ class VLAStateModel:
             model_kwargs["attn_implementation"] = "flash_attention_2"
 
         self.model = AutoModelForVision2Seq.from_pretrained(
-            self.config.model_id,
+            model_source,
             **model_kwargs,
         )
 
@@ -176,6 +182,20 @@ class VLAStateModel:
             self.model.to(self.device)
 
         self.model.eval()
+
+    def _resolve_local_model_source(self) -> str:
+        local_dir = self.config.local_model_root / self.config.model_id.replace(
+            "/",
+            "__",
+        )
+        if (local_dir / "config.json").exists():
+            return str(local_dir)
+
+        raise FileNotFoundError(
+            "로컬 VLA 가중치가 없거나 불완전합니다. "
+            f"model_id={self.config.model_id}, expected_path={local_dir}. "
+            "먼저 `python3 scripts/download_vla_weights.py`를 실행해주세요."
+        )
 
     def unload(self):
         """Release processor/model memory after the grasp phase."""
