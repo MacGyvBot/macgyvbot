@@ -158,6 +158,18 @@ ros2 run macgyvbot voice_command_ui_node
 
 CLI UI는 `/stt_text`, `/command_feedback`, `/tool_command`, `/target_label`을 확인하며 사용자 입력도 `/stt_text`로 발행합니다.
 
+GUI 채팅창을 사용할 경우:
+
+```bash
+ros2 run macgyvbot voice_command_gui_node
+```
+
+GUI 실행에 PyQt5가 필요합니다.
+
+```bash
+sudo apt install python3-pyqt5
+```
+
 예:
 
 ```text
@@ -193,25 +205,21 @@ ros2 topic pub --once /target_label std_msgs/msg/String "{data: screwdriver}"
 
 사용 가능한 공구 label은 학습한 YOLO 모델의 class 이름과 같아야 합니다. 현재 예시는 `hammer`, `screwdriver`, `pliers`, `tape_measure`를 기준으로 합니다.
 
-## 음성 명령 노드만 단독 테스트
+## 음성 명령 입력만 테스트
 
-로봇 메인 파이프라인 없이 STT와 LLM command node만 확인할 때는 아래 명령을 사용합니다. CLI UI는 별도 터미널에서 실행합니다.
+마이크 STT 없이 CLI 입력만 확인할 때는 `macgyvbot.launch.py`에서 STT를 끄고 실행한 뒤, CLI UI를 별도 터미널에서 실행합니다.
 
 ```bash
 source /opt/ros/humble/setup.bash
 source ~/ros2_ws/install/setup.bash
 source ~/ros2_ws/src/doosan-robot2/install/setup.bash
 
-ros2 launch macgyvbot voice_command.launch.py
+ros2 launch macgyvbot macgyvbot.launch.py use_stt:=false
 ```
 
 다른 터미널:
 
 ```bash
-source /opt/ros/humble/setup.bash
-source ~/ros2_ws/install/setup.bash
-source ~/ros2_ws/src/doosan-robot2/install/setup.bash
-
 ros2 run macgyvbot voice_command_ui_node
 ```
 
