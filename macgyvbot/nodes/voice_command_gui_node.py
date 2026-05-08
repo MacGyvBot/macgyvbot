@@ -183,7 +183,8 @@ class VoiceCommandGuiNode(Node):
         if QApplication is None:
             raise RuntimeError(
                 'PyQt5가 설치되어 있지 않습니다. '
-                'sudo apt install python3-pyqt5 또는 pip install PyQt5 후 다시 실행하세요.'
+                'sudo apt install python3-pyqt5 또는 pip install PyQt5 후 '
+                '다시 실행하세요.'
             )
 
         self.declare_parameter('stt_text_topic', '/stt_text')
@@ -195,7 +196,9 @@ class VoiceCommandGuiNode(Node):
         stt_text_topic = self.get_parameter('stt_text_topic').value
         tool_command_topic = self.get_parameter('tool_command_topic').value
         target_label_topic = self.get_parameter('target_label_topic').value
-        command_feedback_topic = self.get_parameter('command_feedback_topic').value
+        command_feedback_topic = self.get_parameter(
+            'command_feedback_topic'
+        ).value
         robot_status_topic = self.get_parameter('robot_status_topic').value
 
         self.window = None
@@ -204,10 +207,30 @@ class VoiceCommandGuiNode(Node):
 
         self._text_pub = self.create_publisher(String, stt_text_topic, 10)
         self.create_subscription(String, stt_text_topic, self._stt_text_cb, 10)
-        self.create_subscription(String, tool_command_topic, self._tool_command_cb, 10)
-        self.create_subscription(String, target_label_topic, self._target_label_cb, 10)
-        self.create_subscription(String, command_feedback_topic, self._feedback_cb, 10)
-        self.create_subscription(String, robot_status_topic, self._robot_status_cb, 10)
+        self.create_subscription(
+            String,
+            tool_command_topic,
+            self._tool_command_cb,
+            10,
+        )
+        self.create_subscription(
+            String,
+            target_label_topic,
+            self._target_label_cb,
+            10,
+        )
+        self.create_subscription(
+            String,
+            command_feedback_topic,
+            self._feedback_cb,
+            10,
+        )
+        self.create_subscription(
+            String,
+            robot_status_topic,
+            self._robot_status_cb,
+            10,
+        )
 
         self.get_logger().info('MacGyvBot GUI 명령 UI 준비 완료')
 
@@ -309,7 +332,10 @@ class VoiceCommandGuiNode(Node):
             return
 
         state = status.get('status', status.get('state', 'unknown'))
-        tool_name = status.get('tool_name', self._last_target_label or 'unknown')
+        tool_name = status.get(
+            'tool_name',
+            self._last_target_label or 'unknown',
+        )
         message = status.get('message', '')
 
         if state in ('done', 'completed', 'success'):

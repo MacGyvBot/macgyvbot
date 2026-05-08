@@ -41,8 +41,12 @@ class SttNode(Node):
 
         self._language = self.get_parameter('language').value
         self._device_index = int(self.get_parameter('device_index').value)
-        self._phrase_time_limit = float(self.get_parameter('phrase_time_limit').value)
-        self._publish_compat = bool(self.get_parameter('publish_compat_topic').value)
+        self._phrase_time_limit = float(
+            self.get_parameter('phrase_time_limit').value
+        )
+        self._publish_compat = bool(
+            self.get_parameter('publish_compat_topic').value
+        )
 
         energy_threshold = float(self.get_parameter('energy_threshold').value)
         pause_threshold = float(self.get_parameter('pause_threshold').value)

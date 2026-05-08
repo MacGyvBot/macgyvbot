@@ -4,6 +4,37 @@ MacGyvBot은 음성 명령 기반 공구 서랍 관리 로봇팔 어시스턴트
 
 현재 저장소는 RealSense 카메라, YOLO 객체 인식, MoveItPy 기반 로봇팔 이동, OnRobot RG2 그리퍼 제어를 함께 다룹니다. 또한 사람이 로봇이 들고 있는 공구를 잡았는지 판단하는 hand-tool grasp detection 노드를 포함합니다.
 
+## 패키지 구조
+
+메인 pick 파이프라인은 ROS wiring과 기능별 책임을 분리해 구성합니다.
+
+```text
+macgyvbot/
+├── macgyvbot.py                         # 기존 호환용 wrapper entrypoint
+├── nodes/
+│   ├── macgyvbot_node.py                # ROS wiring, parameter, frame loop
+│   ├── stt_node.py                      # Google STT 기반 /stt_text 발행
+│   ├── llm_command_node.py              # STT text -> tool command, /target_label
+│   ├── voice_command_ui_node.py         # 터미널 기반 음성 명령 UI
+│   └── voice_command_gui_node.py        # PyQt 기반 음성 명령 GUI
+├── core/
+│   ├── config.py                        # topic, frame, safety offset, grasp mode
+│   └── pick_sequence.py                 # pick, handoff, 원위치 반환 시퀀스
+├── perception/
+│   ├── yolo_detector.py                 # YOLO 모델 경로 해석 및 추론 wrapper
+│   ├── grasp_point_selector.py          # center/VLM grasp pixel 선택
+│   └── depth_projection.py              # depth pixel -> camera/base 좌표 투영
+├── motion/
+│   ├── moveit_controller.py             # MoveIt planning 실행 및 J6 yaw 회전
+│   └── pose_utils.py                    # pose 생성, EE transform/orientation helper
+├── ui/
+│   └── debug_windows.py                 # OpenCV debug window 출력
+└── voice_command/
+    └── command_parser.py                # LLM fallback 전 alias/fuzzy parser
+```
+
+기존 executable 이름은 `macgyvbot`으로 유지됩니다. 호환성을 위해 `macgyvbot/macgyvbot.py`는 새 노드의 wrapper entrypoint로 남겨 둡니다.
+
 ## 주요 기능
 
 - RealSense color/depth 이미지 구독

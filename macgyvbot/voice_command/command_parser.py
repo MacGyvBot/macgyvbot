@@ -111,7 +111,8 @@ def find_tool_by_fuzzy(text):
         score = similarity(normalized, normalized_keyword)
 
         if len(normalized) > len(normalized_keyword):
-            for start in range(0, len(normalized) - len(normalized_keyword) + 1):
+            max_start = len(normalized) - len(normalized_keyword) + 1
+            for start in range(0, max_start):
                 part = normalized[start:start + len(normalized_keyword)]
                 score = max(score, similarity(part, normalized_keyword))
 
