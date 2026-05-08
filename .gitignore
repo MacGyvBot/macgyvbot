@@ -36,4 +36,4 @@ log/
 
 
 # weight
-models/vlm
+models/*

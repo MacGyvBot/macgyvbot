@@ -163,3 +163,53 @@
 - `python3 -m py_compile`로 변경된 Python 파일의 문법 검사를 수행했다.
 - `rg`로 task pipeline 오타 경로가 남지 않은 것을 확인했다.
 - `__init__.py` 파일 기준으로 `macgyvbot.util.task_pipeline`과 perception 하위 모듈이 패키지로 포함되는 것을 확인했다.
+
+## 16. Voice command UI 파일 정리
+
+- `voice_command_ui_node.py`와 `voice_command_gui_node.py`를 비교해 GUI 노드가 기존 토픽 처리 기능을 포함하면서 UI만 확장한 것을 확인했다.
+- 중복 파일인 `macgyvbot/nodes/voice_command_ui_node.py`를 제거했다.
+- 실행 호환성을 위해 `setup.py`의 `voice_command_ui_node` 엔트리포인트를 `macgyvbot.nodes.voice_command_gui_node:main`으로 변경했다.
+- README의 패키지 구조/실행 설명에서 삭제된 UI 파일 관련 문구를 정리했다.
+
+확인:
+- `rg`로 삭제된 `voice_command_ui_node.py` 파일 경로 참조가 남지 않은 것을 확인했다.
+- `macgyvbot/nodes`에 `voice_command_gui_node.py`만 남아 있는 것을 확인했다.
+
+## 17. GUI UI 코드 의존성 분리
+
+- `voice_command_gui_node.py`에서 `VoiceCommandGuiWindow` UI 클래스를 분리해 `macgyvbot/ui/voice_command_window.py`를 추가했다.
+- 노드 파일은 ROS 노드 로직 중심으로 유지하고, UI 관련 의존성은 `macgyvbot.ui.voice_command_window` import로 연결했다.
+- PyQt5 미설치 처리 로직은 UI 모듈과 노드 진입점에서 안전하게 동작하도록 유지했다.
+
+확인:
+- `python3 -m py_compile macgyvbot/nodes/voice_command_gui_node.py macgyvbot/ui/voice_command_window.py`로 문법 검사를 통과했다.
+
+## 18. STT 단일 노드로 명령 해석 통합
+
+- `llm_command_node.py`의 하이브리드 해석 로직을 `util/input_mapping/command_llm_parser.py`로 분리했다.
+- `stt_node.py`가 STT 발행과 함께 명령 해석(`local parser -> LLM fallback`)을 직접 수행하도록 통합했다.
+- `stt_node`가 `/stt_text`를 구독해 GUI 키보드 입력도 동일 파이프라인으로 처리하도록 구성했다.
+- STT 노드 자기 발행 메시지 루프를 피하기 위해 self-published 메시지 필터를 추가했다.
+- `launch/macgyvbot.launch.py`에서 `llm_command_node` 실행을 제거하고 `stt_node` 하나만 실행하도록 정리했다.
+- `use_stt:=false`일 때도 명령 해석은 가능하도록 `stt_node`는 유지하고 `enable_microphone` 파라미터로 마이크만 끄도록 변경했다.
+- `setup.py`에서 `llm_command_node` 엔트리포인트를 제거했다.
+- `macgyvbot/nodes/llm_command_node.py` 파일을 제거했다.
+- README의 노드 구조/흐름 설명을 통합 구조에 맞게 수정했다.
+
+확인:
+- `python3 -m py_compile macgyvbot/nodes/stt_node.py macgyvbot/util/input_mapping/command_llm_parser.py`로 문법 검사를 통과했다.
+
+## 19. GUI + STT 완전 통합 및 STT 유틸 분리
+
+- `stt_node.py`와 `voice_command_gui_node.py` 역할을 하나로 합쳐 음성 명령 관련 노드를 `stt_node` 하나로 통합했다.
+- 통합 노드가 GUI 키보드 입력과 마이크 STT 입력을 동일한 채팅 흐름으로 처리하도록 구성했다.
+- STT 변환(마이크 열기, 주변소음 보정, Google STT background listen) 코드를 `util/stt/speech_to_text.py`로 분리했다.
+- 새 STT 유틸 패키지 `util/stt/`와 `__init__.py`를 추가했다.
+- 명령 해석은 기존 `util/input_mapping/command_hard_parser.py`와 `util/input_mapping/command_llm_parser.py`를 그대로 재사용하도록 유지했다.
+- `macgyvbot/nodes/voice_command_gui_node.py`를 제거했다.
+- `setup.py`에서 voice command GUI 별도 엔트리포인트를 제거하고 `stt_node` 엔트리포인트만 남겼다.
+- `launch/macgyvbot.launch.py`는 `stt_node`에 `use_gui=true`를 전달해 통합 GUI를 기본 실행하도록 수정했다.
+- README의 노드 구조/실행 흐름을 통합 구조에 맞게 갱신했다.
+
+확인:
+- `python3 -m py_compile macgyvbot/nodes/stt_node.py macgyvbot/util/stt/speech_to_text.py macgyvbot/util/input_mapping/command_llm_parser.py macgyvbot/ui/voice_command_window.py`로 문법 검사를 통과했다.

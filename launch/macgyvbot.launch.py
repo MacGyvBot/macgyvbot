@@ -1,7 +1,6 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
-from launch.substitutions import PythonExpression
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch.substitutions import PathJoinSubstitution
@@ -43,7 +42,7 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "use_voice_command",
                 default_value="true",
-                description="STT/CLI UI/LLM 명령 해석 노드를 함께 실행할지 여부",
+                description="STT + 통합 명령 해석 노드를 실행할지 여부",
             ),
             DeclareLaunchArgument(
                 "use_stt",
@@ -105,23 +104,13 @@ def generate_launch_description():
                 executable="stt_node",
                 name="stt_node",
                 output="screen",
-                condition=IfCondition(
-                    PythonExpression([
-                        "'", use_voice_command, "' == 'true' and '",
-                        use_stt, "' == 'true'",
-                    ])
-                ),
-            ),
-            Node(
-                package="macgyvbot",
-                executable="llm_command_node",
-                name="llm_command_node",
-                output="screen",
                 parameters=[
                     {
+                        "use_gui": True,
+                        "enable_microphone": use_stt,
+                        "model": llm_model,
                         "use_local_parser": True,
                         "use_llm_fallback": True,
-                        "model": llm_model,
                         "min_confidence": 0.55,
                     }
                 ],
