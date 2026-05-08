@@ -25,9 +25,12 @@ from macgyvbot.core.config import (
     HAND_GRASP_IMAGE_TOPIC,
     HAND_GRASP_TOPIC,
     HOME_JOINTS,
+    ROBOT_STATUS_TOPIC,
+    TOOL_COMMAND_TOPIC,
     YOLO_MODEL_NAME,
 )
 from macgyvbot.core.pick_sequence import PickSequenceRunner
+from macgyvbot.core.user_tool_grasp import UserToolGraspRunner
 from macgyvbot.motion.moveit_controller import (
     MoveItController,
     plan_and_execute,
@@ -51,6 +54,7 @@ class MacGyvBotNode(Node):
         self.picking = False
         self.target_label = None
         self.pending_pick_thread = None
+        self.pending_user_tool_grasp_thread = None
         self.human_grasped_tool = False
         self.last_grasp_result = None
         self.hand_grasp_image = None
@@ -94,8 +98,14 @@ class MacGyvBotNode(Node):
             self.gripper,
             self,
         )
+        self.user_tool_grasp_runner = UserToolGraspRunner(self.gripper, self)
         self.debug_windows = DebugWindows(self)
 
+        self.robot_status_pub = self.create_publisher(
+            String,
+            ROBOT_STATUS_TOPIC,
+            10,
+        )
         self._create_subscriptions()
         self._log_startup()
 
@@ -158,6 +168,12 @@ class MacGyvBotNode(Node):
         )
         self.create_subscription(
             String,
+            TOOL_COMMAND_TOPIC,
+            self._tool_command_cb,
+            10,
+        )
+        self.create_subscription(
+            String,
             HAND_GRASP_TOPIC,
             self._hand_grasp_cb,
             10,
@@ -177,6 +193,8 @@ class MacGyvBotNode(Node):
             "객체 입력 예시: ros2 topic pub --once /target_label "
             "std_msgs/msg/String \"{data: cup}\""
         )
+        self.get_logger().info(f"공구 명령 토픽: {TOOL_COMMAND_TOPIC}")
+        self.get_logger().info(f"로봇 상태 토픽: {ROBOT_STATUS_TOPIC}")
         self.get_logger().info(f"잡기 인식 결과 토픽: {HAND_GRASP_TOPIC}")
         self.get_logger().info(f"잡기 인식 화면 토픽: {HAND_GRASP_IMAGE_TOPIC}")
 
@@ -194,6 +212,19 @@ class MacGyvBotNode(Node):
 
         self.target_label = val
         self.get_logger().info(f"타겟 객체 설정: {self.target_label}")
+
+    def _tool_command_cb(self, msg):
+        try:
+            command = json.loads(msg.data)
+        except json.JSONDecodeError:
+            self.get_logger().warn(f"공구 명령 JSON 파싱 실패: {msg.data}")
+            return
+
+        action = str(command.get("action", "")).strip()
+        if action != "return":
+            return
+
+        self.start_user_tool_grasp_sequence(command)
 
     def _hand_grasp_cb(self, msg):
         try:
@@ -237,6 +268,26 @@ class MacGyvBotNode(Node):
             daemon=True,
         )
         self.pending_pick_thread.start()
+
+    def start_user_tool_grasp_sequence(self, command):
+        if self.picking:
+            self.get_logger().warn(
+                "이미 로봇 동작 중이라 사용자 반납 공구 grasp 요청을 무시합니다."
+            )
+            return
+
+        tool_name = command.get("tool_name", "unknown")
+        self.get_logger().info(
+            f"사용자 반납 공구 grasp 시퀀스 시작: tool={tool_name}"
+        )
+        self.picking = True
+        self.target_label = None
+        self.pending_user_tool_grasp_thread = threading.Thread(
+            target=self.user_tool_grasp_runner.run,
+            args=(command,),
+            daemon=True,
+        )
+        self.pending_user_tool_grasp_thread.start()
 
     def run(self):
         self._move_home_and_capture_pose()

@@ -213,6 +213,17 @@ voice_command_ui_node 또는 stt_node
   -> macgyvbot
 ```
 
+반납 명령은 `/tool_command`에 JSON 문자열로 발행됩니다. `action`이 `return`이면
+메인 노드는 사용자가 들고 있는 공구를 hand grasp detection 결과로 확인한 뒤
+그리퍼를 닫아 공구를 잡습니다.
+
+```bash
+ros2 topic pub --once /tool_command std_msgs/msg/String \
+  "{data: '{\"tool_name\":\"screwdriver\",\"action\":\"return\",\"raw_text\":\"드라이버 반납해\",\"match_method\":\"manual\",\"match_score\":1.0,\"confidence\":1.0,\"status\":\"accepted\"}'}"
+```
+
+반납 처리 상태는 `/robot_task_status`에 JSON 문자열로 발행됩니다.
+
 마이크 STT 없이 CLI 입력만 테스트하려면 Terminal 3에서 STT를 끄고 실행합니다.
 
 ```bash

@@ -36,6 +36,7 @@ ALLOWED_TOOLS = {
 
 ALLOWED_ACTIONS = {
     'bring': '사용자가 공구를 가져오거나 달라고 요청함.',
+    'return': '사용자가 공구를 지정된 보관 위치나 서랍에 되돌려 놓으라고 요청함.',
     'release': '사용자가 잡고 있는 공구를 놓으라고 요청함.',
     'stop': '사용자가 정지 또는 중단을 요청함.',
     'unknown': '행동을 확정할 수 없음.',
@@ -299,6 +300,8 @@ class LlmCommandNode(Node):
 
         if action == 'bring':
             return f'{tool_name}를 가져오라는 뜻으로 이해했습니다.'
+        if action == 'return':
+            return f'{tool_name}를 보관 위치에 정리하라는 뜻으로 이해했습니다.'
         if action == 'release':
             return f'{tool_name}를 놓으라는 뜻으로 이해했습니다.'
         if action == 'stop':
@@ -311,6 +314,8 @@ class LlmCommandNode(Node):
 
         if tool_name != 'unknown' and action == 'bring':
             return f'{tool_name}를 가져오라는 뜻이 맞나요? 네 또는 아니오로 답해주세요.'
+        if tool_name != 'unknown' and action == 'return':
+            return f'{tool_name}를 보관 위치에 정리하라는 뜻이 맞나요? 네 또는 아니오로 답해주세요.'
         if tool_name != 'unknown' and action == 'release':
             return f'{tool_name}를 놓으라는 뜻이 맞나요? 네 또는 아니오로 답해주세요.'
         if tool_name != 'unknown':
@@ -389,6 +394,7 @@ class LlmCommandNode(Node):
 
 허용 action:
 - bring: {ALLOWED_ACTIONS['bring']}
+- return: {ALLOWED_ACTIONS['return']}
 - release: {ALLOWED_ACTIONS['release']}
 - stop: {ALLOWED_ACTIONS['stop']}
 - unknown: {ALLOWED_ACTIONS['unknown']}
@@ -403,6 +409,9 @@ class LlmCommandNode(Node):
 - "못 박는 거", "두드리는 거"는 hammer에 가깝다.
 - "길이 재는 거", "치수 재는 거"는 tape_measure에 가깝다.
 - "집는 거", "잡는 거", "펜치 같은 거"는 pliers에 가깝다.
+- "정리해", "가져다가 놔", "제자리에 둬", "서랍에 넣어",
+  "반납해", "보관해"는 action return이다.
+- "놔", "놓아줘", "내려놔"는 action release다.
 
 예시:
 입력: 드라이버 가져다줘
@@ -410,6 +419,12 @@ class LlmCommandNode(Node):
 
 입력: 그 조이는 거 가져와
 출력: {{"tool_name":"screwdriver","action":"bring","confidence":0.80}}
+
+입력: 드라이버 가져다가 놔
+출력: {{"tool_name":"screwdriver","action":"return","confidence":0.92}}
+
+입력: 플라이어 서랍에 넣어줘
+출력: {{"tool_name":"pliers","action":"return","confidence":0.90}}
 
 입력: 길이 재는 거 줘
 출력: {{"tool_name":"tape_measure","action":"bring","confidence":0.82}}
@@ -518,14 +533,17 @@ class LlmCommandNode(Node):
             )
             return None
 
-        if action == 'bring' and tool_name == 'unknown':
-            self.get_logger().warn('bring 명령이지만 공구를 확정하지 못해 무시합니다.')
+        if action in ('bring', 'return') and tool_name == 'unknown':
+            self.get_logger().warn(
+                f'{action} 명령이지만 공구를 확정하지 못해 무시합니다.'
+            )
+            action_text = '가져올' if action == 'bring' else '정리할'
             self._publish_feedback(
                 status='rejected',
                 raw_text=raw_text,
                 reason='unknown_tool',
                 message=(
-                    '어떤 공구를 가져올지 확실하지 않습니다. '
+                    f'어떤 공구를 {action_text}지 확실하지 않습니다. '
                     '드라이버, 플라이어, 망치, 줄자 중에서 다시 말해주세요.'
                 ),
                 command=candidate_command,

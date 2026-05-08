@@ -26,6 +26,8 @@ MIN_PICK_Z = 0.30
 MAX_DESCENT_FROM_APPROACH = 0.08
 
 YOLO_MODEL_NAME = "yolov11_best.pt"
+TOOL_COMMAND_TOPIC = "/tool_command"
+ROBOT_STATUS_TOPIC = "/robot_task_status"
 HAND_GRASP_TOPIC = "/human_grasped_tool"
 HAND_GRASP_IMAGE_TOPIC = "/hand_grasp_detection/annotated_image"
 HAND_GRASP_TIMEOUT_SEC = 20.0
