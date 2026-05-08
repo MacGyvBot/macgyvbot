@@ -310,6 +310,7 @@ class LlmCommandNode(Node):
         payload = {
             'model': self._model,
             'prompt': prompt,
+            'format': 'json',
             'stream': False,
             'options': {
                 'temperature': 0.0,
@@ -340,6 +341,9 @@ class LlmCommandNode(Node):
             return None
 
         response_text = ollama_result.get('response', '')
+        if not response_text:
+            self.get_logger().error(f'Ollama 응답에 response 필드가 비어 있습니다: {body}')
+            return None
         return self._extract_json(response_text)
 
     def _build_prompt(self, text):
@@ -367,6 +371,7 @@ class LlmCommandNode(Node):
 - action은 허용 목록 중 하나만 사용한다.
 - confidence는 0.0부터 1.0 사이 숫자다.
 - "그 조이는 거", "나사 돌리는 거"는 screwdriver에 가깝다.
+- "나사돌리는거", "나사 조이는 거", "돌려서 쓰는 거"는 screwdriver에 가깝다.
 - "못 박는 거", "두드리는 거"는 hammer에 가깝다.
 - "길이 재는 거", "치수 재는 거"는 tape_measure에 가깝다.
 - "집는 거", "잡는 거", "펜치 같은 거"는 pliers에 가깝다.
@@ -377,6 +382,9 @@ class LlmCommandNode(Node):
 
 입력: 그 조이는 거 가져와
 출력: {{"tool_name":"screwdriver","action":"bring","confidence":0.80}}
+
+입력: 나사돌리는거 가져다줘
+출력: {{"tool_name":"screwdriver","action":"bring","confidence":0.84}}
 
 입력: 길이 재는 거 줘
 출력: {{"tool_name":"tape_measure","action":"bring","confidence":0.82}}
