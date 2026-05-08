@@ -312,13 +312,29 @@ class VoiceCommandGuiNode(Node):
             return
 
         if status == 'rejected':
-            self._append_bot(message or '명령을 이해하지 못했습니다. 다시 입력해주세요.')
-            self._append_system(f'reason={reason}')
+            self._append_bot(
+                message or self._build_rejected_message(reason)
+            )
             self._set_status('재입력 필요')
             return
 
         self._append_bot(message or '상태를 확인했습니다.')
         self._append_system(f'status={status}, reason={reason}')
+
+    def _build_rejected_message(self, reason):
+        if reason == 'llm_failed':
+            return (
+                '문장을 제대로 해석하지 못했습니다. '
+                '드라이버, 플라이어, 망치, 줄자 중 어떤 공구인지 '
+                '다시 말해주세요.'
+            )
+        if reason == 'unknown_tool':
+            return '어떤 공구인지 확실하지 않습니다. 공구 이름을 다시 말해주세요.'
+        if reason == 'unknown_action':
+            return '무엇을 할지 확실하지 않습니다. 가져다줘, 정리해, 놓아줘처럼 말해주세요.'
+        if reason == 'low_confidence':
+            return '제가 이해한 내용이 확실하지 않습니다. 조금 더 구체적으로 말해주세요.'
+        return '명령을 이해하지 못했습니다. 다시 입력해주세요.'
 
     def _robot_status_cb(self, msg):
         status_text = msg.data.strip()

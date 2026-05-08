@@ -3,7 +3,7 @@
 이 파일은 LLM 전에 먼저 시도하는 빠른 해석 레이어다.
 - alias dictionary: 명확한 공구 별칭 매칭
 - fuzzy matching: STT 오인식 보정
-- action keyword: bring/release 분류
+- action keyword: bring/return/release 분류
 
 LLM은 이 파서가 공구를 확정하지 못했을 때 fallback으로 사용한다.
 """
@@ -52,6 +52,7 @@ TOOL_KEYWORDS = {
 }
 
 FUZZY_MATCH_THRESHOLD = 0.50
+MIN_FUZZY_KEYWORD_LENGTH = 3
 
 BRING_KEYWORDS = [
     '가져다',
@@ -63,6 +64,26 @@ BRING_KEYWORDS = [
     '주세요',
     '집어',
     '잡아',
+]
+
+RETURN_KEYWORDS = [
+    '가져다가놔',
+    '가져다가놓',
+    '가져다놔',
+    '가져다놓',
+    '갖다놔',
+    '갖다놓',
+    '정리',
+    '제자리',
+    '되돌려',
+    '돌려놔',
+    '돌려놓',
+    '반납',
+    '서랍에넣',
+    '넣어',
+    '넣어줘',
+    '넣어주세요',
+    '보관',
 ]
 
 RELEASE_KEYWORDS = [
@@ -108,6 +129,9 @@ def find_tool_by_fuzzy(text):
 
     for tool_name, keyword in iter_tool_aliases():
         normalized_keyword = normalize_text(keyword)
+        if len(normalized_keyword) < MIN_FUZZY_KEYWORD_LENGTH:
+            continue
+
         score = similarity(normalized, normalized_keyword)
 
         if len(normalized) > len(normalized_keyword):
@@ -142,7 +166,11 @@ def find_tool(text):
 def find_action(text):
     normalized = normalize_text(text)
 
-    # "가져다 놓아"는 사용자가 원하는 전달 동작이므로 bring을 우선한다.
+    # "가져다가 놔", "정리해"는 사용자에게 전달이 아니라 보관 위치로 반납하는 명령이다.
+    for keyword in RETURN_KEYWORDS:
+        if normalize_text(keyword) in normalized:
+            return 'return'
+
     for keyword in BRING_KEYWORDS:
         if normalize_text(keyword) in normalized:
             return 'bring'
