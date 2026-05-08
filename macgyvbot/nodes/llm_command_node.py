@@ -423,6 +423,12 @@ class LlmCommandNode(Node):
 - pliers는 "집다", "잡다", "찝다", "펜치", "플라이어" 같은 표현에 선택한다.
 - 어떤 공구인지 애매하면 confidence를 0.6 이하로 낮춘다.
 - 확실하지 않은데 confidence를 1.0으로 출력하지 않는다.
+- "이거", "그거", "저거", "이것", "그것", "저것"처럼 지시어만 있고
+  공구 이름이나 공구 기능 단서가 없으면 tool_name은 unknown이다.
+- "이거 정리해", "그거 가져와"처럼 대상 공구를 알 수 없는 문장은
+  특정 공구로 추측하지 않는다.
+- "그 돌리는 거"처럼 "나사" 없이 짧게 말한 경우는 screwdriver 후보로 보되
+  confidence를 0.5로 낮춰 사용자가 확인할 수 있게 한다.
 - "가져다줘", "가져와", "줘", "달라"는 action bring이다.
 - "정리해", "가져다가 놔", "제자리에 둬", "서랍에 넣어",
   "반납해", "보관해"는 action return이다.
@@ -446,6 +452,15 @@ class LlmCommandNode(Node):
 
 입력: 돌려서 쓰는 거 가져다줘
 출력: {{"tool_name":"screwdriver","action":"bring","confidence":0.86}}
+
+입력: 그 돌리는 거 가져와
+출력: {{"tool_name":"screwdriver","action":"bring","confidence":0.50}}
+
+입력: 이거 정리해
+출력: {{"tool_name":"unknown","action":"return","confidence":0.40}}
+
+입력: 그거 가져와
+출력: {{"tool_name":"unknown","action":"bring","confidence":0.40}}
 
 입력: 못 박는 거 가져와
 출력: {{"tool_name":"hammer","action":"bring","confidence":0.88}}
@@ -508,6 +523,11 @@ class LlmCommandNode(Node):
             action = 'unknown'
 
         confidence = max(0.0, min(1.0, confidence))
+        tool_name, confidence = self._adjust_ambiguous_tool(
+            raw_text,
+            tool_name,
+            confidence,
+        )
 
         candidate_command = {
             'tool_name': tool_name,
@@ -584,6 +604,72 @@ class LlmCommandNode(Node):
             return None
 
         return candidate_command
+
+    def _adjust_ambiguous_tool(self, raw_text, tool_name, confidence):
+        normalized = (raw_text or '').replace(' ', '')
+        has_deictic_target = any(
+            token in normalized
+            for token in ('이거', '그거', '저거', '이것', '그것', '저것')
+        )
+        has_turn_expression = any(
+            token in normalized
+            for token in ('돌리', '조이', '풀어', '푸는', '풀')
+        )
+        has_impact_expression = any(
+            token in normalized
+            for token in ('못', '박', '두드리', '치', '때리', '망치')
+        )
+        has_measure_expression = any(
+            token in normalized
+            for token in ('길이', '치수', '재', '측정', '센치', 'cm')
+        )
+        has_grip_expression = any(
+            token in normalized
+            for token in ('집', '잡', '찝', '펜치', '플라이어', '니퍼')
+        )
+        has_named_tool = any(
+            token in normalized
+            for token in (
+                '드라이버',
+                '드라이바',
+                '망치',
+                '해머',
+                '햄머',
+                '플라이어',
+                '펜치',
+                '뺀치',
+                '줄자',
+                '테이프',
+            )
+        )
+        has_tool_clue = any(
+            (
+                has_turn_expression,
+                has_impact_expression,
+                has_measure_expression,
+                has_grip_expression,
+                has_named_tool,
+            )
+        )
+
+        if has_deictic_target and not has_tool_clue:
+            self.get_logger().warn(
+                '지시어만 있고 공구 단서가 없어 공구를 unknown으로 처리합니다.'
+            )
+            return 'unknown', confidence
+
+        if (
+            tool_name == 'hammer'
+            and has_turn_expression
+            and not has_impact_expression
+        ):
+            self.get_logger().warn(
+                '회전/조임 표현을 hammer로 해석해 screwdriver 후보로 낮춰 확인합니다.'
+            )
+            adjusted_confidence = min(confidence, self._min_confidence - 0.05)
+            return 'screwdriver', adjusted_confidence
+
+        return tool_name, confidence
 
 
 def main(args=None):
