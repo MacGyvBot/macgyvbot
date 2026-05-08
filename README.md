@@ -38,8 +38,8 @@ macgyvbot/
 │   │   └── grasp_by_vlm.py              # VLM 기반 grasp point 선택
 │   ├── input_mapping/
 │   │   └── command_hard_parser.py       # LLM fallback 전 alias/fuzzy parser
-│   └── task_pipline/
-│       └── task_pipline.py              # pick, handoff, 원위치 반환 시퀀스
+│   └── task_pipeline/
+│       └── task_pipeline.py             # pick, handoff, 원위치 반환 시퀀스
 ├── ui/
 │   └── debug_windows.py                 # OpenCV debug window 출력
 ```

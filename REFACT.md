@@ -104,15 +104,15 @@
 - 이전 `macgyvbot.perception` import 참조가 남지 않은 것을 확인했다.
 - `find_packages()`에서 `macgyvbot.util.perception`이 포함되는 것을 확인했다.
 
-## 11. Config와 task pipline 위치 정리
+## 11. Config와 task pipeline 위치 정리
 
 - `core/config.py`를 `config/config.py`로 옮겼다.
-- `core/pick_sequence.py`를 루트 패키지의 `task_pipline.py`로 옮겼다.
+- `core/pick_sequence.py`를 루트 패키지의 `task_pipeline.py`로 옮겼다.
 - 새 위치에 맞춰 config와 `PickSequenceRunner` import 경로를 수정했다.
 - README의 패키지 구조를 새 위치에 맞게 수정했다.
 
 확인:
-- 변경된 config, task pipline, 관련 import 파일의 문법 검사를 수행했다.
+- 변경된 config, task pipeline, 관련 import 파일의 문법 검사를 수행했다.
 - 이전 `macgyvbot.core.config`, `macgyvbot.core.pick_sequence` import 참조가 남지 않은 것을 확인했다.
 - 빈 `core/` 패키지를 제거했다.
 - `setup.py --name`으로 패키지 이름이 정상적으로 확인되는 것을 확인했다.
@@ -126,7 +126,7 @@
 - README의 패키지 구조를 새 model control 구조에 맞게 수정했다.
 
 확인:
-- 변경된 model control, task pipline, main node 파일의 문법 검사를 수행했다.
+- 변경된 model control, task pipeline, main node 파일의 문법 검사를 수행했다.
 - 이전 `macgyvbot.motion` import 참조가 남지 않은 것을 확인했다.
 - `find_packages()`에서 `macgyvbot.motion`이 제외되는 것을 확인했다.
 
@@ -141,13 +141,25 @@
 - 변경된 input mapping parser와 LLM command node의 문법 검사를 수행했다.
 - `find_packages()`에서 `macgyvbot.util.input_mapping`이 포함되는 것을 확인했다.
 
-## 14. Task pipline 폴더 이동
+## 14. Task pipeline 폴더 이동
 
-- 루트 패키지의 `task_pipline.py`를 `util/task_pipline/task_pipline.py`로 옮겼다.
+- 루트 패키지의 `task_pipeline.py`를 `util/task_pipeline/task_pipeline.py`로 옮겼다.
 - 새 위치에 맞춰 main node의 `PickSequenceRunner` import 경로를 수정했다.
-- README의 패키지 구조를 새 task pipline 위치에 맞게 수정했다.
+- README의 패키지 구조를 새 task pipeline 위치에 맞게 수정했다.
 
 확인:
-- 변경된 task pipline 파일과 main node의 문법 검사를 수행했다.
-- 루트 패키지의 `task_pipline.py`가 제거된 것을 확인했다.
-- `find_packages()`에서 `macgyvbot.util.task_pipline`이 포함되는 것을 확인했다.
+- 변경된 task pipeline 파일과 main node의 문법 검사를 수행했다.
+- 루트 패키지의 `task_pipeline.py`가 제거된 것을 확인했다.
+- `find_packages()`에서 `macgyvbot.util.task_pipeline`이 포함되는 것을 확인했다.
+
+## 15. Review 반영
+
+- task pipeline 오타가 실제 패키지 경로로 굳어지지 않도록 `task_pipeline/task_pipeline.py`로 정정했다.
+- `macgyvbot_node.py`에 흡수됐던 grasp point 선택 흐름을 `util/perception/grasp_point_selector.py`로 다시 분리했다.
+- depth pixel to base 변환 로직을 `util/perception/depth_projection.py`로 다시 분리했다.
+- main node는 ROS wiring, 상태 수신, frame loop, pick 시작 요청 중심으로 축소했다.
+
+확인:
+- `python3 -m py_compile`로 변경된 Python 파일의 문법 검사를 수행했다.
+- `rg`로 task pipeline 오타 경로가 남지 않은 것을 확인했다.
+- `__init__.py` 파일 기준으로 `macgyvbot.util.task_pipeline`과 perception 하위 모듈이 패키지로 포함되는 것을 확인했다.
