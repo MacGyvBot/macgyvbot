@@ -53,7 +53,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "llm_model",
-                default_value="qwen2.5:0.5b",
+                default_value="gemma3:1b",
                 description="Ollama command parser에 사용할 로컬 LLM 모델명",
             ),
             DeclareLaunchArgument(

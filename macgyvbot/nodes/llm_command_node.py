@@ -80,7 +80,7 @@ class LlmCommandNode(Node):
             'ollama_url',
             'http://localhost:11434/api/generate',
         )
-        self.declare_parameter('model', 'qwen2.5:0.5b')
+        self.declare_parameter('model', 'gemma3:1b')
         self.declare_parameter('timeout_sec', 25.0)
         self.declare_parameter('min_confidence', 0.55)
         self.declare_parameter('use_local_parser', True)
