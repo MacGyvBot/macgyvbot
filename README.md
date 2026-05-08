@@ -15,7 +15,6 @@ macgyvbot/
 │   ├── macgyvbot_node.py                # ROS wiring, parameter, frame loop
 │   ├── stt_node.py                      # Google STT 기반 /stt_text 발행
 │   ├── llm_command_node.py              # STT text -> tool command, /target_label
-│   ├── voice_command_ui_node.py         # 터미널 기반 음성 명령 UI
 │   └── voice_command_gui_node.py        # PyQt 기반 음성 명령 GUI
 ├── core/
 │   ├── config.py                        # topic, frame, safety offset, grasp mode
@@ -154,7 +153,7 @@ ros2 launch macgyvbot macgyvbot.launch.py grasp_point_mode:=vlm
 
 VLM 모드는 YOLO가 검출한 객체 crop에서 grid 기반 grasp region을 선택한 뒤 depth로 grasp pixel을 보정합니다. VLM 추론 또는 depth 보정이 실패하면 기존 중심점 방식으로 fallback합니다.
 
-`macgyvbot.launch.py`는 로봇 메인 노드, hand grasp detection, STT, LLM command node를 함께 실행합니다. CLI UI는 로그와 입력이 섞이지 않도록 별도 터미널에서 실행합니다.
+`macgyvbot.launch.py`는 로봇 메인 노드, hand grasp detection, STT, LLM command node를 함께 실행합니다. GUI 채팅창은 로그와 입력이 섞이지 않도록 별도 터미널에서 실행합니다.
 
 ### Terminal 4: Ollama 서버 실행
 
@@ -167,28 +166,20 @@ curl -fsSL https://ollama.com/install.sh | sh
 ```
 
 ```bash
-ollama pull qwen2.5:0.5b
+ollama pull gemma3:1b
 ollama serve
 ```
 
-### Terminal 5: 음성 명령 CLI UI 실행
+### Terminal 5: 음성 명령 GUI 실행
 
 ```bash
 source /opt/ros/humble/setup.bash
 source ~/ros2_ws/install/setup.bash
 
-ros2 run macgyvbot voice_command_ui_node
-```
-
-CLI UI는 `/stt_text`, `/command_feedback`, `/tool_command`, `/target_label`을 확인하며 사용자 입력도 `/stt_text`로 발행합니다.
-
-GUI 채팅창을 사용할 경우:
-
-```bash
 ros2 run macgyvbot voice_command_gui_node
 ```
 
-GUI 실행에 PyQt5가 필요합니다.
+GUI는 `/stt_text`, `/command_feedback`, `/tool_command`, `/target_label`을 확인하며 사용자 입력도 `/stt_text`로 발행합니다. GUI 실행에 PyQt5가 필요합니다.
 
 ```bash
 sudo apt install python3-pyqt5
@@ -205,7 +196,7 @@ You > 망치 줘
 흐름:
 
 ```text
-voice_command_ui_node 또는 stt_node
+voice_command_gui_node 또는 stt_node
   -> /stt_text
   -> llm_command_node
   -> /tool_command
@@ -213,7 +204,7 @@ voice_command_ui_node 또는 stt_node
   -> macgyvbot
 ```
 
-마이크 STT 없이 CLI 입력만 테스트하려면 Terminal 3에서 STT를 끄고 실행합니다.
+마이크 STT 없이 GUI 입력만 테스트하려면 Terminal 3에서 STT를 끄고 실행합니다.
 
 ```bash
 ros2 launch macgyvbot macgyvbot.launch.py use_stt:=false
@@ -231,7 +222,7 @@ ros2 topic pub --once /target_label std_msgs/msg/String "{data: screwdriver}"
 
 ## 음성 명령 입력만 테스트
 
-마이크 STT 없이 CLI 입력만 확인할 때는 `macgyvbot.launch.py`에서 STT를 끄고 실행한 뒤, CLI UI를 별도 터미널에서 실행합니다.
+마이크 STT 없이 GUI 입력만 확인할 때는 `macgyvbot.launch.py`에서 STT를 끄고 실행한 뒤, GUI를 별도 터미널에서 실행합니다.
 
 ```bash
 source /opt/ros/humble/setup.bash
@@ -243,7 +234,7 @@ ros2 launch macgyvbot macgyvbot.launch.py use_stt:=false
 다른 터미널:
 
 ```bash
-ros2 run macgyvbot voice_command_ui_node
+ros2 run macgyvbot voice_command_gui_node
 ```
 
 ## 잡기 인식 노드 실행

@@ -54,7 +54,6 @@ setup(
                 'hand_grasp_detection = macgyvbot.hand_grasp_detection_node:main',
                 'stt_node = macgyvbot.nodes.stt_node:main',
                 'llm_command_node = macgyvbot.nodes.llm_command_node:main',
-                'voice_command_ui_node = macgyvbot.nodes.voice_command_ui_node:main',
                 'voice_command_gui_node = macgyvbot.nodes.voice_command_gui_node:main',
             ],
     },

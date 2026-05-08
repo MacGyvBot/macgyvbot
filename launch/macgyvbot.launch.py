@@ -44,7 +44,7 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "use_voice_command",
                 default_value="true",
-                description="STT/CLI UI/LLM 명령 해석 노드를 함께 실행할지 여부",
+                description="STT/LLM 명령 해석 노드를 함께 실행할지 여부",
             ),
             DeclareLaunchArgument(
                 "use_stt",
