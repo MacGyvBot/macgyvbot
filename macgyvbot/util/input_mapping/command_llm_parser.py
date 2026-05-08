@@ -12,8 +12,10 @@ from macgyvbot.util.input_mapping.command_hard_parser import (
 
 ALLOWED_TOOLS = {
     'screwdriver': '드라이버. 나사를 조이거나 푸는 공구.',
+    'drill': '드릴. 구멍을 뚫거나 전동으로 나사를 조이는 공구.',
     'pliers': '플라이어 또는 펜치. 물체를 집거나 잡는 공구.',
     'hammer': '망치. 못을 박거나 두드리는 공구.',
+    'wrench': '렌치 또는 스패너. 볼트와 너트를 조이거나 푸는 공구.',
     'tape_measure': '줄자. 길이나 치수를 재는 공구.',
     'unknown': '공구를 확정할 수 없음.',
 }
@@ -318,8 +320,10 @@ class CommandLlmParser:
 
 허용 tool_name:
 - screwdriver: {ALLOWED_TOOLS['screwdriver']}
+- drill: {ALLOWED_TOOLS['drill']}
 - pliers: {ALLOWED_TOOLS['pliers']}
 - hammer: {ALLOWED_TOOLS['hammer']}
+- wrench: {ALLOWED_TOOLS['wrench']}
 - tape_measure: {ALLOWED_TOOLS['tape_measure']}
 - unknown: {ALLOWED_TOOLS['unknown']}
 
@@ -336,7 +340,9 @@ class CommandLlmParser:
 - action은 허용 목록 중 하나만 사용한다.
 - confidence는 0.0부터 1.0 사이 숫자다.
 - "그 조이는 거", "나사 돌리는 거"는 screwdriver에 가깝다.
+- "구멍 뚫는 거", "전동 드릴"은 drill에 가깝다.
 - "못 박는 거", "두드리는 거"는 hammer에 가깝다.
+- "볼트 조이는 거", "스패너 같은 거"는 wrench에 가깝다.
 - "길이 재는 거", "치수 재는 거"는 tape_measure에 가깝다.
 - "집는 거", "잡는 거", "펜치 같은 거"는 pliers에 가깝다.
 
@@ -349,6 +355,9 @@ class CommandLlmParser:
 
 입력: 길이 재는 거 줘
 출력: {{"tool_name":"tape_measure","action":"bring","confidence":0.82}}
+
+입력: 볼트 조이는 거 가져와
+출력: {{"tool_name":"wrench","action":"bring","confidence":0.83}}
 
 입력: 멈춰
 출력: {{"tool_name":"unknown","action":"stop","confidence":0.90}}

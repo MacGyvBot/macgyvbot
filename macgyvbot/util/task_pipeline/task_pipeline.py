@@ -114,6 +114,12 @@ class PickSequenceRunner:
             )
             if not ok:
                 log.error("안전 이동 높이 확보 실패. Pick 시퀀스 중단")
+                self.state._publish_robot_status(
+                    "failed",
+                    message="안전 이동 높이 확보 실패",
+                    reason="travel_z_plan_failed",
+                    command=self.state.current_command,
+                )
                 return
 
             log.info("2단계: 안전 높이에서 XY 수평 이동")
@@ -129,12 +135,24 @@ class PickSequenceRunner:
             )
             if not ok:
                 log.error("XY 이동 실패. Pick 시퀀스 중단")
+                self.state._publish_robot_status(
+                    "failed",
+                    message="XY 이동 실패",
+                    reason="xy_move_failed",
+                    command=self.state.current_command,
+                )
                 return
 
             if vlm_yaw_deg is not None:
                 ok = self.motion.rotate_wrist_by_yaw_deg(vlm_yaw_deg, log)
                 if not ok:
                     log.error("J6 회전 실패. Pick 시퀀스 중단")
+                    self.state._publish_robot_status(
+                        "failed",
+                        message="J6 회전 실패",
+                        reason="wrist_rotation_failed",
+                        command=self.state.current_command,
+                    )
                     return
                 ori = current_ee_orientation(self.robot)
 
@@ -151,6 +169,12 @@ class PickSequenceRunner:
             )
             if not ok:
                 log.error("상단 접근 실패. Pick 시퀀스 중단")
+                self.state._publish_robot_status(
+                    "failed",
+                    message="상단 접근 실패",
+                    reason="approach_failed",
+                    command=self.state.current_command,
+                )
                 return
 
             if should_descend_to_grasp:
@@ -167,6 +191,12 @@ class PickSequenceRunner:
                 )
                 if not ok:
                     log.error("파지 높이 하강 실패. Pick 시퀀스 중단")
+                    self.state._publish_robot_status(
+                        "failed",
+                        message="파지 높이 하강 실패",
+                        reason="grasp_descent_failed",
+                        command=self.state.current_command,
+                    )
                     return
             else:
                 log.info("4단계: approach_z와 grasp_z가 같아 추가 하강 생략")
@@ -188,6 +218,12 @@ class PickSequenceRunner:
             )
             if not ok:
                 log.error("안전 높이 복귀 실패")
+                self.state._publish_robot_status(
+                    "failed",
+                    message="안전 높이 복귀 실패",
+                    reason="lift_failed",
+                    command=self.state.current_command,
+                )
                 return
 
             log.info("7단계: Home XY 복귀")
@@ -203,18 +239,40 @@ class PickSequenceRunner:
             )
             if not ok:
                 log.error("Home 복귀 실패")
+                self.state._publish_robot_status(
+                    "failed",
+                    message="Home 복귀 실패",
+                    reason="home_return_failed",
+                    command=self.state.current_command,
+                )
                 return
 
             log.info("8단계: 사용자 잡기 인식 대기")
+            self.state._publish_robot_status(
+                "waiting_handoff",
+                message="사용자 잡기 인식을 기다립니다.",
+                command=self.state.current_command,
+            )
             if not self.wait_for_human_grasp(log):
                 log.error("사용자 잡기 인식 실패. 원래 공구 위치로 반환합니다.")
-                self.return_tool_to_original_position(
+                returned = self.return_tool_to_original_position(
                     target_x,
                     target_y,
                     travel_z,
                     grasp_z,
                     ori,
                     log,
+                )
+                status = "returned" if returned else "failed"
+                self.state._publish_robot_status(
+                    status,
+                    message=(
+                        "사용자 잡기 인식 실패로 공구를 원래 위치에 반환했습니다."
+                        if returned
+                        else "사용자 잡기 인식 실패 후 원위치 반환에도 실패했습니다."
+                    ),
+                    reason="handoff_timeout",
+                    command=self.state.current_command,
                 )
                 return
 
@@ -223,11 +281,17 @@ class PickSequenceRunner:
             time.sleep(0.8)
 
             log.info("Pick 시퀀스 완료")
+            self.state._publish_robot_status(
+                "done",
+                message="공구 전달 동작이 완료되었습니다.",
+                command=self.state.current_command,
+            )
 
         finally:
             self.state.picking = False
             self.state.target_label = None
             self.state.human_grasped_tool = False
+            self.state.current_command = None
 
     def return_tool_to_original_position(
         self,

@@ -6,9 +6,6 @@ from macgyvbot.config.config import (
     GRASP_POINT_MODE_CENTER,
     GRASP_POINT_MODE_VLM,
 )
-from macgyvbot.util.grasp_mechanism.grasp_by_bbox_center import (
-    select_bbox_center_pixel,
-)
 
 
 class GraspPointSelector:
@@ -44,7 +41,14 @@ class GraspPointSelector:
 
             self.logger.warn("VLM grasp point 실패. box 중심점으로 대체합니다.")
 
-        return select_bbox_center_pixel(bbox)
+        return self._select_bbox_center_pixel(bbox)
+
+    @staticmethod
+    def _select_bbox_center_pixel(bbox):
+        """Return the center pixel of an object bounding box."""
+        u = int((bbox[0] + bbox[2]) / 2)
+        v = int((bbox[1] + bbox[3]) / 2)
+        return u, v, GRASP_POINT_MODE_CENTER, None
 
     def _select_vlm_grasp_pixel(
         self,

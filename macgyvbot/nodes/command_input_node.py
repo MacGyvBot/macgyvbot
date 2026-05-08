@@ -1,8 +1,8 @@
-"""Unified voice-command node for macgyvbot.
+"""Unified command-input node for macgyvbot.
 
 - 마이크 STT와 GUI 입력을 하나의 채팅 흐름으로 수집한다.
 - 입력 텍스트를 local parser -> LLM fallback 순서로 해석한다.
-- 결과를 `/tool_command`, `/command_feedback`, `/target_label`로 발행한다.
+- 결과를 `/tool_command`, `/command_feedback`로 발행한다.
 """
 
 import json
@@ -22,9 +22,9 @@ from macgyvbot.util.input_mapping.command_llm_parser import CommandLlmParser
 from macgyvbot.util.stt.speech_to_text import SpeechToTextService
 
 
-class SttNode(Node):
+class CommandInputNode(Node):
     def __init__(self):
-        super().__init__('stt_node')
+        super().__init__('command_input_node')
 
         self.declare_parameter('use_gui', True)
         self.declare_parameter('enable_microphone', True)
@@ -39,7 +39,6 @@ class SttNode(Node):
         self.declare_parameter('compat_topic', '/stt_result')
         self.declare_parameter('publish_compat_topic', True)
 
-        self.declare_parameter('target_label_topic', '/target_label')
         self.declare_parameter('tool_command_topic', '/tool_command')
         self.declare_parameter('command_feedback_topic', '/command_feedback')
         self.declare_parameter('robot_status_topic', '/robot_task_status')
@@ -73,7 +72,6 @@ class SttNode(Node):
 
         stt_text_topic = self.get_parameter('stt_text_topic').value
         compat_topic = self.get_parameter('compat_topic').value
-        target_label_topic = self.get_parameter('target_label_topic').value
         tool_command_topic = self.get_parameter('tool_command_topic').value
         command_feedback_topic = self.get_parameter('command_feedback_topic').value
         robot_status_topic = self.get_parameter('robot_status_topic').value
@@ -88,13 +86,11 @@ class SttNode(Node):
             if self._publish_compat
             else None
         )
-        self._target_label_pub = self.create_publisher(String, target_label_topic, 10)
         self._tool_command_pub = self.create_publisher(String, tool_command_topic, 10)
         self._feedback_pub = self.create_publisher(String, command_feedback_topic, 10)
 
         self.create_subscription(String, stt_text_topic, self._text_cb, 10)
         self.create_subscription(String, tool_command_topic, self._tool_command_cb, 10)
-        self.create_subscription(String, target_label_topic, self._target_label_cb, 10)
         self.create_subscription(String, command_feedback_topic, self._feedback_cb, 10)
         self.create_subscription(String, robot_status_topic, self._robot_status_cb, 10)
 
@@ -135,12 +131,12 @@ class SttNode(Node):
 
         self.get_logger().info(f'입력 topic: {stt_text_topic}')
         self.get_logger().info(
-            f'출력 topic: {tool_command_topic}, {target_label_topic}, {command_feedback_topic}'
+            f'출력 topic: {tool_command_topic}, {command_feedback_topic}'
         )
         if self._publish_compat:
             self.get_logger().info(f'수업 예제 호환 topic: {compat_topic}')
         if self._use_gui:
-            self.get_logger().info('GUI 모드 활성화: stt_node가 UI를 직접 연결합니다.')
+            self.get_logger().info('GUI 모드 활성화: command_input_node가 UI를 직접 연결합니다.')
 
     def attach_window(self, window):
         self.window = window
@@ -235,11 +231,6 @@ class SttNode(Node):
         command_msg.data = json.dumps(command, ensure_ascii=False)
         self._tool_command_pub.publish(command_msg)
 
-        if command.get('action') == 'bring':
-            target_msg = String()
-            target_msg.data = command.get('tool_name', 'unknown')
-            self._target_label_pub.publish(target_msg)
-
     def _publish_feedback_payload(self, payload):
         msg = String()
         msg.data = json.dumps(payload, ensure_ascii=False)
@@ -266,11 +257,6 @@ class SttNode(Node):
             f'parsed: tool={tool_name}, action={action}, '
             f'method={method}, confidence={confidence_text}'
         )
-
-    def _target_label_cb(self, msg):
-        self._last_target_label = msg.data
-        self._append_bot(f'{msg.data} pick 명령을 로봇에게 보냈습니다.')
-        self._set_status(f'실행 요청: {msg.data}')
 
     def _feedback_cb(self, msg):
         try:
@@ -327,12 +313,19 @@ class SttNode(Node):
         )
         message = status.get('message', '')
 
-        if state in ('done', 'completed', 'success'):
+        if state in ('accepted', 'searching', 'picking', 'waiting_handoff'):
+            self._last_target_label = tool_name
+            self._append_system(message or f'{tool_name}: {state}')
+            self._set_status(message or state)
+        elif state in ('done', 'completed', 'success'):
             self._append_bot(message or f'{tool_name} 전달 동작이 완료되었습니다.')
             self._set_status('완료')
         elif state in ('failed', 'error'):
             self._append_bot(message or f'{tool_name} 동작 중 문제가 발생했습니다.')
             self._set_status('실패')
+        elif state in ('busy', 'cancelled', 'returned', 'rejected'):
+            self._append_bot(message or f'{tool_name}: {state}')
+            self._set_status(state)
         else:
             self._append_system(message or f'{tool_name}: {state}')
 
@@ -360,7 +353,7 @@ class SttNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = SttNode()
+    node = CommandInputNode()
 
     if node._use_gui:
         app = QApplication(sys.argv)

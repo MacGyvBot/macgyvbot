@@ -13,7 +13,7 @@ macgyvbot/
 ├── nodes/
 │   ├── macgyvbot_node.py                # ROS wiring, parameter, frame loop
 │   ├── hand_grasp_detection_node.py     # hand grasp detection ROS wiring
-│   └── stt_node.py                      # STT + GUI + 명령 해석 통합 노드
+│   └── command_input_node.py            # STT + GUI + 명령 해석 통합 노드
 ├── config/
 │   └── config.py                        # topic, frame, safety offset, grasp mode
 ├── util/
@@ -31,14 +31,13 @@ macgyvbot/
 │   │   ├── utils.py                     # geometry/depth helper
 │   │   └── visualization.py             # hand grasp overlay drawing
 │   ├── grasp_mechanism/
-│   │   ├── grasp_by_bbox_center.py      # bbox 중심점 기반 grasp point 선택
 │   │   └── grasp_by_vlm.py              # VLM 기반 grasp point 선택
 │   ├── input_mapping/
 │   │   └── command_hard_parser.py       # LLM fallback 전 alias/fuzzy parser
 │   └── task_pipeline/
 │       └── task_pipeline.py             # pick, handoff, 원위치 반환 시퀀스
 ├── ui/
-│   └── debug_windows.py                 # OpenCV debug window 출력
+│   └── voice_command_window.py          # PyQt command input window
 ```
 
 기존 executable 이름은 `macgyvbot`으로 유지되며, entrypoint는 `nodes/macgyvbot_node.py`를 직접 사용합니다.
@@ -185,10 +184,10 @@ ollama serve
 source /opt/ros/humble/setup.bash
 source ~/ros2_ws/install/setup.bash
 
-ros2 run macgyvbot stt_node
+ros2 run macgyvbot command_input_node
 ```
 
-통합 노드는 GUI 채팅 입력과 마이크 STT를 함께 처리하며, `/tool_command`, `/command_feedback`, `/target_label`을 발행합니다.
+통합 노드는 GUI 채팅 입력과 마이크 STT를 함께 처리하며, `/tool_command`, `/command_feedback`을 발행합니다. 로봇 실행 상태는 `/robot_task_status`로 GUI에 돌아옵니다.
 
 GUI 실행에 PyQt5가 필요합니다.
 
@@ -207,12 +206,12 @@ You > 망치 줘
 흐름:
 
 ```text
-stt_node (GUI + STT input)
+command_input_node (GUI + STT input)
   -> /stt_text
   -> command parser (hard parser -> LLM fallback)
   -> /tool_command
-  -> /target_label
   -> macgyvbot
+  -> /robot_task_status
 ```
 
 마이크 STT 없이 키보드 입력만 테스트하려면 `use_stt:=false`로 실행합니다.
@@ -229,7 +228,7 @@ ros2 launch macgyvbot macgyvbot.launch.py use_stt:=false
 ros2 topic pub --once /target_label std_msgs/msg/String "{data: screwdriver}"
 ```
 
-사용 가능한 공구 label은 학습한 YOLO 모델의 class 이름과 같아야 합니다. 현재 예시는 `hammer`, `screwdriver`, `pliers`, `tape_measure`를 기준으로 합니다.
+사용 가능한 공구 label은 학습한 YOLO 모델의 class 이름과 같아야 합니다. 현재 명령 파서는 `drill`, `hammer`, `pliers`, `screwdriver`, `tape_measure`, `wrench`를 기준으로 합니다.
 
 ## 음성 명령 입력만 테스트
 

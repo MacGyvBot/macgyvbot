@@ -213,3 +213,45 @@
 
 확인:
 - `python3 -m py_compile macgyvbot/nodes/stt_node.py macgyvbot/util/stt/speech_to_text.py macgyvbot/util/input_mapping/command_llm_parser.py macgyvbot/ui/voice_command_window.py`로 문법 검사를 통과했다.
+
+## 20. STT 노드를 command input 노드로 이름 변경
+
+- 통합 입력 노드 파일명을 `macgyvbot/nodes/stt_node.py`에서 `macgyvbot/nodes/command_input_node.py`로 변경했다.
+- ROS 노드 클래스와 노드 이름을 `CommandInputNode`, `command_input_node`로 변경했다.
+- `setup.py` console script를 `command_input_node = macgyvbot.nodes.command_input_node:main`으로 갱신했다.
+- `launch/macgyvbot.launch.py`에서 실행 파일과 노드 이름을 `command_input_node`로 갱신했다.
+- README의 노드 구조/실행 명령/흐름 이름을 새 이름에 맞게 수정했다.
+
+확인:
+- `python3 -m py_compile macgyvbot/nodes/command_input_node.py`로 문법 검사를 통과했다.
+
+## 21. Python config를 YAML 설정으로 전환 (철회됨)
+
+> 이 변경은 22번 항목에서 되돌렸다. 현재 설정은 `macgyvbot/config/config.py`를 유지한다.
+
+- `macgyvbot/config/config.py` 값을 `config/config.yaml`로 옮겨 ROS install share에 함께 배포되도록 정리했다.
+- `macgyvbot/util/runtime_config.py`를 추가해 YAML 값을 기존 상수 형태로 로드하도록 구성했다.
+- 기존 `macgyvbot.config.config` import를 모두 `macgyvbot.util.runtime_config`로 변경했다.
+- `macgyvbot/config/__init__.py`와 `macgyvbot/config/config.py`를 제거했다.
+- YAML 로딩 의존성으로 `PyYAML`/`python3-yaml`을 추가했다.
+
+확인:
+- `runtime_config` import로 주요 값과 radians 변환을 확인했다.
+- `python3 -m py_compile`로 변경된 Python 파일 문법 검사를 통과했다.
+
+## 22. Config rollback 및 명령/상태 파이프라인 정리
+
+- YAML 설정 전환을 되돌리고 `macgyvbot/config/config.py` Python 상수 구성을 유지하도록 복원했다.
+- `macgyvbot/util/runtime_config.py`, `config/config.yaml`, YAML 의존성(`PyYAML`, `python3-yaml`)을 제거했다.
+- `grasp_by_bbox_center.py`의 단일 bbox center 선택 함수를 `util/perception/grasp_point_selector.py` 내부 helper로 합치고 파일을 제거했다.
+- `ui/debug_windows.py`의 작은 OpenCV window wrapper를 `macgyvbot_node.py` 내부 private helper로 합치고 파일을 제거했다.
+- `command_input_node`는 `/tool_command`와 `/command_feedback`만 발행하도록 정리하고, `/target_label`은 수동 호환 입력 경로로 남겼다.
+- `macgyvbot_node`가 `/tool_command`를 직접 구독해 `bring`, `release`, `stop` 명령을 처리하도록 연결했다.
+- `macgyvbot_node`가 `/robot_task_status`를 발행해 GUI가 실제 로봇 실행 상태(`accepted`, `searching`, `picking`, `waiting_handoff`, `done`, `failed`, `busy`, `returned`, `cancelled`)를 받을 수 있게 했다.
+- `PickSequenceRunner`가 주요 실패/완료/핸드오프 대기/원위치 반환 상태를 `/robot_task_status`로 보고하도록 연결했다.
+- command parser와 hand grasp tool class 목록을 `drill`, `hammer`, `pliers`, `screwdriver`, `tape_measure`, `wrench` 기준으로 맞췄다.
+- README의 구조도와 명령 흐름을 `/tool_command` 중심 파이프라인으로 갱신했다.
+
+확인:
+- `rg`로 삭제된 `runtime_config`, `debug_windows`, `grasp_by_bbox_center` 실행 참조가 남지 않았는지 확인했다.
+- `python3 -m py_compile`로 변경된 Python 파일 문법 검사를 수행했다.

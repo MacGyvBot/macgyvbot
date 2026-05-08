@@ -7,7 +7,14 @@ from typing import Iterable, Optional, Tuple
 Rect = Tuple[int, int, int, int]
 
 DEFAULT_MODEL_PATH = "yolov11_best.pt"
-DEFAULT_TOOL_CLASSES = ("drill", "hammer", "pliers", "screwdriver", "wrench")
+DEFAULT_TOOL_CLASSES = (
+    "drill",
+    "hammer",
+    "pliers",
+    "screwdriver",
+    "tape_measure",
+    "wrench",
+)
 
 
 @dataclass(frozen=True)

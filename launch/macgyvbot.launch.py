@@ -90,7 +90,7 @@ def generate_launch_description():
                         "publish_annotated": True,
                         "display": False,
                         "yolo_model": LaunchConfiguration("yolo_model"),
-                        "tool_classes": "drill,hammer,pliers,screwdriver,wrench",
+                        "tool_classes": "drill,hammer,pliers,screwdriver,tape_measure,wrench",
                         "yolo_conf": 0.20,
                         "yolo_imgsz": 640,
                         "max_hands": 2,
@@ -101,8 +101,8 @@ def generate_launch_description():
             ),
             Node(
                 package="macgyvbot",
-                executable="stt_node",
-                name="stt_node",
+                executable="command_input_node",
+                name="command_input_node",
                 output="screen",
                 parameters=[
                     {
