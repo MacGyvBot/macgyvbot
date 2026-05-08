@@ -4,6 +4,7 @@ numpy
 scipy
 ultralytics
 pyrealsense2
+PyQt5
 torch
 transformers>=5.8.0
 tokenizers>=0.22.2

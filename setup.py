@@ -52,7 +52,10 @@ setup(
         'console_scripts': [
             'macgyvbot = macgyvbot.macgyvbot:main',
             'hand_grasp_detection = macgyvbot.hand_grasp_detection_node:main',
-            'stt_node = macgyvbot.stt_node:main',
+            'stt_node = macgyvbot.voice_command.stt_node:main',
+            'llm_command_node = macgyvbot.voice_command.llm_command_node:main',
+            'voice_command_ui_node = macgyvbot.voice_command.voice_command_ui_node:main',
+            'voice_command_gui_node = macgyvbot.voice_command.voice_command_gui_node:main',
         ],
     },
 )
