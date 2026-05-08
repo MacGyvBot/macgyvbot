@@ -2,7 +2,7 @@
 
 import cv2
 
-from macgyvbot.core.config import HAND_GRASP_WINDOW_NAME, ROBOT_WINDOW_NAME
+from macgyvbot.config.config import HAND_GRASP_WINDOW_NAME, ROBOT_WINDOW_NAME
 
 
 class DebugWindows:

@@ -9,9 +9,9 @@ from ultralytics import YOLO
 def resolve_model_path(model_name):
     package_share = Path(get_package_share_directory("macgyvbot"))
     candidates = [
-        package_share / "models" / model_name,
+        package_share / "weights" / model_name,
         package_share / model_name,
-        Path.cwd() / "models" / model_name,
+        Path.cwd() / "weights" / model_name,
         Path.cwd() / model_name,
     ]
 

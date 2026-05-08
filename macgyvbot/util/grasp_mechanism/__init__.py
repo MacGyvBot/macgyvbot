@@ -1,0 +1,1 @@
+"""Grasp point selection mechanisms."""

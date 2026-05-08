@@ -1,4 +1,4 @@
-"""Small VLM wrapper kept separate from the robot control loop.
+"""VLM-based grasp point selection helpers.
 
 The default model is intentionally modest so it can run on a consumer GPU
 class machine, while still being useful for target/candidate selection.
@@ -14,11 +14,17 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any
 
+import cv2
 import numpy as np
 import torch
 from PIL import Image, ImageDraw, ImageFont
 from transformers import AutoProcessor
 from ament_index_python.packages import get_package_share_directory
+
+from macgyvbot.config.config import (
+    GRASP_POINT_MODE_VLM,
+    VLM_GRASP_GRID_SIZES,
+)
 
 try:
     # Available in newer transformers.
@@ -31,14 +37,16 @@ except ImportError:
 DEFAULT_VLM_MODEL = "HuggingFaceTB/SmolVLM2-2.2B-Instruct"
 DEFAULT_MAX_IMAGE_SIZE = 640
 DEFAULT_GRID_SIZES = ((3, 3), (4, 4), (5, 5))
+
+
 def _default_local_model_root():
     # In ROS install space, data files live under share/<package>/...
     # Fallback to source-tree relative path for editable/dev execution.
     try:
         share_dir = Path(get_package_share_directory("macgyvbot"))
-        return share_dir / "models" / "vlm"
+        return share_dir / "weights" / "vlm"
     except Exception:
-        return Path(__file__).resolve().parents[1] / "models" / "vlm"
+        return Path(__file__).resolve().parents[2] / "weights" / "vlm"
 
 
 DEFAULT_LOCAL_MODEL_ROOT = _default_local_model_root()
@@ -87,6 +95,98 @@ class DepthRefinementResult:
     point: tuple[int, int]
     depth_m: float
     radius_px: int
+
+
+class VLMGraspMechanism:
+    """Select grasp pixels using a VLM and optional depth refinement."""
+
+    def __init__(self, logger):
+        self.logger = logger
+        self.model = None
+
+    def select_grasp_pixel(
+        self,
+        bbox,
+        label,
+        color_image,
+        depth_image,
+        intrinsics,
+        target_label,
+    ):
+        x1, y1, x2, y2 = self.clamp_bbox_to_image(bbox, color_image)
+
+        if x2 <= x1 or y2 <= y1:
+            self.logger.warn("VLM crop bbox가 비어 있습니다.")
+            return None
+
+        self._ensure_model_loaded()
+
+        crop_bgr = color_image[y1:y2, x1:x2]
+        crop_rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
+        crop_image = Image.fromarray(crop_rgb)
+
+        try:
+            result = self.model.select_grasp_region(
+                crop_image,
+                object_label=label,
+                user_request=target_label,
+                grid_sizes=VLM_GRASP_GRID_SIZES,
+            )
+        except Exception as exc:
+            self.logger.warn(f"VLM grasp point 추론 실패: {exc}")
+            return None
+
+        u = x1 + int(round(result.point[0]))
+        v = y1 + int(round(result.point[1]))
+        source = GRASP_POINT_MODE_VLM
+
+        refined = VLMModel.refine_grasp_point_with_depth(
+            depth_image,
+            (u, v),
+            focal_px=(intrinsics["fx"] + intrinsics["fy"]) / 2.0,
+        )
+        if refined is not None:
+            u, v = refined.point
+            source = f"{GRASP_POINT_MODE_VLM}+depth"
+
+        self.logger.info(
+            f"VLM grasp point 선택: pixel=({u}, {v}), "
+            f"angle={result.angle_deg:.1f}deg, "
+            f"rpy_deg={result.orientation_rpy_deg}, source={source}"
+        )
+
+        return u, v, source, result.orientation_rpy_deg
+
+    def _ensure_model_loaded(self):
+        if self.model is not None:
+            return
+
+        self.logger.info("VLM grasp 모델을 lazy load 준비합니다.")
+        self.model = VLMModel()
+        runtime = self.model.get_runtime_info()
+        self.logger.info(
+            "VLM runtime: "
+            f"device={runtime['device']}, "
+            f"dtype={runtime['dtype']}, "
+            f"local_weights={runtime['using_local_weights']}, "
+            f"source={runtime['model_source']}"
+        )
+        if runtime["device"] == "cuda":
+            self.logger.info("VLM은 CUDA를 사용합니다.")
+        else:
+            self.logger.warn("VLM이 CUDA를 사용하지 않습니다. (CPU 실행)")
+        self.logger.info("VLM 가중치 로드 시작...")
+        self.model.load()
+        self.logger.info("VLM 가중치 로드 완료.")
+
+    @staticmethod
+    def clamp_bbox_to_image(bbox, image):
+        height, width = image.shape[:2]
+        x1 = max(0, min(width - 1, int(math.floor(bbox[0]))))
+        y1 = max(0, min(height - 1, int(math.floor(bbox[1]))))
+        x2 = max(0, min(width, int(math.ceil(bbox[2]))))
+        y2 = max(0, min(height, int(math.ceil(bbox[3]))))
+        return x1, y1, x2, y2
 
 
 class VLMModel:
@@ -185,7 +285,7 @@ class VLMModel:
         self.model.eval()
 
     def _resolve_model_source(self):
-        # Prefer pre-downloaded local weights under models/vlm/<org>__<model>.
+        # Prefer pre-downloaded local weights under weights/vlm/<org>__<model>.
         local_dir = self.local_model_root / self.model_id.replace("/", "__")
         if local_dir.exists():
             return str(local_dir)

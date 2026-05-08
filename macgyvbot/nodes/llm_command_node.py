@@ -23,7 +23,10 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
 
-from macgyvbot.voice_command.command_parser import find_action, find_tool
+from macgyvbot.util.input_mapping.command_hard_parser import (
+    find_action,
+    find_tool,
+)
 
 
 ALLOWED_TOOLS = {

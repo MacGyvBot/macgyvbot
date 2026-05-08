@@ -7,7 +7,7 @@ from huggingface_hub import snapshot_download
 
 
 MODEL_ID = "HuggingFaceTB/SmolVLM2-2.2B-Instruct"
-DEST_ROOT = Path(__file__).resolve().parents[1] / "models" / "vlm"
+DEST_ROOT = Path(__file__).resolve().parent / "vlm"
 
 
 def main() -> None:

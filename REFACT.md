@@ -1,0 +1,153 @@
+# 리팩토링 기록
+
+## 1. Weight 디렉터리 정리
+
+- 저장소의 weight 보관 디렉터리를 `models/`에서 `weights/`로 변경했다.
+- VLM 다운로드 스크립트를 `scripts/download_vlm_weights.py`에서 `weights/download_vlm_weights.py`로 옮겼다.
+- VLM 다운로드 위치를 `weights/vlm/` 기준으로 변경했다.
+- 패키지 설치 시 weight 파일이 `share/macgyvbot/weights` 아래에 설치되도록 수정했다.
+- YOLO와 VLM의 런타임 경로 탐색 기준을 `weights/`로 변경했다.
+- 더 이상 사용하지 않는 `scripts/` 디렉터리를 제거했다.
+
+확인:
+- 런타임 경로에서 `models/`와 제거된 `scripts/` 디렉터리 참조가 남지 않은 것을 확인했다.
+- 변경된 Python 파일의 문법 검사를 수행했다.
+- `setup.py --name`으로 패키지 이름이 정상적으로 확인되는 것을 확인했다.
+
+## 2. 중복 launch 파일 정리
+
+- `hand_grasp_detection.launch.py`의 설정이 `macgyvbot.launch.py`에 동일하게 포함되어 있는 것을 확인했다.
+- 별도 launch 파일인 `launch/hand_grasp_detection.launch.py`를 제거했다.
+- README의 hand grasp detection 실행 예시를 `macgyvbot.launch.py` 기준으로 수정했다.
+
+확인:
+- 코드와 README에서 제거된 launch 파일을 실행 경로로 참조하지 않는 것을 확인했다.
+
+## 3. 문서 폴더 추가
+
+- 브랜치별 작업 설명을 담기 위한 `docs/` 폴더를 추가했다.
+- `docs/README.md`에 문서 작성 용도와 간단한 작성 기준을 정리했다.
+
+## 4. Hand grasp detection 경계 정리
+
+- hand grasp detection 노드를 `macgyvbot/nodes/` 아래로 이동했다.
+- 루트의 `hand_grasp_detection_node.py` wrapper는 사용처가 없어 제거했다.
+- depth 변환과 active hand 선택 로직을 `grasp_detection/utils.py`로 옮겼다.
+- overlay drawing 로직을 `grasp_detection/visualization.py`로 분리했다.
+- YOLO 모델 경로 해석은 `ToolDetector`가 담당하도록 중복 resolver를 제거했다.
+
+확인:
+- 변경된 hand grasp detection 관련 Python 파일의 문법 검사를 수행했다.
+- `setup.py --name`으로 패키지 이름이 정상적으로 확인되는 것을 확인했다.
+
+## 5. Grasp mechanism 모듈 분리
+
+- VLM 기반 grasp point 선택 파일을 `grasp_point_detection.py`에서 `grasp_mechanism/grasp_by_vlm.py`로 변경했다.
+- bbox 중심점 기반 grasp point 선택을 `grasp_mechanism/grasp_by_bbox_center.py`로 분리했다.
+- `grasp_mechanism/` 패키지 아래에 grasp point 선택 방식들을 묶었다.
+- VLM crop, 추론, depth refinement 절차를 `VLMGraspMechanism`으로 옮겼다.
+- `GraspPointSelector`는 선택 모드에 따라 grasp mechanism을 호출하는 역할만 하도록 줄였다.
+- VLM 파일 이동에 맞춰 source tree 기준 weight fallback 경로를 조정했다.
+
+확인:
+- 변경된 grasp mechanism 관련 Python 파일의 문법 검사를 수행했다.
+- 이전 `grasp_point_detection` import 참조가 남지 않은 것을 확인했다.
+
+## 6. Main node wrapper 제거
+
+- 루트의 `macgyvbot.py` wrapper가 실제 entrypoint에서 사용되지 않는 것을 확인했다.
+- `setup.py`는 이미 `macgyvbot.nodes.macgyvbot_node:main`을 직접 사용하고 있어 wrapper를 제거했다.
+- README의 패키지 구조와 executable 설명을 새 구조에 맞게 수정했다.
+
+## 7. Util 폴더 정리
+
+- 그리퍼 연결/제어 파일을 `onrobot.py`에서 `util/onrobot_gripper.py`로 옮겼다.
+- 로봇 작업공간 제한 파일을 `safety.py`에서 `util/robot_safezone.py`로 옮겼다.
+- 새 파일 위치에 맞춰 import 경로를 수정했다.
+- README의 패키지 구조에 `util/` 항목을 추가했다.
+
+확인:
+- 변경된 util 관련 Python 파일의 문법 검사를 수행했다.
+- 이전 `macgyvbot.onrobot`, `macgyvbot.safety` import 참조가 남지 않은 것을 확인했다.
+
+## 8. Util 하위 기능 폴더 정리
+
+- `grasp_detection/` 폴더를 hand grasp 전용 의미가 드러나도록 `util/hand_grasp/`로 옮겼다.
+- `grasp_mechanism/` 폴더를 `util/grasp_mechanism/` 아래로 옮겼다.
+- 새 위치에 맞춰 hand grasp node와 grasp point selector의 import 경로를 수정했다.
+- README의 패키지 구조를 새 util 하위 구조에 맞게 수정했다.
+
+확인:
+- 변경된 hand grasp와 grasp mechanism 관련 Python 파일의 문법 검사를 수행했다.
+- `find_packages()`에서 `macgyvbot.util.hand_grasp`와 `macgyvbot.util.grasp_mechanism`이 포함되는 것을 확인했다.
+
+## 9. Model control 폴더 추가
+
+- `util/model_control/` 폴더를 추가했다.
+- `util/onrobot_gripper.py`와 `util/robot_safezone.py`를 `util/model_control/` 아래로 옮겼다.
+- 새 위치에 맞춰 gripper와 safezone import 경로를 수정했다.
+- README의 패키지 구조를 새 model control 하위 구조에 맞게 수정했다.
+
+확인:
+- 변경된 model control 관련 Python 파일의 문법 검사를 수행했다.
+- `find_packages()`에서 `macgyvbot.util.model_control`이 포함되는 것을 확인했다.
+
+## 10. Perception 폴더 정리
+
+- YOLO detector만 `util/perception/yolo_detector.py`로 이동했다.
+- `depth_projection.py`의 depth pixel to base 변환 로직을 `macgyvbot_node.py`로 흡수했다.
+- `grasp_point_selector.py`의 grasp point 선택 흐름을 `macgyvbot_node.py`로 흡수했다.
+- 기존 `perception/` 패키지를 제거하고 README의 패키지 구조를 수정했다.
+
+확인:
+- 변경된 main node와 YOLO detector 파일의 문법 검사를 수행했다.
+- 이전 `macgyvbot.perception` import 참조가 남지 않은 것을 확인했다.
+- `find_packages()`에서 `macgyvbot.util.perception`이 포함되는 것을 확인했다.
+
+## 11. Config와 task pipline 위치 정리
+
+- `core/config.py`를 `config/config.py`로 옮겼다.
+- `core/pick_sequence.py`를 루트 패키지의 `task_pipline.py`로 옮겼다.
+- 새 위치에 맞춰 config와 `PickSequenceRunner` import 경로를 수정했다.
+- README의 패키지 구조를 새 위치에 맞게 수정했다.
+
+확인:
+- 변경된 config, task pipline, 관련 import 파일의 문법 검사를 수행했다.
+- 이전 `macgyvbot.core.config`, `macgyvbot.core.pick_sequence` import 참조가 남지 않은 것을 확인했다.
+- 빈 `core/` 패키지를 제거했다.
+- `setup.py --name`으로 패키지 이름이 정상적으로 확인되는 것을 확인했다.
+
+## 12. Motion 폴더 제거
+
+- `motion/moveit_controller.py`를 `util/model_control/moveit_controller.py`로 옮겼다.
+- `motion/pose_utils.py`를 `util/model_control/robot_pose.py`로 이름을 바꿔 옮겼다.
+- 새 위치에 맞춰 MoveIt controller와 robot pose import 경로를 수정했다.
+- `motion/` 패키지를 제거했다.
+- README의 패키지 구조를 새 model control 구조에 맞게 수정했다.
+
+확인:
+- 변경된 model control, task pipline, main node 파일의 문법 검사를 수행했다.
+- 이전 `macgyvbot.motion` import 참조가 남지 않은 것을 확인했다.
+- `find_packages()`에서 `macgyvbot.motion`이 제외되는 것을 확인했다.
+
+## 13. Input mapping 폴더 추가
+
+- `voice_command/command_parser.py`를 `util/input_mapping/command_hard_parser.py`로 옮겼다.
+- 새 위치에 맞춰 LLM command node의 parser import 경로를 수정했다.
+- 빈 `voice_command/` 패키지를 제거했다.
+- README의 패키지 구조를 새 input mapping 위치에 맞게 수정했다.
+
+확인:
+- 변경된 input mapping parser와 LLM command node의 문법 검사를 수행했다.
+- `find_packages()`에서 `macgyvbot.util.input_mapping`이 포함되는 것을 확인했다.
+
+## 14. Task pipline 폴더 이동
+
+- 루트 패키지의 `task_pipline.py`를 `util/task_pipline/task_pipline.py`로 옮겼다.
+- 새 위치에 맞춰 main node의 `PickSequenceRunner` import 경로를 수정했다.
+- README의 패키지 구조를 새 task pipline 위치에 맞게 수정했다.
+
+확인:
+- 변경된 task pipline 파일과 main node의 문법 검사를 수행했다.
+- 루트 패키지의 `task_pipline.py`가 제거된 것을 확인했다.
+- `find_packages()`에서 `macgyvbot.util.task_pipline`이 포함되는 것을 확인했다.

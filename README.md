@@ -10,30 +10,41 @@ MacGyvBot은 음성 명령 기반 공구 서랍 관리 로봇팔 어시스턴트
 
 ```text
 macgyvbot/
-├── macgyvbot.py                         # 기존 호환용 wrapper entrypoint
 ├── nodes/
 │   ├── macgyvbot_node.py                # ROS wiring, parameter, frame loop
+│   ├── hand_grasp_detection_node.py     # hand grasp detection ROS wiring
 │   ├── stt_node.py                      # Google STT 기반 /stt_text 발행
 │   ├── llm_command_node.py              # STT text -> tool command, /target_label
 │   ├── voice_command_ui_node.py         # 터미널 기반 음성 명령 UI
 │   └── voice_command_gui_node.py        # PyQt 기반 음성 명령 GUI
-├── core/
-│   ├── config.py                        # topic, frame, safety offset, grasp mode
-│   └── pick_sequence.py                 # pick, handoff, 원위치 반환 시퀀스
-├── perception/
-│   ├── yolo_detector.py                 # YOLO 모델 경로 해석 및 추론 wrapper
-│   ├── grasp_point_selector.py          # center/VLM grasp pixel 선택
-│   └── depth_projection.py              # depth pixel -> camera/base 좌표 투영
-├── motion/
-│   ├── moveit_controller.py             # MoveIt planning 실행 및 J6 yaw 회전
-│   └── pose_utils.py                    # pose 생성, EE transform/orientation helper
+├── config/
+│   └── config.py                        # topic, frame, safety offset, grasp mode
+├── util/
+│   ├── model_control/
+│   │   ├── moveit_controller.py         # MoveIt planning 실행 및 J6 yaw 회전
+│   │   ├── robot_pose.py                # pose 생성, EE transform/orientation helper
+│   │   ├── onrobot_gripper.py           # OnRobot RG gripper 연결 및 제어
+│   │   └── robot_safezone.py            # robot workspace safe zone clamp
+│   ├── perception/
+│   │   └── yolo_detector.py             # YOLO 모델 경로 해석 및 추론 wrapper
+│   ├── hand_grasp/
+│   │   ├── hand_detector.py             # MediaPipe hand landmark 검출
+│   │   ├── tool_detector.py             # hand grasp용 YOLO tool ROI 검출
+│   │   ├── grasp_detector.py            # hand-tool grasp 상태 판정
+│   │   ├── utils.py                     # geometry/depth helper
+│   │   └── visualization.py             # hand grasp overlay drawing
+│   ├── grasp_mechanism/
+│   │   ├── grasp_by_bbox_center.py      # bbox 중심점 기반 grasp point 선택
+│   │   └── grasp_by_vlm.py              # VLM 기반 grasp point 선택
+│   ├── input_mapping/
+│   │   └── command_hard_parser.py       # LLM fallback 전 alias/fuzzy parser
+│   └── task_pipline/
+│       └── task_pipline.py              # pick, handoff, 원위치 반환 시퀀스
 ├── ui/
 │   └── debug_windows.py                 # OpenCV debug window 출력
-└── voice_command/
-    └── command_parser.py                # LLM fallback 전 alias/fuzzy parser
 ```
 
-기존 executable 이름은 `macgyvbot`으로 유지됩니다. 호환성을 위해 `macgyvbot/macgyvbot.py`는 새 노드의 wrapper entrypoint로 남겨 둡니다.
+기존 executable 이름은 `macgyvbot`으로 유지되며, entrypoint는 `nodes/macgyvbot_node.py`를 직접 사용합니다.
 
 ## 주요 기능
 
@@ -248,13 +259,13 @@ ros2 run macgyvbot voice_command_ui_node
 
 ## 잡기 인식 노드 실행
 
-`macgyvbot.launch.py`는 hand grasp detection 노드를 함께 실행합니다. 잡기 인식 노드만 단독으로 확인할 때는 아래 명령을 사용합니다.
+`macgyvbot.launch.py`는 hand grasp detection 노드를 함께 실행합니다.
 
 ```bash
 source /opt/ros/humble/setup.bash
 source ~/ros2_ws/install/setup.bash
 
-ros2 launch macgyvbot hand_grasp_detection.launch.py
+ros2 launch macgyvbot macgyvbot.launch.py
 ```
 
 기본 구독 토픽:
@@ -272,7 +283,7 @@ ros2 launch macgyvbot hand_grasp_detection.launch.py
 예:
 
 ```bash
-ros2 launch macgyvbot hand_grasp_detection.launch.py yolo_model:=/path/to/yolov11_best.pt
+ros2 launch macgyvbot macgyvbot.launch.py yolo_model:=/path/to/yolov11_best.pt
 ```
 
 ## 테스트
