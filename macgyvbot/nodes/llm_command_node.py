@@ -413,11 +413,20 @@ class LlmCommandNode(Node):
 - tool_name은 허용 목록 중 하나만 사용한다.
 - action은 허용 목록 중 하나만 사용한다.
 - confidence는 0.0부터 1.0 사이 숫자다.
-- "그 조이는 거", "나사 돌리는 거"는 screwdriver에 가깝다.
-- "나사돌리는거", "나사 조이는 거", "돌려서 쓰는 거"는 screwdriver에 가깝다.
-- "못 박는 거", "두드리는 거"는 hammer에 가깝다.
-- "길이 재는 거", "치수 재는 거"는 tape_measure에 가깝다.
-- "집는 거", "잡는 거", "펜치 같은 거"는 pliers에 가깝다.
+- 사용자가 "나사", "피스", "볼트", "조이다", "풀다", "돌리다",
+  "돌리는 거", "조이는 거", "나사 돌리는 거", "나사돌리는거",
+  "나사 조이는 거", "돌려서 쓰는 거"라고 말하면 tool_name은 screwdriver다.
+- hammer는 "못", "박다", "두드리다", "치다", "때리다", "망치질"처럼
+  충격을 주는 표현이 있을 때만 선택한다.
+- "나사" 또는 "돌리"가 들어간 문장은 hammer가 아니다.
+- tape_measure는 "길이", "치수", "재다", "측정", "몇 센치" 같은 표현에만 선택한다.
+- pliers는 "집다", "잡다", "찝다", "펜치", "플라이어" 같은 표현에 선택한다.
+- 어떤 공구인지 애매하면 confidence를 0.6 이하로 낮춘다.
+- 확실하지 않은데 confidence를 1.0으로 출력하지 않는다.
+- "가져다줘", "가져와", "줘", "달라"는 action bring이다.
+- "정리해", "가져다가 놔", "제자리에 둬", "서랍에 넣어",
+  "반납해", "보관해"는 action return이다.
+- "놔", "놓아줘", "내려놔"는 action release다.
 
 예시:
 입력: 드라이버 가져다줘
@@ -427,13 +436,25 @@ class LlmCommandNode(Node):
 출력: {{"tool_name":"screwdriver","action":"bring","confidence":0.80}}
 
 입력: 나사돌리는거 가져다줘
-출력: {{"tool_name":"screwdriver","action":"bring","confidence":0.84}}
+출력: {{"tool_name":"screwdriver","action":"bring","confidence":0.92}}
+
+입력: 나사 돌리는 거 가져다줘
+출력: {{"tool_name":"screwdriver","action":"bring","confidence":0.92}}
+
+입력: 나사 조이는 거 가져와
+출력: {{"tool_name":"screwdriver","action":"bring","confidence":0.91}}
+
+입력: 돌려서 쓰는 거 가져다줘
+출력: {{"tool_name":"screwdriver","action":"bring","confidence":0.86}}
+
+입력: 못 박는 거 가져와
+출력: {{"tool_name":"hammer","action":"bring","confidence":0.88}}
 
 입력: 드라이버 가져다가 놔
 출력: {{"tool_name":"screwdriver","action":"return","confidence":0.92}}
 
 입력: 돌리는 거 정리해
-출력: {{"tool_name":"screwdriver","action":"return","confidence":0.82}}
+출력: {{"tool_name":"screwdriver","action":"return","confidence":0.88}}
 
 입력: 플라이어 서랍에 넣어줘
 출력: {{"tool_name":"pliers","action":"return","confidence":0.90}}
