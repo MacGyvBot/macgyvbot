@@ -34,5 +34,6 @@ log/
 .env.*
 !.env.example
 
-# Local VLA weights
+# Local model weights
+models/vlm/
 models/vla/

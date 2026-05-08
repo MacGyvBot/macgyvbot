@@ -1,7 +1,27 @@
 from setuptools import find_packages, setup
 from glob import glob
+from pathlib import Path
 
 package_name = 'macgyvbot'
+
+
+def gather_data_files(root_dir: str, install_prefix: str):
+    entries = []
+    root = Path(root_dir)
+    if not root.exists():
+        return entries
+
+    grouped = {}
+    for path in root.rglob('*'):
+        if not path.is_file():
+            continue
+        rel_parent = path.parent.relative_to(root)
+        dest = Path(install_prefix) / rel_parent
+        grouped.setdefault(str(dest), []).append(str(path))
+
+    for dest, files in sorted(grouped.items()):
+        entries.append((dest, sorted(files)))
+    return entries
 
 setup(
     name=package_name,
@@ -15,7 +35,9 @@ setup(
         ('share/' + package_name + '/config', glob('config/*.yaml')),
         ('share/' + package_name + '/calibration', glob('calibration/*.npy') + glob('calibration/*.md')),
         ('share/' + package_name + '/models', glob('models/*.pt')),
-    ],
+    ] + gather_data_files('models/vlm', 'share/' + package_name + '/models/vlm')
+      + gather_data_files('models/vla', 'share/' + package_name + '/models/vla')
+      + gather_data_files('scripts', 'share/' + package_name + '/scripts'),
     install_requires=['setuptools', 'SpeechRecognition'],
     zip_safe=True,
     maintainer='ssu',
@@ -28,10 +50,13 @@ setup(
         ],
     },
     entry_points={
-        'console_scripts': [
-            'macgyvbot = macgyvbot.macgyvbot:main',
-            'hand_grasp_detection = macgyvbot.hand_grasp_detection_node:main',
-            'stt_node = macgyvbot.stt_node:main',
-        ],
+            'console_scripts': [
+                'macgyvbot = macgyvbot.nodes.macgyvbot_node:main',
+                'hand_grasp_detection = macgyvbot.hand_grasp_detection_node:main',
+                'stt_node = macgyvbot.nodes.stt_node:main',
+                'llm_command_node = macgyvbot.nodes.llm_command_node:main',
+                'voice_command_ui_node = macgyvbot.nodes.voice_command_ui_node:main',
+                'voice_command_gui_node = macgyvbot.nodes.voice_command_gui_node:main',
+            ],
     },
 )
