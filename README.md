@@ -90,7 +90,6 @@ colcon build --packages-select macgyvbot
 ```bash
 source /opt/ros/humble/setup.bash
 source ~/ros2_ws/install/setup.bash
-source ~/ros2_ws/src/doosan-robot2/install/setup.bash
 ```
 
 ## 전체 파이프라인 실행
@@ -102,7 +101,6 @@ source ~/ros2_ws/src/doosan-robot2/install/setup.bash
 ```bash
 source /opt/ros/humble/setup.bash
 source ~/ros2_ws/install/setup.bash
-source ~/ros2_ws/src/doosan-robot2/install/setup.bash
 
 ros2 launch dsr_bringup2 dsr_bringup2_moveit.launch.py \
   mode:=real \
@@ -117,7 +115,6 @@ ros2 launch dsr_bringup2 dsr_bringup2_moveit.launch.py \
 ```bash
 source /opt/ros/humble/setup.bash
 source ~/ros2_ws/install/setup.bash
-source ~/ros2_ws/src/doosan-robot2/install/setup.bash
 
 ros2 launch realsense2_camera rs_align_depth_launch.py \
   depth_module.depth_profile:=640x480x30 \
@@ -133,7 +130,6 @@ ros2 launch realsense2_camera rs_align_depth_launch.py \
 ```bash
 source /opt/ros/humble/setup.bash
 source ~/ros2_ws/install/setup.bash
-source ~/ros2_ws/src/doosan-robot2/install/setup.bash
 
 ros2 launch macgyvbot macgyvbot.launch.py
 ```
@@ -143,7 +139,6 @@ ros2 launch macgyvbot macgyvbot.launch.py
 ```bash
 source /opt/ros/humble/setup.bash
 source ~/ros2_ws/install/setup.bash
-source ~/ros2_ws/src/doosan-robot2/install/setup.bash
 
 ros2 launch macgyvbot macgyvbot.launch.py grasp_point_mode:=center
 ```
@@ -153,7 +148,6 @@ VLM 기반 grasp point selection을 사용할 경우:
 ```bash
 source /opt/ros/humble/setup.bash
 source ~/ros2_ws/install/setup.bash
-source ~/ros2_ws/src/doosan-robot2/install/setup.bash
 
 ros2 launch macgyvbot macgyvbot.launch.py grasp_point_mode:=vlm
 ```
@@ -182,7 +176,6 @@ ollama serve
 ```bash
 source /opt/ros/humble/setup.bash
 source ~/ros2_ws/install/setup.bash
-source ~/ros2_ws/src/doosan-robot2/install/setup.bash
 
 ros2 run macgyvbot voice_command_ui_node
 ```
@@ -243,7 +236,6 @@ ros2 topic pub --once /target_label std_msgs/msg/String "{data: screwdriver}"
 ```bash
 source /opt/ros/humble/setup.bash
 source ~/ros2_ws/install/setup.bash
-source ~/ros2_ws/src/doosan-robot2/install/setup.bash
 
 ros2 launch macgyvbot macgyvbot.launch.py use_stt:=false
 ```
@@ -261,7 +253,6 @@ ros2 run macgyvbot voice_command_ui_node
 ```bash
 source /opt/ros/humble/setup.bash
 source ~/ros2_ws/install/setup.bash
-source ~/ros2_ws/src/doosan-robot2/install/setup.bash
 
 ros2 launch macgyvbot hand_grasp_detection.launch.py
 ```
