@@ -40,6 +40,7 @@ HOME_JOINTS = {
     "joint_5": math.radians(90.0),
     "joint_6": math.radians(90.0),
 }
+WRIST_JOINT_NAME = "joint_6"
 
 SAFE_Z = 0.40
 APPROACH_Z_OFFSET = 0.18
@@ -334,7 +335,100 @@ class MacGyvBotNode(Node):
     def select_box_center_pixel(self, bbox):
         u = int((bbox[0] + bbox[2]) / 2)
         v = int((bbox[1] + bbox[3]) / 2)
-        return u, v, GRASP_POINT_MODE_CENTER
+        return u, v, GRASP_POINT_MODE_CENTER, None
+
+    @staticmethod
+    def apply_rpy_deg_to_orientation(base_ori, rpy_deg):
+        if rpy_deg is None:
+            return base_ori
+        roll_deg, pitch_deg, yaw_deg = rpy_deg
+        base_q = [base_ori["x"], base_ori["y"], base_ori["z"], base_ori["w"]]
+        base_rot = Rotation.from_quat(base_q)
+        delta_rot = Rotation.from_euler("xyz", [roll_deg, pitch_deg, yaw_deg], degrees=True)
+        out = (base_rot * delta_rot).as_quat()
+        return {"x": float(out[0]), "y": float(out[1]), "z": float(out[2]), "w": float(out[3])}
+
+    @staticmethod
+    def normalize_angle_deg(angle_deg):
+        return ((angle_deg + 180.0) % 360.0) - 180.0
+
+    def get_current_ee_orientation(self):
+        T = get_ee_matrix(self.robot)
+        qx, qy, qz, qw = Rotation.from_matrix(T[:3, :3]).as_quat()
+        return {
+            "x": float(qx),
+            "y": float(qy),
+            "z": float(qz),
+            "w": float(qw),
+        }
+
+    def rotate_joint6_by_yaw_deg(self, yaw_deg, logger):
+        if yaw_deg is None:
+            return True
+
+        try:
+            yaw_deg = float(yaw_deg)
+        except (TypeError, ValueError):
+            logger.warn(f"유효하지 않은 yaw 값이라 J6 회전을 생략합니다: {yaw_deg}")
+            return False
+
+        if not math.isfinite(yaw_deg):
+            logger.warn(f"비정상 yaw 값이라 J6 회전을 생략합니다: {yaw_deg}")
+            return False
+
+        yaw_deg = self.normalize_angle_deg(yaw_deg)
+        if abs(yaw_deg) < 0.1:
+            logger.info("VLM yaw가 매우 작아 J6 회전을 생략합니다.")
+            return True
+
+        robot_model = self.robot.get_robot_model()
+        jmg = robot_model.get_joint_model_group(GROUP_NAME)
+        joint_names = list(jmg.active_joint_model_names)
+        if WRIST_JOINT_NAME not in joint_names:
+            logger.error(
+                f"{GROUP_NAME} 그룹에 {WRIST_JOINT_NAME}이 없어 J6 회전을 수행할 수 없습니다. "
+                f"(active joints={joint_names})"
+            )
+            return False
+
+        j6_idx = joint_names.index(WRIST_JOINT_NAME)
+        psm = self.robot.get_planning_scene_monitor()
+        with psm.read_only() as scene:
+            current_positions = np.array(
+                scene.current_state.get_joint_group_positions(GROUP_NAME),
+                dtype=float,
+            )
+
+        if j6_idx >= len(current_positions):
+            logger.error(
+                f"J6 인덱스({j6_idx})가 현재 조인트 벡터 길이({len(current_positions)})를 초과합니다."
+            )
+            return False
+
+        current_j6 = float(current_positions[j6_idx])
+        target_j6 = current_j6 + math.radians(yaw_deg)
+        target_j6 = math.atan2(math.sin(target_j6), math.cos(target_j6))
+
+        target_positions = np.array(current_positions, copy=True)
+        target_positions[j6_idx] = target_j6
+
+        logger.info(
+            "2-1단계: VLM yaw를 J6에 적용 "
+            f"(yaw_offset={yaw_deg:.2f}deg, "
+            f"j6={math.degrees(current_j6):.2f}deg -> {math.degrees(target_j6):.2f}deg)"
+        )
+
+        state_goal = RobotState(robot_model)
+        state_goal.set_joint_group_positions(GROUP_NAME, target_positions)
+        state_goal.update()
+
+        return plan_and_execute(
+            self.robot,
+            self.arm,
+            logger,
+            state_goal=state_goal,
+            params=self.pilz_params,
+        )
 
     def select_vlm_grasp_pixel(self, bbox, label):
         x1, y1, x2, y2 = self.clamp_bbox_to_image(bbox, self.color_image)
@@ -354,6 +448,21 @@ class MacGyvBotNode(Node):
         if self.vlm_grasp_model is None:
             self.get_logger().info("VLM grasp 모델을 lazy load 준비합니다.")
             self.vlm_grasp_model = VLMModel()
+            runtime = self.vlm_grasp_model.get_runtime_info()
+            self.get_logger().info(
+                "VLM runtime: "
+                f"device={runtime['device']}, "
+                f"dtype={runtime['dtype']}, "
+                f"local_weights={runtime['using_local_weights']}, "
+                f"source={runtime['model_source']}"
+            )
+            if runtime["device"] == "cuda":
+                self.get_logger().info("VLM은 CUDA를 사용합니다.")
+            else:
+                self.get_logger().warn("VLM이 CUDA를 사용하지 않습니다. (CPU 실행)")
+            self.get_logger().info("VLM 가중치 로드 시작...")
+            self.vlm_grasp_model.load()
+            self.get_logger().info("VLM 가중치 로드 완료.")
 
         crop_bgr = self.color_image[y1:y2, x1:x2]
         crop_rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
@@ -385,10 +494,11 @@ class MacGyvBotNode(Node):
 
         self.get_logger().info(
             f"VLM grasp point 선택: pixel=({u}, {v}), "
-            f"angle={result.angle_deg:.1f}deg, source={source}"
+            f"angle={result.angle_deg:.1f}deg, "
+            f"rpy_deg={result.orientation_rpy_deg}, source={source}"
         )
 
-        return u, v, source
+        return u, v, source, result.orientation_rpy_deg
 
     @staticmethod
     def clamp_bbox_to_image(bbox, image):
@@ -399,7 +509,7 @@ class MacGyvBotNode(Node):
         y2 = max(0, min(height, int(math.ceil(bbox[3]))))
         return x1, y1, x2, y2
 
-    def pixel_to_base_target(self, u, v, label, source):
+    def pixel_to_base_target(self, u, v, label, source, vlm_rpy_deg=None):
         h, w = self.depth_image.shape[:2]
 
         if not (0 <= u < w and 0 <= v < h):
@@ -428,7 +538,7 @@ class MacGyvBotNode(Node):
             f"base=({bx:.3f}, {by:.3f}, {bz:.3f})"
         )
 
-        return bx, by, bz, z_m
+        return bx, by, bz, z_m, vlm_rpy_deg
 
     def return_tool_to_original_position(self, target_x, target_y, travel_z, grasp_z, ori, logger):
         logger.info("반환 1단계: 원래 공구 위치 상단으로 이동")
@@ -491,7 +601,7 @@ class MacGyvBotNode(Node):
 
         return True
 
-    def pick_sequence(self, bx, by, bz, z_m):
+    def pick_sequence(self, bx, by, bz, z_m, vlm_yaw_deg=None):
         self.human_grasped_tool = False
         self.last_grasp_result = None
 
@@ -584,6 +694,15 @@ class MacGyvBotNode(Node):
             if not ok:
                 log.error("XY 이동 실패. Pick 시퀀스 중단")
                 return
+
+            # 2-1. VLM yaw를 J6 단일 조인트 회전으로 적용
+            if vlm_yaw_deg is not None:
+                ok = self.rotate_joint6_by_yaw_deg(vlm_yaw_deg, log)
+                if not ok:
+                    log.error("J6 회전 실패. Pick 시퀀스 중단")
+                    return
+                # 이후 pose goal이 방금 회전한 손목 자세를 유지하도록 현재 orientation을 갱신.
+                ori = self.get_current_ee_orientation()
 
             # 3. 타겟 상단으로 접근 (offset 적용)
             log.info("3단계: 타겟 상단 접근")
@@ -698,7 +817,7 @@ class MacGyvBotNode(Node):
 
         return False
 
-    def start_pick_sequence(self, bx, by, bz, z_m):
+    def start_pick_sequence(self, bx, by, bz, z_m, vlm_yaw_deg=None):
         if self.picking:
             self.get_logger().warn("이미 pick 동작 중이라 새 pick 요청을 무시합니다.")
             return
@@ -706,7 +825,7 @@ class MacGyvBotNode(Node):
         self.picking = True
         self.pending_pick_thread = threading.Thread(
             target=self.pick_sequence,
-            args=(bx, by, bz, z_m),
+            args=(bx, by, bz, z_m, vlm_yaw_deg),
             daemon=True,
         )
         self.pending_pick_thread.start()
@@ -794,13 +913,22 @@ class MacGyvBotNode(Node):
 
                     found = True
 
-                    u, v, source = self.select_grasp_pixel(box, label)
-                    target = self.pixel_to_base_target(u, v, label, source)
+                    u, v, source, vlm_rpy_deg = self.select_grasp_pixel(box, label)
+                    target = self.pixel_to_base_target(u, v, label, source, vlm_rpy_deg)
 
                     if target is None:
                         continue
 
-                    bx, by, bz, z_m = target
+                    bx, by, bz, z_m, vlm_rpy_deg = target
+                    vlm_yaw_deg = None
+                    if vlm_rpy_deg is not None and len(vlm_rpy_deg) >= 3:
+                        try:
+                            vlm_yaw_deg = float(vlm_rpy_deg[2])
+                        except (TypeError, ValueError):
+                            self.get_logger().warn(
+                                f"VLM yaw 파싱 실패: {vlm_rpy_deg}"
+                            )
+
                     cv2.circle(annotated_frame, (u, v), 6, (0, 255, 255), -1)
                     cv2.putText(
                         annotated_frame,
@@ -813,7 +941,7 @@ class MacGyvBotNode(Node):
                         cv2.LINE_AA,
                     )
 
-                    self.start_pick_sequence(bx, by, bz, z_m)
+                    self.start_pick_sequence(bx, by, bz, z_m, vlm_yaw_deg)
                     break
 
                 if not found:
