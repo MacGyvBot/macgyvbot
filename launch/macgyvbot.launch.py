@@ -69,6 +69,7 @@ def generate_launch_description():
                     moveit_config.to_dict(),
                     moveit_py_params,
                     {
+                        "yolo_model": LaunchConfiguration("yolo_model"),
                         "grasp_point_mode": LaunchConfiguration(
                             "grasp_point_mode"
                         ),
