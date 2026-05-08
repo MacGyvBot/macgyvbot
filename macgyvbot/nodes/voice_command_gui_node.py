@@ -265,6 +265,7 @@ class VoiceCommandGuiNode(Node):
 
         tool_name = command.get('tool_name', 'unknown')
         action = command.get('action', 'unknown')
+        target_mode = command.get('target_mode', 'unknown')
         method = command.get('match_method', 'unknown')
         confidence = command.get('confidence', 0.0)
 
@@ -274,7 +275,7 @@ class VoiceCommandGuiNode(Node):
             confidence_text = str(confidence)
 
         self._append_system(
-            f'parsed: tool={tool_name}, action={action}, '
+            f'parsed: tool={tool_name}, action={action}, target={target_mode}, '
             f'method={method}, confidence={confidence_text}'
         )
 
@@ -332,6 +333,8 @@ class VoiceCommandGuiNode(Node):
             return '어떤 공구인지 확실하지 않습니다. 공구 이름을 다시 말해주세요.'
         if reason == 'unknown_action':
             return '무엇을 할지 확실하지 않습니다. 가져다줘, 정리해, 놓아줘처럼 말해주세요.'
+        if reason == 'deictic_bring_not_supported':
+            return '가져오기 명령은 공구 이름이 필요합니다. 어떤 공구를 가져올지 말해주세요.'
         if reason == 'low_confidence':
             return '제가 이해한 내용이 확실하지 않습니다. 조금 더 구체적으로 말해주세요.'
         return '명령을 이해하지 못했습니다. 다시 입력해주세요.'

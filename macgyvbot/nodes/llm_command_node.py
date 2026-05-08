@@ -42,6 +42,21 @@ ALLOWED_ACTIONS = {
     'unknown': '행동을 확정할 수 없음.',
 }
 
+ALLOWED_TARGET_MODES = {
+    'named': '사용자가 공구 이름이나 기능 단서로 대상을 지정함.',
+    'deictic': '사용자가 이거/그거/저거 같은 지시어로 대상을 지정함.',
+    'unknown': '대상 지정 방식을 확정할 수 없음.',
+}
+
+DEICTIC_WORDS = (
+    '이거',
+    '그거',
+    '저거',
+    '이것',
+    '그것',
+    '저것',
+)
+
 YES_WORDS = {
     '네',
     '예',
@@ -195,6 +210,7 @@ class LlmCommandNode(Node):
         command = {
             'tool_name': tool_name,
             'action': action,
+            'target_mode': 'named',
             'raw_text': text,
             'match_method': match_method,
             'match_score': match_score,
@@ -301,10 +317,13 @@ class LlmCommandNode(Node):
     def _build_accepted_message(self, command):
         tool_name = command.get('tool_name', 'unknown')
         action = command.get('action', 'unknown')
+        target_mode = command.get('target_mode', 'unknown')
 
         if action == 'bring':
             return f'{tool_name}를 가져오라는 뜻으로 이해했습니다.'
         if action == 'return':
+            if target_mode == 'deictic':
+                return '지시한 공구를 보관 위치에 정리하라는 뜻으로 이해했습니다.'
             return f'{tool_name}를 보관 위치에 정리하라는 뜻으로 이해했습니다.'
         if action == 'release':
             return f'{tool_name}를 놓으라는 뜻으로 이해했습니다.'
@@ -407,78 +426,71 @@ class LlmCommandNode(Node):
 - stop: {ALLOWED_ACTIONS['stop']}
 - unknown: {ALLOWED_ACTIONS['unknown']}
 
+허용 target_mode:
+- named: {ALLOWED_TARGET_MODES['named']}
+- deictic: {ALLOWED_TARGET_MODES['deictic']}
+- unknown: {ALLOWED_TARGET_MODES['unknown']}
+
 규칙:
-- 반드시 JSON만 출력한다.
+- 반드시 JSON만 출력한다. 필드는 tool_name, action, target_mode, confidence만 사용한다.
 - 다른 설명 문장을 출력하지 않는다.
 - tool_name은 허용 목록 중 하나만 사용한다.
 - action은 허용 목록 중 하나만 사용한다.
+- target_mode는 허용 목록 중 하나만 사용한다.
 - confidence는 0.0부터 1.0 사이 숫자다.
-- 사용자가 "나사", "피스", "볼트", "조이다", "풀다", "돌리다",
-  "돌리는 거", "조이는 거", "나사 돌리는 거", "나사돌리는거",
-  "나사 조이는 거", "돌려서 쓰는 거"라고 말하면 tool_name은 screwdriver다.
-- hammer는 "못", "박다", "두드리다", "치다", "때리다", "망치질"처럼
-  충격을 주는 표현이 있을 때만 선택한다.
-- "나사" 또는 "돌리"가 들어간 문장은 hammer가 아니다.
-- tape_measure는 "길이", "치수", "재다", "측정", "몇 센치" 같은 표현에만 선택한다.
-- pliers는 "집다", "잡다", "찝다", "펜치", "플라이어" 같은 표현에 선택한다.
-- 어떤 공구인지 애매하면 confidence를 0.6 이하로 낮춘다.
+- 공구명이나 공구 기능 단서가 있으면 target_mode는 named다.
+- "이거", "그거", "저거", "이것", "그것", "저것"으로 대상을 가리키면 target_mode는 deictic이다.
+- deictic은 action이 return일 때만 허용된다.
+- "이거 가져와", "그거 가져다줘"처럼 deictic + bring은 공구를 추측하지 말고 tool_name unknown으로 둔다.
+- "이거 정리해", "이거 가져다놔", "그거 서랍에 넣어줘"는 action return, target_mode deictic이다.
+- "나사", "피스", "볼트", "조이다", "풀다", "돌리다"는 screwdriver 단서다.
+- "못", "박다", "두드리다", "치다", "때리다", "망치질"은 hammer 단서다.
+- "길이", "치수", "재다", "측정", "센치"는 tape_measure 단서다.
+- "집다", "잡다", "찝다", "펜치", "플라이어"는 pliers 단서다.
 - 확실하지 않은데 confidence를 1.0으로 출력하지 않는다.
-- "이거", "그거", "저거", "이것", "그것", "저것"처럼 지시어만 있고
-  공구 이름이나 공구 기능 단서가 없으면 tool_name은 unknown이다.
-- "이거 정리해", "그거 가져와"처럼 대상 공구를 알 수 없는 문장은
-  특정 공구로 추측하지 않는다.
-- "그 돌리는 거"처럼 "나사" 없이 짧게 말한 경우는 screwdriver 후보로 보되
-  confidence를 0.5로 낮춰 사용자가 확인할 수 있게 한다.
-- "가져다줘", "가져와", "줘", "달라"는 action bring이다.
-- "정리해", "가져다가 놔", "제자리에 둬", "서랍에 넣어",
-  "반납해", "보관해"는 action return이다.
-- "놔", "놓아줘", "내려놔"는 action release다.
 
 예시:
 입력: 드라이버 가져다줘
-출력: {{"tool_name":"screwdriver","action":"bring","confidence":0.95}}
+출력: {{"tool_name":"screwdriver","action":"bring","target_mode":"named","confidence":0.95}}
 
 입력: 그 조이는 거 가져와
-출력: {{"tool_name":"screwdriver","action":"bring","confidence":0.80}}
+출력: {{"tool_name":"screwdriver","action":"bring","target_mode":"named","confidence":0.80}}
 
 입력: 나사돌리는거 가져다줘
-출력: {{"tool_name":"screwdriver","action":"bring","confidence":0.92}}
+출력: {{"tool_name":"screwdriver","action":"bring","target_mode":"named","confidence":0.92}}
 
 입력: 나사 돌리는 거 가져다줘
-출력: {{"tool_name":"screwdriver","action":"bring","confidence":0.92}}
-
-입력: 나사 조이는 거 가져와
-출력: {{"tool_name":"screwdriver","action":"bring","confidence":0.91}}
+출력: {{"tool_name":"screwdriver","action":"bring","target_mode":"named","confidence":0.92}}
 
 입력: 돌려서 쓰는 거 가져다줘
-출력: {{"tool_name":"screwdriver","action":"bring","confidence":0.86}}
-
-입력: 그 돌리는 거 가져와
-출력: {{"tool_name":"screwdriver","action":"bring","confidence":0.50}}
+출력: {{"tool_name":"screwdriver","action":"bring","target_mode":"named","confidence":0.86}}
 
 입력: 이거 정리해
-출력: {{"tool_name":"unknown","action":"return","confidence":0.40}}
+출력: {{"tool_name":"unknown","action":"return","target_mode":"deictic","confidence":0.80}}
+
+입력: 이거 가져다놔
+출력: {{"tool_name":"unknown","action":"return","target_mode":"deictic","confidence":0.85}}
 
 입력: 그거 가져와
-출력: {{"tool_name":"unknown","action":"bring","confidence":0.40}}
+출력: {{"tool_name":"unknown","action":"bring","target_mode":"deictic","confidence":0.40}}
 
 입력: 못 박는 거 가져와
-출력: {{"tool_name":"hammer","action":"bring","confidence":0.88}}
+출력: {{"tool_name":"hammer","action":"bring","target_mode":"named","confidence":0.88}}
 
 입력: 드라이버 가져다가 놔
-출력: {{"tool_name":"screwdriver","action":"return","confidence":0.92}}
+출력: {{"tool_name":"screwdriver","action":"return","target_mode":"named","confidence":0.92}}
 
 입력: 돌리는 거 정리해
-출력: {{"tool_name":"screwdriver","action":"return","confidence":0.88}}
+출력: {{"tool_name":"screwdriver","action":"return","target_mode":"named","confidence":0.88}}
 
 입력: 플라이어 서랍에 넣어줘
-출력: {{"tool_name":"pliers","action":"return","confidence":0.90}}
+출력: {{"tool_name":"pliers","action":"return","target_mode":"named","confidence":0.90}}
 
 입력: 길이 재는 거 줘
-출력: {{"tool_name":"tape_measure","action":"bring","confidence":0.82}}
+출력: {{"tool_name":"tape_measure","action":"bring","target_mode":"named","confidence":0.82}}
 
 입력: 멈춰
-출력: {{"tool_name":"unknown","action":"stop","confidence":0.90}}
+출력: {{"tool_name":"unknown","action":"stop","target_mode":"unknown","confidence":0.90}}
 
 입력: {text}
 출력:
@@ -508,6 +520,7 @@ class LlmCommandNode(Node):
     def _validate_command(self, parsed, raw_text):
         tool_name = str(parsed.get('tool_name', 'unknown')).strip()
         action = str(parsed.get('action', 'unknown')).strip()
+        target_mode = str(parsed.get('target_mode', 'unknown')).strip()
 
         try:
             confidence = float(parsed.get('confidence', 0.0))
@@ -522,21 +535,45 @@ class LlmCommandNode(Node):
             self.get_logger().warn(f'허용되지 않은 action: {action}')
             action = 'unknown'
 
+        if target_mode not in ALLOWED_TARGET_MODES:
+            self.get_logger().warn(f'허용되지 않은 target_mode: {target_mode}')
+            target_mode = 'unknown'
+
+        action = self._adjust_action(raw_text, action)
         confidence = max(0.0, min(1.0, confidence))
-        tool_name, confidence = self._adjust_ambiguous_tool(
+        tool_name, target_mode, confidence = self._adjust_ambiguous_command(
             raw_text,
             tool_name,
+            target_mode,
             confidence,
         )
 
         candidate_command = {
             'tool_name': tool_name,
             'action': action,
+            'target_mode': target_mode,
             'raw_text': raw_text,
             'match_method': 'llm',
             'match_score': confidence,
             'confidence': confidence,
         }
+
+        if action == 'bring' and target_mode == 'deictic':
+            self.get_logger().warn('deictic bring 명령은 공구명이 없어 무시합니다.')
+            self._publish_feedback(
+                status='rejected',
+                raw_text=raw_text,
+                reason='deictic_bring_not_supported',
+                message=(
+                    '어떤 공구를 가져올지 확실하지 않습니다. '
+                    '가져오기 명령은 공구 이름을 함께 말해주세요.'
+                ),
+                command=candidate_command,
+            )
+            return None
+
+        if action == 'return' and target_mode == 'deictic':
+            return candidate_command
 
         if confidence < self._min_confidence:
             self.get_logger().warn(
@@ -605,11 +642,37 @@ class LlmCommandNode(Node):
 
         return candidate_command
 
-    def _adjust_ambiguous_tool(self, raw_text, tool_name, confidence):
+    def _adjust_action(self, raw_text, action):
+        normalized = (raw_text or '').replace(' ', '')
+        return_tokens = (
+            '가져다가놔',
+            '가져다가놓',
+            '가져다놔',
+            '가져다놓',
+            '정리',
+            '제자리',
+            '반납',
+            '서랍에넣',
+            '넣어',
+            '보관',
+        )
+
+        if any(token in normalized for token in return_tokens):
+            return 'return'
+
+        return action
+
+    def _adjust_ambiguous_command(
+        self,
+        raw_text,
+        tool_name,
+        target_mode,
+        confidence,
+    ):
         normalized = (raw_text or '').replace(' ', '')
         has_deictic_target = any(
             token in normalized
-            for token in ('이거', '그거', '저거', '이것', '그것', '저것')
+            for token in DEICTIC_WORDS
         )
         has_turn_expression = any(
             token in normalized
@@ -654,9 +717,12 @@ class LlmCommandNode(Node):
 
         if has_deictic_target and not has_tool_clue:
             self.get_logger().warn(
-                '지시어만 있고 공구 단서가 없어 공구를 unknown으로 처리합니다.'
+                '지시어만 있고 공구 단서가 없어 deictic target으로 처리합니다.'
             )
-            return 'unknown', confidence
+            return 'unknown', 'deictic', confidence
+
+        if target_mode == 'unknown':
+            target_mode = 'named' if tool_name != 'unknown' else 'unknown'
 
         if (
             tool_name == 'hammer'
@@ -667,9 +733,9 @@ class LlmCommandNode(Node):
                 '회전/조임 표현을 hammer로 해석해 screwdriver 후보로 낮춰 확인합니다.'
             )
             adjusted_confidence = min(confidence, self._min_confidence - 0.05)
-            return 'screwdriver', adjusted_confidence
+            return 'screwdriver', 'named', adjusted_confidence
 
-        return tool_name, confidence
+        return tool_name, target_mode, confidence
 
 
 def main(args=None):
