@@ -51,7 +51,7 @@ setup(
     entry_points={
         'console_scripts': [
             'macgyvbot = macgyvbot.nodes.macgyvbot_node:main',
-            'graspnet_inference = macgyvbot.graspnet_inference_node:main',
+            'graspnet_inference = macgyvbot.nodes.graspnet_inference_node:main',
             'hand_grasp_detection = macgyvbot.hand_grasp_detection_node:main',
             'stt_node = macgyvbot.nodes.stt_node:main',
             'llm_command_node = macgyvbot.nodes.llm_command_node:main',

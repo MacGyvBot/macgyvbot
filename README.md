@@ -13,6 +13,7 @@ macgyvbot/
 ├── macgyvbot.py                         # 기존 호환용 wrapper entrypoint
 ├── nodes/
 │   ├── macgyvbot_node.py                # ROS wiring, parameter, frame loop
+│   ├── graspnet_inference_node.py       # GraspNet pose inference publisher
 │   ├── stt_node.py                      # Google STT 기반 /stt_text 발행
 │   ├── llm_command_node.py              # STT text -> tool command, /target_label
 │   ├── voice_command_ui_node.py         # 터미널 기반 음성 명령 UI
@@ -23,6 +24,7 @@ macgyvbot/
 ├── perception/
 │   ├── yolo_detector.py                 # YOLO 모델 경로 해석 및 추론 wrapper
 │   ├── grasp_point_selector.py          # center/VLM grasp pixel 선택
+│   ├── graspnet_pose.py                 # GraspNet pose buffer 및 선택 helper
 │   ├── graspnet_pose_selector.py        # GraspNet pose buffer 및 base frame 변환
 │   └── depth_projection.py              # depth pixel -> camera/base 좌표 투영
 ├── motion/

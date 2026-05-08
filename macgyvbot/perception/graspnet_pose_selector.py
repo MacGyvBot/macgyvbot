@@ -8,8 +8,8 @@ from geometry_msgs.msg import PoseStamped
 from scipy.spatial.transform import Rotation
 
 from macgyvbot.core.config import BASE_FRAME, GRASP_POINT_MODE_GRASPNET
-from macgyvbot.graspnet_pose import GraspNetPoseBuffer
 from macgyvbot.motion.pose_utils import get_ee_matrix
+from macgyvbot.perception.graspnet_pose import GraspNetPoseBuffer
 
 
 class GraspNetPoseSelector:

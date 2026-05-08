@@ -2,7 +2,7 @@ from geometry_msgs.msg import PoseStamped
 import numpy as np
 from sensor_msgs.msg import CameraInfo
 
-from macgyvbot.graspnet_inference_node import (
+from macgyvbot.nodes.graspnet_inference_node import (
     build_point_cloud,
     depth_image_to_meters,
     make_pose_from_grasp,
@@ -11,7 +11,7 @@ from macgyvbot.graspnet_inference_node import (
 
 
 def test_graspnet_inference_node_importable():
-    import macgyvbot.graspnet_inference_node as node_module
+    import macgyvbot.nodes.graspnet_inference_node as node_module
 
     assert node_module.GraspNetInferenceNode is not None
 
