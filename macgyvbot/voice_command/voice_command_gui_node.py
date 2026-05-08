@@ -67,8 +67,8 @@ class VoiceCommandGuiWindow(QMainWindow):
         self.setCentralWidget(root)
         self._apply_style()
 
-        self.append_system('입력 상태: 공구 이름을 직접 말하거나 자연어로 요청할 수 있습니다.')
-        self.append_system('확인 상태: 확인 질문에는 네 또는 아니오로 답해주세요.')
+        self.append_system('공구 이름을 직접 말하거나 자연어로 요청해보세요.')
+        self.append_system('확인 질문에는 네 또는 아니오로 답해주세요.')
 
     def _send_text(self):
         text = self._input.text().strip()
@@ -84,7 +84,7 @@ class VoiceCommandGuiWindow(QMainWindow):
         self._append_bubble(label, text, align='right', role='user')
 
     def append_bot(self, text):
-        self._append_bubble('MacGyvBot', text, align='center', role='bot')
+        self._append_bubble('MacGyvBot', text, align='left', role='bot')
 
     def append_system(self, text):
         self._append_bubble('상태', text, align='center', role='system')
@@ -94,8 +94,8 @@ class VoiceCommandGuiWindow(QMainWindow):
 
     def _append_bubble(self, speaker, text, align, role):
         colors = {
-            'user': ('#FFFFFF', '#0F3557'),
-            'bot': ('#E7F3FF', '#1D2733'),
+            'user': ('#D9ECFF', '#0F3557'),
+            'bot': ('#FFFFFF', '#1D2733'),
             'system': ('#EAF4FF', '#45617A'),
         }
         background, foreground = colors[role]
