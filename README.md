@@ -169,13 +169,14 @@ ros2 launch macgyvbot macgyvbot.launch.py grasp_point_mode:=graspnet
 
 `grasp_point_mode:=graspnet`은 YOLO + depth로 target position을 잡고, GraspNet pose에서 orientation을 받아 보정합니다. GraspNet position은 기본 이동 목표로 사용하지 않습니다.
 
-GraspNet 통합 모드는 기본 경로의 실제 baseline/checkpoint를 사용합니다. baseline 코드는 `~/third_party/graspnet-baseline`, checkpoint는 `~/models/graspnet/checkpoint-rs.tar`에 둡니다. baseline 코드와 checkpoint 파일은 저장소에 커밋하지 않습니다.
+GraspNet 통합 모드는 프로젝트 내부 `models/graspnet` 아래의 실제 baseline/checkpoint를 사용합니다. baseline 코드는 `models/graspnet/graspnet-baseline`, checkpoint는 `models/graspnet/checkpoint-rs.tar`에 둡니다. baseline 코드와 checkpoint 파일은 저장소에 커밋하지 않습니다.
 
 GraspNet baseline 설치:
 
 ```bash
-mkdir -p ~/third_party
-cd ~/third_party
+cd ~/ros2_ws/src/doosan-robot2/macgyvbot
+mkdir -p models/graspnet
+cd models/graspnet
 git clone https://github.com/graspnet/graspnet-baseline.git
 ```
 
@@ -185,24 +186,24 @@ GraspNet Python 의존성 설치:
 cd ~/ros2_ws/src/doosan-robot2/macgyvbot
 pip install -r requirements-graspnet.txt
 
-cd ~/third_party/graspnet-baseline
+cd models/graspnet/graspnet-baseline
 pip install -r requirements.txt
 ```
 
 CUDA extension 빌드:
 
 ```bash
-cd ~/third_party/graspnet-baseline/pointnet2
+cd ~/ros2_ws/src/doosan-robot2/macgyvbot/models/graspnet/graspnet-baseline/pointnet2
 python setup.py install
 
-cd ~/third_party/graspnet-baseline/knn
+cd ~/ros2_ws/src/doosan-robot2/macgyvbot/models/graspnet/graspnet-baseline/knn
 python setup.py install
 ```
 
 필요하면 `graspnetAPI`를 source 설치로 덮어씁니다.
 
 ```bash
-cd ~/third_party
+cd ~/ros2_ws/src/doosan-robot2/macgyvbot/models/graspnet
 git clone https://github.com/graspnet/graspnetAPI.git
 cd graspnetAPI
 pip install .
@@ -211,9 +212,10 @@ pip install .
 checkpoint 준비:
 
 ```bash
-mkdir -p ~/models/graspnet
+cd ~/ros2_ws/src/doosan-robot2/macgyvbot
+mkdir -p models/graspnet
 # 공식 GraspNet baseline pretrained weights에서 RealSense용 checkpoint-rs.tar를 받아
-# ~/models/graspnet/checkpoint-rs.tar 로 둡니다.
+# models/graspnet/checkpoint-rs.tar 로 둡니다.
 ```
 
 `macgyvbot.launch.py`는 로봇 메인 노드, hand grasp detection, STT, LLM command node를 함께 실행합니다. CLI UI는 로그와 입력이 섞이지 않도록 별도 터미널에서 실행합니다.

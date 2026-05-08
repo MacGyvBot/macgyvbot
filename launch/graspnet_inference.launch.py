@@ -1,19 +1,38 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
+from launch.substitutions import PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
+    default_checkpoint_path = PathJoinSubstitution(
+        [
+            FindPackageShare("macgyvbot"),
+            "models",
+            "graspnet",
+            "checkpoint-rs.tar",
+        ]
+    )
+    default_baseline_path = PathJoinSubstitution(
+        [
+            FindPackageShare("macgyvbot"),
+            "models",
+            "graspnet",
+            "graspnet-baseline",
+        ]
+    )
+
     return LaunchDescription(
         [
             DeclareLaunchArgument(
                 "checkpoint_path",
-                default_value="~/models/graspnet/checkpoint-rs.tar",
+                default_value=default_checkpoint_path,
             ),
             DeclareLaunchArgument(
                 "graspnet_baseline_path",
-                default_value="~/third_party/graspnet-baseline",
+                default_value=default_baseline_path,
             ),
             DeclareLaunchArgument("pose_topic", default_value="/graspnet/target_pose"),
             DeclareLaunchArgument(

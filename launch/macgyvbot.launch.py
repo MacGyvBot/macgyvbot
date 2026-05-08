@@ -8,8 +8,6 @@ from launch.substitutions import PathJoinSubstitution
 from launch_ros.substitutions import FindPackageShare
 from moveit_configs_utils import MoveItConfigsBuilder
 
-DEFAULT_GRASPNET_BASELINE_PATH = "~/third_party/graspnet-baseline"
-DEFAULT_GRASPNET_CHECKPOINT_PATH = "~/models/graspnet/checkpoint-rs.tar"
 DEFAULT_GRASPNET_CAMERA_FRAME = "camera_color_optical_frame"
 DEFAULT_GRASPNET_DEVICE = "cuda:0"
 
@@ -38,6 +36,22 @@ def generate_launch_description():
     # 🔹 MoveItPy 전용 YAML 추가
     moveit_py_params = PathJoinSubstitution(
         [FindPackageShare("macgyvbot"), "config", "moveit_py.yaml"]
+    )
+    graspnet_checkpoint_path = PathJoinSubstitution(
+        [
+            FindPackageShare("macgyvbot"),
+            "models",
+            "graspnet",
+            "checkpoint-rs.tar",
+        ]
+    )
+    graspnet_baseline_path = PathJoinSubstitution(
+        [
+            FindPackageShare("macgyvbot"),
+            "models",
+            "graspnet",
+            "graspnet-baseline",
+        ]
     )
 
     return LaunchDescription(
@@ -102,8 +116,8 @@ def generate_launch_description():
                 ),
                 parameters=[
                     {
-                        "checkpoint_path": DEFAULT_GRASPNET_CHECKPOINT_PATH,
-                        "graspnet_baseline_path": DEFAULT_GRASPNET_BASELINE_PATH,
+                        "checkpoint_path": graspnet_checkpoint_path,
+                        "graspnet_baseline_path": graspnet_baseline_path,
                         "pose_topic": "/graspnet/target_pose",
                         "camera_frame": DEFAULT_GRASPNET_CAMERA_FRAME,
                         "device": DEFAULT_GRASPNET_DEVICE,

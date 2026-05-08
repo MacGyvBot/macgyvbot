@@ -37,3 +37,5 @@ log/
 
 # weight
 models/vlm
+models/graspnet/*
+!models/graspnet/.gitkeep

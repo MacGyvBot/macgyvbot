@@ -36,6 +36,7 @@ setup(
         ('share/' + package_name + '/calibration', glob('calibration/*.npy') + glob('calibration/*.md')),
         ('share/' + package_name + '/models', glob('models/*.pt')),
     ] + gather_data_files('models/vlm', 'share/' + package_name + '/models/vlm')
+      + gather_data_files('models/graspnet', 'share/' + package_name + '/models/graspnet')
       + gather_data_files('scripts', 'share/' + package_name + '/scripts'),
     install_requires=['setuptools', 'SpeechRecognition'],
     zip_safe=True,
