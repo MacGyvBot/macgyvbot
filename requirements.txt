@@ -6,7 +6,7 @@ ultralytics
 pyrealsense2
 Pillow
 torch
-transformers>=4.40.0
+transformers>=4.40.0,<5
 huggingface_hub
 accelerate
 bitsandbytes

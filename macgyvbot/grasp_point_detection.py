@@ -15,7 +15,11 @@ from typing import Any
 import numpy as np
 import torch
 from PIL import Image, ImageDraw, ImageFont
-from transformers import AutoModelForImageTextToText, AutoProcessor
+from transformers import AutoProcessor
+try:
+    from transformers import AutoModelForImageTextToText as AutoModelForVLM
+except ImportError:
+    from transformers import AutoModelForVision2Seq as AutoModelForVLM
 
 
 DEFAULT_VLM_MODEL = "HuggingFaceTB/SmolVLM2-2.2B-Instruct"
@@ -109,8 +113,12 @@ class VLMModel:
         self.processor = AutoProcessor.from_pretrained(self.model_id)
         has_accelerate = importlib.util.find_spec("accelerate") is not None
         has_bitsandbytes = importlib.util.find_spec("bitsandbytes") is not None
-        device_map = "auto" if self.device == "cuda" and has_accelerate else None
         quant_config = self._make_quantization_config(has_bitsandbytes)
+        device_map = (
+            "auto"
+            if self.device == "cuda" and has_accelerate and quant_config is None
+            else None
+        )
 
         model_kwargs = {
             "torch_dtype": self.torch_dtype,
@@ -121,7 +129,7 @@ class VLMModel:
         if quant_config is not None:
             model_kwargs["quantization_config"] = quant_config
 
-        self.model = AutoModelForImageTextToText.from_pretrained(
+        self.model = AutoModelForVLM.from_pretrained(
             self.model_id,
             **model_kwargs,
         )

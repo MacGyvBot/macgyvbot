@@ -649,6 +649,15 @@ class MacGyvBotNode(Node):
             f"y={final_xyz[1]:.3f}, z={final_xyz[2]:.3f}, "
             f"gripper={proposal.action.gripper}"
         )
+        self.get_logger().info(
+            "VLA action delta: "
+            f"dxyz=({proposal.action.delta_xyz[0]:.4f}, "
+            f"{proposal.action.delta_xyz[1]:.4f}, "
+            f"{proposal.action.delta_xyz[2]:.4f}), "
+            f"drpy=({proposal.action.delta_rpy[0]:.4f}, "
+            f"{proposal.action.delta_rpy[1]:.4f}, "
+            f"{proposal.action.delta_rpy[2]:.4f})"
+        )
         if proposal.notes:
             self.get_logger().info(f"VLA notes: {'; '.join(proposal.notes)}")
 

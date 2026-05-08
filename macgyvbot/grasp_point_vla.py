@@ -22,6 +22,7 @@ gripper command. Joint positions can be carried alongside as metadata.
 from __future__ import annotations
 
 import importlib.util
+import os
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
@@ -119,6 +120,7 @@ class VLAConfig:
     gripper_close_threshold: float = 0.0
     clamp_xy_radius_m: float | None = 0.10
     max_descent_from_switch_m: float | None = 0.08
+    force_center_of_mass_xy: bool = True
 
 
 class VLAStateModel:
@@ -145,7 +147,13 @@ class VLAStateModel:
         model_source = self._resolve_local_model_source()
         self._ensure_runtime_dependencies()
 
-        from transformers import AutoModelForVision2Seq, AutoProcessor
+        from transformers import AutoProcessor
+        try:
+            from transformers import AutoModelForVision2Seq as AutoModelForVLA
+        except ImportError:
+            from transformers import (
+                AutoModelForImageTextToText as AutoModelForVLA,
+            )
 
         self.processor = AutoProcessor.from_pretrained(
             model_source,
@@ -155,14 +163,21 @@ class VLAStateModel:
 
         has_accelerate = importlib.util.find_spec("accelerate") is not None
         has_bitsandbytes = importlib.util.find_spec("bitsandbytes") is not None
-        device_map = "auto" if self.device == "cuda" and has_accelerate else None
         quant_config = self._make_quantization_config(has_bitsandbytes)
+        device_map = (
+            "auto"
+            if self.device == "cuda" and has_accelerate and quant_config is None
+            else None
+        )
 
         model_kwargs = {
             "torch_dtype": self.torch_dtype,
             "low_cpu_mem_usage": True,
             "trust_remote_code": self.config.trust_remote_code,
             "local_files_only": True,
+            # OpenVLA remote code can break on newer Transformers defaults that
+            # probe SDPA support during init. Pin eager attention for stability.
+            "attn_implementation": "eager",
         }
         if device_map is not None:
             model_kwargs["device_map"] = device_map
@@ -171,9 +186,11 @@ class VLAStateModel:
 
         flash_attn_available = importlib.util.find_spec("flash_attn") is not None
         if flash_attn_available and self.device == "cuda":
-            model_kwargs["attn_implementation"] = "flash_attention_2"
+            # Keep eager by default for compatibility; only opt into FA2 when
+            # explicitly requested by runtime config in future changes.
+            pass
 
-        self.model = AutoModelForVision2Seq.from_pretrained(
+        self.model = AutoModelForVLA.from_pretrained(
             model_source,
             **model_kwargs,
         )
@@ -184,18 +201,49 @@ class VLAStateModel:
         self.model.eval()
 
     def _resolve_local_model_source(self) -> str:
-        local_dir = self.config.local_model_root / self.config.model_id.replace(
-            "/",
-            "__",
-        )
-        if (local_dir / "config.json").exists():
-            return str(local_dir)
+        model_dir_name = self.config.model_id.replace("/", "__")
+
+        for root in self._candidate_local_model_roots():
+            local_dir = root / model_dir_name
+            if (local_dir / "config.json").exists():
+                return str(local_dir)
 
         raise FileNotFoundError(
             "로컬 VLA 가중치가 없거나 불완전합니다. "
-            f"model_id={self.config.model_id}, expected_path={local_dir}. "
+            f"model_id={self.config.model_id}, expected_path="
+            f"{self.config.local_model_root / model_dir_name}. "
             "먼저 `python3 scripts/download_vla_weights.py`를 실행해주세요."
         )
+
+    def _candidate_local_model_roots(self) -> list[Path]:
+        roots: list[Path] = []
+
+        env_root = os.environ.get("VLA_MODEL_ROOT", "").strip()
+        if env_root:
+            roots.append(Path(env_root).expanduser())
+
+        roots.append(self.config.local_model_root)
+        roots.append(Path.cwd() / "models" / "vla")
+
+        this_file = Path(__file__).resolve()
+        try:
+            install_idx = this_file.parts.index("install")
+            ws_root = Path(*this_file.parts[:install_idx])
+            src_root = ws_root / "src"
+            if src_root.exists():
+                roots.extend(src_root.glob("**/macgyvbot/models/vla"))
+        except ValueError:
+            pass
+
+        unique_roots: list[Path] = []
+        seen: set[str] = set()
+        for root in roots:
+            key = str(root.expanduser().resolve())
+            if key in seen:
+                continue
+            seen.add(key)
+            unique_roots.append(Path(key))
+        return unique_roots
 
     def unload(self):
         """Release processor/model memory after the grasp phase."""
@@ -295,9 +343,11 @@ class VLAStateModel:
 
         return (
             f"Move from the current pre-grasp pose to a stable grasp pose for the "
-            f"{object_context.label}. Keep the motion small and precise, align the "
-            f"gripper with the object, and prepare to close only when the grasp is "
-            f"well aligned. Task: {task}. "
+            f"{object_context.label}. Align the gripper orientation to the object's "
+            f"main axis; if the object appears rotated, rotate the wrist to match it "
+            f"before closing. Keep the grasp centered at the object's center of mass "
+            f"(centroid) and avoid side-offset grasps. Prioritize orientation alignment "
+            f"and grasp stability, then keep translation conservative. Task: {task}. "
             f"Current end-effector position in base frame: "
             f"x={ee_x:.3f}, y={ee_y:.3f}, z={ee_z:.3f}. "
             f"Detected object position in base frame: "
@@ -368,6 +418,13 @@ class VLAStateModel:
 
         object_xyz = np.asarray(object_context.base_position_xyz, dtype=float)
         switch_xyz = np.asarray(switch_state.ee_pose.position_xyz, dtype=float)
+
+        if self.config.force_center_of_mass_xy:
+            new_xyz[0] = object_xyz[0]
+            new_xyz[1] = object_xyz[1]
+            notes.append(
+                "Forced final XY to detected object center of mass for stable grasp."
+            )
 
         if self.config.clamp_xy_radius_m is not None:
             xy_delta = new_xyz[:2] - object_xyz[:2]
@@ -500,10 +557,19 @@ class VLAStateModel:
             )
 
         import torch
+        import transformers
 
         self.torch = torch
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.torch_dtype = self._select_dtype()
+
+        major = int(str(transformers.__version__).split(".", 1)[0])
+        if major >= 5:
+            raise ImportError(
+                "OpenVLA currently requires transformers<5. "
+                f"Detected transformers=={transformers.__version__}. "
+                "Please install a 4.x version (for example: pip install 'transformers<5')."
+            )
 
     def _select_dtype(self):
         if self.device != "cuda":
