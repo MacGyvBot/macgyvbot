@@ -9,18 +9,39 @@ from __future__ import annotations
 import json
 import importlib.util
 import math
+import re
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
 import torch
 from PIL import Image, ImageDraw, ImageFont
-from transformers import AutoModelForImageTextToText, AutoProcessor
+from transformers import AutoProcessor
+from ament_index_python.packages import get_package_share_directory
+
+try:
+    # Available in newer transformers.
+    from transformers import AutoModelForImageTextToText as _AutoVLMModel
+except ImportError:
+    # Backward-compatible fallback for older transformers (e.g., 4.40.x).
+    from transformers import AutoModelForVision2Seq as _AutoVLMModel
 
 
 DEFAULT_VLM_MODEL = "HuggingFaceTB/SmolVLM2-2.2B-Instruct"
 DEFAULT_MAX_IMAGE_SIZE = 640
 DEFAULT_GRID_SIZES = ((3, 3), (4, 4), (5, 5))
+def _default_local_model_root():
+    # In ROS install space, data files live under share/<package>/...
+    # Fallback to source-tree relative path for editable/dev execution.
+    try:
+        share_dir = Path(get_package_share_directory("macgyvbot"))
+        return share_dir / "models" / "vlm"
+    except Exception:
+        return Path(__file__).resolve().parents[1] / "models" / "vlm"
+
+
+DEFAULT_LOCAL_MODEL_ROOT = _default_local_model_root()
 
 
 @dataclass(frozen=True)
@@ -28,7 +49,7 @@ class VLMResult:
     """Structured VLM output for downstream selection logic."""
 
     text: str
-    data: dict[str, Any] | None = None
+    data: Any | None = None
 
 
 @dataclass(frozen=True)
@@ -54,6 +75,7 @@ class GraspRegionResult:
     point: tuple[float, float]
     angle_rad: float
     angle_deg: float
+    orientation_rpy_deg: tuple[float, float, float] = (0.0, 0.0, 0.0)
     choices: list[GridChoice] = field(default_factory=list)
     context: str = ""
 
@@ -86,6 +108,7 @@ class VLMModel:
         self.max_image_size = max_image_size
         self.max_new_tokens = max_new_tokens
         self.use_4bit = use_4bit
+        self.local_model_root = DEFAULT_LOCAL_MODEL_ROOT
 
         self.processor = None
         self.model = None
@@ -106,14 +129,34 @@ class VLMModel:
         if self.model is not None and self.processor is not None:
             return
 
-        self.processor = AutoProcessor.from_pretrained(self.model_id)
+        model_source = self._resolve_model_source()
+        local_dir = self.local_model_root / self.model_id.replace("/", "__")
+        print(
+            "[VLMModel.load] "
+            f"model_id={self.model_id}, "
+            f"resolved_source={model_source}, "
+            f"local_expected={local_dir}, "
+            f"local_exists={local_dir.exists()}"
+        )
+
+        try:
+            self.processor = AutoProcessor.from_pretrained(model_source)
+        except Exception as exc:
+            raise RuntimeError(
+                "VLM processor 로드 실패: "
+                f"model_source={model_source}, "
+                f"local_expected={local_dir}, "
+                f"local_exists={local_dir.exists()}, "
+                f"error={exc}"
+            ) from exc
+
         has_accelerate = importlib.util.find_spec("accelerate") is not None
         has_bitsandbytes = importlib.util.find_spec("bitsandbytes") is not None
         device_map = "auto" if self.device == "cuda" and has_accelerate else None
         quant_config = self._make_quantization_config(has_bitsandbytes)
 
         model_kwargs = {
-            "torch_dtype": self.torch_dtype,
+            "dtype": self.torch_dtype,
             "device_map": device_map,
             "low_cpu_mem_usage": True,
             "attn_implementation": "sdpa",
@@ -121,15 +164,41 @@ class VLMModel:
         if quant_config is not None:
             model_kwargs["quantization_config"] = quant_config
 
-        self.model = AutoModelForImageTextToText.from_pretrained(
-            self.model_id,
-            **model_kwargs,
-        )
+        try:
+            self.model = _AutoVLMModel.from_pretrained(
+                model_source,
+                **model_kwargs,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                "VLM model 로드 실패: "
+                f"model_source={model_source}, "
+                f"local_expected={local_dir}, "
+                f"local_exists={local_dir.exists()}, "
+                f"kwargs_keys={list(model_kwargs.keys())}, "
+                f"error={exc}"
+            ) from exc
 
         if device_map is None and quant_config is None:
             self.model.to(self.device)
 
         self.model.eval()
+
+    def _resolve_model_source(self):
+        # Prefer pre-downloaded local weights under models/vlm/<org>__<model>.
+        local_dir = self.local_model_root / self.model_id.replace("/", "__")
+        if local_dir.exists():
+            return str(local_dir)
+        return self.model_id
+
+    def get_runtime_info(self):
+        model_source = self._resolve_model_source()
+        return {
+            "device": self.device,
+            "dtype": str(self.torch_dtype).replace("torch.", ""),
+            "model_source": model_source,
+            "using_local_weights": str(model_source).startswith(str(self.local_model_root)),
+        }
 
     def unload(self):
         """Release VRAM/RAM when the VLM is no longer needed."""
@@ -158,19 +227,31 @@ class VLMModel:
             messages,
             add_generation_prompt=True,
             tokenize=True,
-            return_dict=True,
-            return_tensors="pt",
+            processor_kwargs={
+                "return_dict": True,
+                "return_tensors": "pt",
+            },
         )
         inputs = self._move_inputs_to_device(inputs)
 
         with torch.inference_mode():
-            generated_ids = self.model.generate(
-                **inputs,
-                max_new_tokens=self.max_new_tokens,
-                do_sample=False,
-            )
+            if isinstance(inputs, dict):
+                generated_ids = self.model.generate(
+                    **inputs,
+                    max_new_tokens=self.max_new_tokens,
+                    do_sample=False,
+                )
+            else:
+                generated_ids = self.model.generate(
+                    inputs,
+                    max_new_tokens=self.max_new_tokens,
+                    do_sample=False,
+                )
 
-        prompt_len = inputs["input_ids"].shape[-1]
+        if isinstance(inputs, dict) and "input_ids" in inputs:
+            prompt_len = inputs["input_ids"].shape[-1]
+        else:
+            prompt_len = inputs.shape[-1]
         generated_ids = generated_ids[:, prompt_len:]
         text = self.processor.batch_decode(
             generated_ids,
@@ -206,6 +287,7 @@ class VLMModel:
         user_request: str | None = None,
         grid_sizes: tuple[tuple[int, int], ...] = DEFAULT_GRID_SIZES,
         early_stop_radius: float = 0.18,
+        max_retries_per_grid: int = 5,
     ) -> GraspRegionResult:
         """Select an affordance-aligned grasp region using grid reasoning.
 
@@ -225,22 +307,33 @@ class VLMModel:
         )
 
         choices = []
+        retry_limit = max(1, int(max_retries_per_grid))
         for rows, cols in grid_sizes:
             overlay = self._draw_numbered_grid(work_image, rows, cols)
-            result = self._choose_grid_cell(
-                overlay,
-                rows=rows,
-                cols=cols,
-                context=context,
-                object_label=object_label,
-                user_request=user_request,
-            )
-            choice = self._grid_choice_from_result(
-                result=result,
-                rows=rows,
-                cols=cols,
-                image_size=work_image.size,
-            )
+            choice = None
+            for attempt in range(1, retry_limit + 1):
+                result = self._choose_grid_cell(
+                    overlay,
+                    rows=rows,
+                    cols=cols,
+                    context=context,
+                    object_label=object_label,
+                    user_request=user_request,
+                )
+                choice = self._grid_choice_from_result(
+                    result=result,
+                    rows=rows,
+                    cols=cols,
+                    image_size=work_image.size,
+                )
+                if choice is not None:
+                    break
+                print(
+                    "[VLMModel.select_grasp_region] "
+                    f"invalid grid choice (rows={rows}, cols={cols}) "
+                    f"retry {attempt}/{retry_limit}, "
+                    f"raw='{result.text[:200]}'"
+                )
 
             if choice is None:
                 continue
@@ -253,16 +346,94 @@ class VLMModel:
         if not choices:
             raise RuntimeError("VLM did not return a valid grasp grid cell.")
 
-        point, angle_rad = self._estimate_grasp_pose(choices)
-        point = (point[0] * scale_x, point[1] * scale_y)
+        coarse_point, angle_rad = self._estimate_grasp_pose(choices)
+        coarse_yaw_deg = math.degrees(angle_rad)
+
+        precise = self._estimate_precise_point_and_yaw(
+            work_image,
+            object_label=object_label,
+            user_request=user_request,
+            context=context,
+            coarse_point=coarse_point,
+            coarse_yaw_deg=coarse_yaw_deg,
+            max_retries=max_retries_per_grid,
+        )
+        if precise is not None:
+            point_work, yaw_deg = precise
+            point = (point_work[0] * scale_x, point_work[1] * scale_y)
+            angle_rad = math.radians(yaw_deg)
+        else:
+            point = (coarse_point[0] * scale_x, coarse_point[1] * scale_y)
+
+        orientation_rpy_deg = self._estimate_grasp_orientation_rpy(
+            work_image,
+            object_label=object_label,
+            user_request=user_request,
+            context=context,
+            yaw_hint_deg=math.degrees(angle_rad),
+        )
 
         return GraspRegionResult(
             point=point,
             angle_rad=angle_rad,
             angle_deg=math.degrees(angle_rad),
+            orientation_rpy_deg=orientation_rpy_deg,
             choices=choices,
             context=context,
         )
+
+    def _estimate_grasp_orientation_rpy(
+        self,
+        image: Image.Image,
+        object_label: str,
+        user_request: str | None,
+        context: str,
+        yaw_hint_deg: float | None = None,
+    ) -> tuple[float, float, float]:
+        request_text = user_request or "Pick up the object in a natural way."
+        hint = ""
+        if yaw_hint_deg is not None and math.isfinite(yaw_hint_deg):
+            hint = f"\nPrevious coarse yaw hint (deg): {float(yaw_hint_deg):.2f}"
+        prompt = (
+            "Estimate grasp orientation as strict JSON only for a robot end-effector.\n"
+            "Return keys: roll_deg, pitch_deg, yaw_deg, confidence, reason.\n"
+            "Use degrees. Keep values in [-180, 180].\n"
+            "If uncertain, keep roll_deg=0 and pitch_deg=0, but still output yaw_deg.\n"
+            "Do not return markdown or code fences.\n"
+            f"Object: {object_label}\n"
+            f"Robot task: {request_text}\n"
+            f"Context: {context}\n"
+            f"{hint}\n"
+        )
+        result = self.ask(image, prompt)
+        data = self._as_mapping(result.data)
+        roll = self._as_float(data.get("roll_deg"))
+        pitch = self._as_float(data.get("pitch_deg"))
+        yaw = self._as_float(data.get("yaw_deg"))
+
+        # Fallback for variant key names returned by some model outputs.
+        if roll is None:
+            roll = self._as_float(data.get("roll"))
+        if pitch is None:
+            pitch = self._as_float(data.get("pitch"))
+        if yaw is None:
+            yaw = self._as_float(data.get("yaw"))
+
+        # Last resort: extract numbers from free-form text.
+        if roll is None or pitch is None or yaw is None:
+            extracted = self._extract_orientation_from_text(result.text)
+            if extracted is not None:
+                roll, pitch, yaw = extracted
+
+        if yaw is None:
+            yaw = yaw_hint_deg
+        if roll is None:
+            roll = 0.0
+        if pitch is None:
+            pitch = 0.0
+        if yaw is None:
+            return (0.0, 0.0, 0.0)
+        return (float(roll), float(pitch), float(yaw))
 
     def describe_grasp_context(
         self,
@@ -390,12 +561,63 @@ class VLMModel:
             "context to prefer affordance-aligned, sturdy, safe regions.\n"
             "Return JSON only with keys: row, col, cell, confidence, reason.\n"
             "Rows and columns are 1-indexed.\n\n"
+            "Output must be a single JSON object. No extra text.\n"
             f"Object: {object_label}\n"
             f"Robot task: {request_text}\n"
             f"Context: {context}\n"
             f"Grid: {rows} rows x {cols} columns"
         )
         return self.ask(image, prompt)
+
+    def _estimate_precise_point_and_yaw(
+        self,
+        image: Image.Image,
+        object_label: str,
+        user_request: str | None,
+        context: str,
+        coarse_point: tuple[float, float],
+        coarse_yaw_deg: float,
+        max_retries: int = 5,
+    ) -> tuple[tuple[float, float], float] | None:
+        request_text = user_request or "Pick up the object in a natural way."
+        width, height = image.size
+        retry_limit = max(1, int(max_retries))
+        coarse_x = int(round(coarse_point[0]))
+        coarse_y = int(round(coarse_point[1]))
+
+        prompt = (
+            "Choose a precise grasp center and in-plane grasp yaw for a two-finger gripper.\n"
+            "Return strict JSON only with keys: x_px, y_px, yaw_deg, confidence, reason.\n"
+            f"Image size: width={width}, height={height}.\n"
+            "Constraints:\n"
+            f"- x_px must be integer in [0, {width - 1}]\n"
+            f"- y_px must be integer in [0, {height - 1}]\n"
+            "- yaw_deg must be in [-180, 180]\n"
+            "- choose a sturdy graspable region, avoid edges/holes/slippery tips\n"
+            "- no markdown, no code fence, no explanation outside JSON\n\n"
+            f"Object: {object_label}\n"
+            f"Robot task: {request_text}\n"
+            f"Context: {context}\n"
+            f"Coarse point hint: x={coarse_x}, y={coarse_y}\n"
+            f"Coarse yaw hint(deg): {coarse_yaw_deg:.2f}\n"
+        )
+
+        for attempt in range(1, retry_limit + 1):
+            result = self.ask(image, prompt)
+            data = self._as_mapping(result.data)
+            parsed_point = self._extract_point_px(data, result.text, width, height)
+            yaw = self._extract_yaw_deg(data, result.text)
+
+            if parsed_point is not None and yaw is not None:
+                return parsed_point, self._normalize_angle_deg(yaw)
+
+            print(
+                "[VLMModel._estimate_precise_point_and_yaw] "
+                f"invalid response retry {attempt}/{retry_limit}, "
+                f"raw='{result.text[:220]}'"
+            )
+
+        return None
 
     def _draw_numbered_grid(
         self,
@@ -436,10 +658,29 @@ class VLMModel:
         cols: int,
         image_size: tuple[int, int],
     ) -> GridChoice | None:
-        data = result.data or {}
+        data = self._as_mapping(result.data)
         row = self._as_int(data.get("row"))
         col = self._as_int(data.get("col"))
         cell = self._as_int(data.get("cell"))
+
+        if cell is None:
+            cell = self._as_int(data.get("cell_id"))
+        if cell is None:
+            cell = self._as_int(data.get("grid_cell"))
+
+        if (row is None or col is None) and data:
+            rc = self._extract_row_col_from_text(json.dumps(data, ensure_ascii=False))
+            if rc is not None:
+                row, col = rc
+            elif cell is None:
+                cell = self._extract_first_int(json.dumps(data, ensure_ascii=False))
+
+        if row is None or col is None or cell is None:
+            text_row_col = self._extract_row_col_from_text(result.text)
+            if text_row_col is not None:
+                row, col = text_row_col
+            elif cell is None:
+                cell = self._extract_first_int(result.text)
 
         if (row is None or col is None) and cell is not None:
             row = (cell - 1) // cols + 1
@@ -585,7 +826,10 @@ class VLMModel:
         try:
             return int(value)
         except (TypeError, ValueError):
-            return None
+            try:
+                return int(float(value))
+            except (TypeError, ValueError):
+                return None
 
     @staticmethod
     def _as_float(value) -> float | None:
@@ -599,6 +843,14 @@ class VLMModel:
 
     def _move_inputs_to_device(self, inputs):
         target_device = self._model_input_device()
+
+        if hasattr(inputs, "to") and not hasattr(inputs, "items"):
+            if torch.is_floating_point(inputs):
+                return inputs.to(target_device, dtype=self.torch_dtype)
+            return inputs.to(target_device)
+
+        if not hasattr(inputs, "items"):
+            return inputs
 
         moved = {}
         for key, value in inputs.items():
@@ -627,7 +879,7 @@ class VLMModel:
             return torch.device(self.device)
 
     @staticmethod
-    def _try_parse_json(text: str) -> dict[str, Any] | None:
+    def _try_parse_json(text: str) -> Any | None:
         try:
             return json.loads(text)
         except json.JSONDecodeError:
@@ -643,3 +895,138 @@ class VLMModel:
             return json.loads(text[start : end + 1])
         except json.JSONDecodeError:
             return None
+
+    @staticmethod
+    def _as_mapping(value: Any) -> dict[str, Any]:
+        if isinstance(value, dict):
+            return value
+        return {}
+
+    @staticmethod
+    def _extract_first_int(text: str) -> int | None:
+        if not text:
+            return None
+
+        match = re.search(r"-?\d+", text)
+        if not match:
+            return None
+
+        try:
+            return int(match.group(0))
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _extract_row_col_from_text(text: str) -> tuple[int, int] | None:
+        if not text:
+            return None
+
+        row_match = re.search(r"row\s*[:=]?\s*(-?\d+)", text, re.IGNORECASE)
+        col_match = re.search(r"col(?:umn)?\s*[:=]?\s*(-?\d+)", text, re.IGNORECASE)
+        if row_match and col_match:
+            try:
+                return int(row_match.group(1)), int(col_match.group(1))
+            except (TypeError, ValueError):
+                return None
+
+        # Fallback for short forms like "(2,3)".
+        tuple_match = re.search(r"\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)", text)
+        if tuple_match:
+            try:
+                return int(tuple_match.group(1)), int(tuple_match.group(2))
+            except (TypeError, ValueError):
+                return None
+
+        return None
+
+    @staticmethod
+    def _extract_orientation_from_text(text: str) -> tuple[float, float, float] | None:
+        if not text:
+            return None
+
+        roll_match = re.search(r"roll(?:_deg)?\s*[:=]?\s*(-?\d+(?:\.\d+)?)", text, re.IGNORECASE)
+        pitch_match = re.search(r"pitch(?:_deg)?\s*[:=]?\s*(-?\d+(?:\.\d+)?)", text, re.IGNORECASE)
+        yaw_match = re.search(r"yaw(?:_deg)?\s*[:=]?\s*(-?\d+(?:\.\d+)?)", text, re.IGNORECASE)
+
+        if roll_match and pitch_match and yaw_match:
+            try:
+                return (
+                    float(roll_match.group(1)),
+                    float(pitch_match.group(1)),
+                    float(yaw_match.group(1)),
+                )
+            except (TypeError, ValueError):
+                return None
+
+        return None
+
+    @staticmethod
+    def _normalize_angle_deg(angle_deg: float) -> float:
+        return ((float(angle_deg) + 180.0) % 360.0) - 180.0
+
+    def _extract_yaw_deg(self, data: dict[str, Any], raw_text: str) -> float | None:
+        for key in ("yaw_deg", "yaw", "angle_deg", "grasp_angle_deg"):
+            value = self._as_float(data.get(key))
+            if value is not None and math.isfinite(value):
+                return value
+
+        yaw_match = re.search(r"yaw(?:_deg)?\s*[:=]?\s*(-?\d+(?:\.\d+)?)", raw_text, re.IGNORECASE)
+        if yaw_match:
+            try:
+                return float(yaw_match.group(1))
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    def _extract_point_px(
+        self,
+        data: dict[str, Any],
+        raw_text: str,
+        width: int,
+        height: int,
+    ) -> tuple[float, float] | None:
+        direct_key_pairs = (
+            ("x_px", "y_px"),
+            ("x", "y"),
+            ("u", "v"),
+            ("pixel_x", "pixel_y"),
+        )
+        for x_key, y_key in direct_key_pairs:
+            x = self._as_int(data.get(x_key))
+            y = self._as_int(data.get(y_key))
+            if x is not None and y is not None:
+                return self._clamp_point_to_image(float(x), float(y), width, height)
+
+        x_norm = self._as_float(data.get("x_norm"))
+        y_norm = self._as_float(data.get("y_norm"))
+        if x_norm is not None and y_norm is not None:
+            x = x_norm * (width - 1)
+            y = y_norm * (height - 1)
+            return self._clamp_point_to_image(x, y, width, height)
+
+        x_match = re.search(r"x(?:_px)?\s*[:=]?\s*(-?\d+(?:\.\d+)?)", raw_text, re.IGNORECASE)
+        y_match = re.search(r"y(?:_px)?\s*[:=]?\s*(-?\d+(?:\.\d+)?)", raw_text, re.IGNORECASE)
+        if x_match and y_match:
+            try:
+                x = float(x_match.group(1))
+                y = float(y_match.group(1))
+                return self._clamp_point_to_image(x, y, width, height)
+            except (TypeError, ValueError):
+                return None
+
+        tuple_match = re.search(r"\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)", raw_text)
+        if tuple_match:
+            try:
+                x = float(tuple_match.group(1))
+                y = float(tuple_match.group(2))
+                return self._clamp_point_to_image(x, y, width, height)
+            except (TypeError, ValueError):
+                return None
+
+        return None
+
+    @staticmethod
+    def _clamp_point_to_image(x: float, y: float, width: int, height: int) -> tuple[float, float]:
+        cx = min(max(float(x), 0.0), float(max(width - 1, 0)))
+        cy = min(max(float(y), 0.0), float(max(height - 1, 0)))
+        return (cx, cy)
