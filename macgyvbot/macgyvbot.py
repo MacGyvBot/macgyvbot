@@ -402,6 +402,56 @@ class MacGyvBotNode(Node):
 
         return u, v, source
 
+    def ensure_vla_state_model_loaded(self):
+        try:
+            from .grasp_point_vla import VLAStateModel
+        except ImportError as exc:
+            self.get_logger().warn(f"VLA grasp 모듈 import 실패: {exc}")
+            return None
+
+        if self.vla_state_model is not None:
+            if (
+                self.vla_state_model.model is not None
+                and self.vla_state_model.processor is not None
+            ):
+                config = self.vla_state_model.config
+                self.get_logger().info(
+                    f"VLA 가중치 사용 준비 완료: model_id={config.model_id}, "
+                    f"device={self.vla_state_model.device}, "
+                    f"dtype={self.vla_state_model.torch_dtype}"
+                )
+                return self.vla_state_model
+        else:
+            self.get_logger().info("VLA grasp 모델 인스턴스 초기화를 시작합니다.")
+            self.vla_state_model = VLAStateModel()
+
+        config = self.vla_state_model.config
+        self.get_logger().info(
+            f"VLA 가중치 로드 시작: model_id={config.model_id}"
+        )
+
+        try:
+            self.vla_state_model.load()
+        except Exception as exc:
+            self.get_logger().warn(
+                f"VLA 가중치 로드 실패: model_id={config.model_id}, error={exc}"
+            )
+            try:
+                self.vla_state_model.unload()
+            except Exception:
+                pass
+            self.vla_state_model = None
+            return None
+
+        quantization = "4bit" if config.use_4bit else "full-precision"
+        self.get_logger().info(
+            f"VLA 가중치 로드 성공: model_id={config.model_id}, "
+            f"device={self.vla_state_model.device}, "
+            f"dtype={self.vla_state_model.torch_dtype}, "
+            f"quantization={quantization}"
+        )
+        return self.vla_state_model
+
     @staticmethod
     def clamp_bbox_to_image(bbox, image):
         height, width = image.shape[:2]
@@ -524,15 +574,14 @@ class MacGyvBotNode(Node):
                 DetectedObjectContext,
                 Pose3D,
                 RobotArmState,
-                VLAStateModel,
             )
         except ImportError as exc:
             self.get_logger().warn(f"VLA grasp 모듈 import 실패: {exc}")
             return None
 
-        if self.vla_state_model is None:
-            self.get_logger().info("VLA grasp 모델을 lazy load 준비합니다.")
-            self.vla_state_model = VLAStateModel()
+        vla_state_model = self.ensure_vla_state_model_loaded()
+        if vla_state_model is None:
+            return None
 
         ee_matrix = get_ee_matrix(self.robot)
         ee_quat = Rotation.from_matrix(ee_matrix[:3, :3]).as_quat()
@@ -564,7 +613,7 @@ class MacGyvBotNode(Node):
         )
 
         try:
-            proposal = self.vla_state_model.propose_grasp_state(
+            proposal = vla_state_model.propose_grasp_state(
                 self.color_image,
                 current_state=current_state,
                 object_context=object_context,
