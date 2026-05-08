@@ -23,7 +23,7 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
 
-from .command_parser import find_action, find_tool
+from macgyvbot.voice_command.command_parser import find_action, find_tool
 
 
 ALLOWED_TOOLS = {
@@ -75,7 +75,10 @@ class LlmCommandNode(Node):
         self.declare_parameter('target_label_topic', '/target_label')
         self.declare_parameter('tool_command_topic', '/tool_command')
         self.declare_parameter('command_feedback_topic', '/command_feedback')
-        self.declare_parameter('ollama_url', 'http://localhost:11434/api/generate')
+        self.declare_parameter(
+            'ollama_url',
+            'http://localhost:11434/api/generate',
+        )
         self.declare_parameter('model', 'qwen2.5:0.5b')
         self.declare_parameter('timeout_sec', 8.0)
         self.declare_parameter('min_confidence', 0.55)
@@ -85,18 +88,38 @@ class LlmCommandNode(Node):
         input_topic = self.get_parameter('input_topic').value
         target_label_topic = self.get_parameter('target_label_topic').value
         tool_command_topic = self.get_parameter('tool_command_topic').value
-        command_feedback_topic = self.get_parameter('command_feedback_topic').value
+        command_feedback_topic = self.get_parameter(
+            'command_feedback_topic'
+        ).value
         self._ollama_url = self.get_parameter('ollama_url').value
         self._model = self.get_parameter('model').value
         self._timeout_sec = float(self.get_parameter('timeout_sec').value)
-        self._min_confidence = float(self.get_parameter('min_confidence').value)
-        self._use_local_parser = bool(self.get_parameter('use_local_parser').value)
-        self._use_llm_fallback = bool(self.get_parameter('use_llm_fallback').value)
+        self._min_confidence = float(
+            self.get_parameter('min_confidence').value
+        )
+        self._use_local_parser = bool(
+            self.get_parameter('use_local_parser').value
+        )
+        self._use_llm_fallback = bool(
+            self.get_parameter('use_llm_fallback').value
+        )
         self._pending_command = None
 
-        self._target_label_pub = self.create_publisher(String, target_label_topic, 10)
-        self._tool_command_pub = self.create_publisher(String, tool_command_topic, 10)
-        self._feedback_pub = self.create_publisher(String, command_feedback_topic, 10)
+        self._target_label_pub = self.create_publisher(
+            String,
+            target_label_topic,
+            10,
+        )
+        self._tool_command_pub = self.create_publisher(
+            String,
+            tool_command_topic,
+            10,
+        )
+        self._feedback_pub = self.create_publisher(
+            String,
+            command_feedback_topic,
+            10,
+        )
         self.create_subscription(String, input_topic, self._text_cb, 10)
 
         self.get_logger().info('하이브리드 명령 해석 노드 준비 완료')
@@ -128,7 +151,9 @@ class LlmCommandNode(Node):
                 return
 
         if not self._use_llm_fallback:
-            self.get_logger().warn('local parser 실패, LLM fallback이 꺼져 있어 무시합니다.')
+            self.get_logger().warn(
+                'local parser 실패, LLM fallback이 꺼져 있어 무시합니다.'
+            )
             self._publish_feedback(
                 status='rejected',
                 raw_text=text,
@@ -199,7 +224,8 @@ class LlmCommandNode(Node):
             self._target_label_pub.publish(target_msg)
             self.get_logger().info(
                 f'명령 발행: tool={command["tool_name"]}, '
-                f'action={command["action"]}, method={command["match_method"]}, '
+                f'action={command["action"]}, '
+                f'method={command["match_method"]}, '
                 f'confidence={command["confidence"]:.2f} '
                 '-> /target_label 발행'
             )
@@ -291,7 +317,14 @@ class LlmCommandNode(Node):
             return f'{tool_name}를 가져오라는 뜻인가요? 네 또는 아니오로 답해주세요.'
         return '명령을 확신하기 어렵습니다. 다시 입력해주세요.'
 
-    def _publish_feedback(self, status, raw_text, reason, message, command=None):
+    def _publish_feedback(
+        self,
+        status,
+        raw_text,
+        reason,
+        message,
+        command=None,
+    ):
         payload = {
             'status': status,
             'raw_text': raw_text,
@@ -404,13 +437,17 @@ class LlmCommandNode(Node):
 
         match = re.search(r'\{.*\}', cleaned, flags=re.DOTALL)
         if not match:
-            self.get_logger().error(f'LLM 응답에서 JSON을 찾지 못했습니다: {response_text}')
+            self.get_logger().error(
+                f'LLM 응답에서 JSON을 찾지 못했습니다: {response_text}'
+            )
             return None
 
         try:
             return json.loads(match.group(0))
         except json.JSONDecodeError as exc:
-            self.get_logger().error(f'LLM JSON 파싱 실패: {exc}, raw={response_text}')
+            self.get_logger().error(
+                f'LLM JSON 파싱 실패: {exc}, raw={response_text}'
+            )
             return None
 
     def _validate_command(self, parsed, raw_text):
@@ -451,7 +488,9 @@ class LlmCommandNode(Node):
                     raw_text=raw_text,
                     command=candidate_command,
                     reason='low_confidence',
-                    question=self._build_confirmation_question(candidate_command),
+                    question=self._build_confirmation_question(
+                        candidate_command
+                    ),
                 )
                 return None
 
@@ -472,7 +511,9 @@ class LlmCommandNode(Node):
                     raw_text=raw_text,
                     command=candidate_command,
                     reason='unknown_action',
-                    question=self._build_confirmation_question(candidate_command),
+                    question=self._build_confirmation_question(
+                        candidate_command
+                    ),
                 )
                 return None
 
@@ -491,7 +532,10 @@ class LlmCommandNode(Node):
                 status='rejected',
                 raw_text=raw_text,
                 reason='unknown_tool',
-                message='어떤 공구를 가져올지 확실하지 않습니다. 드라이버, 플라이어, 망치, 줄자 중에서 다시 말해주세요.',
+                message=(
+                    '어떤 공구를 가져올지 확실하지 않습니다. '
+                    '드라이버, 플라이어, 망치, 줄자 중에서 다시 말해주세요.'
+                ),
                 command=candidate_command,
             )
             return None

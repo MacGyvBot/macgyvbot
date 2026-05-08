@@ -29,21 +29,46 @@ class VoiceCommandUiNode(Node):
         stt_text_topic = self.get_parameter('stt_text_topic').value
         tool_command_topic = self.get_parameter('tool_command_topic').value
         target_label_topic = self.get_parameter('target_label_topic').value
-        command_feedback_topic = self.get_parameter('command_feedback_topic').value
+        command_feedback_topic = self.get_parameter(
+            'command_feedback_topic'
+        ).value
         robot_status_topic = self.get_parameter('robot_status_topic').value
 
         self._text_pub = self.create_publisher(String, stt_text_topic, 10)
         self.create_subscription(String, stt_text_topic, self._stt_text_cb, 10)
-        self.create_subscription(String, tool_command_topic, self._tool_command_cb, 10)
-        self.create_subscription(String, target_label_topic, self._target_label_cb, 10)
-        self.create_subscription(String, command_feedback_topic, self._feedback_cb, 10)
-        self.create_subscription(String, robot_status_topic, self._robot_status_cb, 10)
+        self.create_subscription(
+            String,
+            tool_command_topic,
+            self._tool_command_cb,
+            10,
+        )
+        self.create_subscription(
+            String,
+            target_label_topic,
+            self._target_label_cb,
+            10,
+        )
+        self.create_subscription(
+            String,
+            command_feedback_topic,
+            self._feedback_cb,
+            10,
+        )
+        self.create_subscription(
+            String,
+            robot_status_topic,
+            self._robot_status_cb,
+            10,
+        )
 
         self._last_cli_text = ''
         self._last_target_label = ''
         self._last_command = None
         self._stop_event = threading.Event()
-        self._input_thread = threading.Thread(target=self._input_loop, daemon=True)
+        self._input_thread = threading.Thread(
+            target=self._input_loop,
+            daemon=True,
+        )
         self._input_thread.start()
 
         self._print_banner()
@@ -173,7 +198,10 @@ class VoiceCommandUiNode(Node):
             return
 
         state = status.get('status', status.get('state', 'unknown'))
-        tool_name = status.get('tool_name', self._last_target_label or 'unknown')
+        tool_name = status.get(
+            'tool_name',
+            self._last_target_label or 'unknown',
+        )
         message = status.get('message', '')
 
         if state in ('done', 'completed', 'success'):
