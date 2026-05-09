@@ -272,6 +272,13 @@ source ~/ros2_ws/install/setup.bash
 ros2 launch macgyvbot macgyvbot.launch.py grasp_point_mode:=vla
 ```
 
+VLA prompt update:
+- The final grasp prompt now explicitly describes the robot as a two-finger parallel-jaw gripper.
+- The requested action prioritizes placing the fingertip midpoint on the detected object center of mass/centroid.
+- The prompt asks the wrist/gripper orientation to align with the object's main/principal axis and graspable cross-axis before closing.
+- Object-specific cues are included from the detected label and bounding-box shape. Elongated tools are guided toward long-axis alignment, cylindrical/cup-like objects toward centered diameter grasps, rounded objects toward exact center pinches, and handle-like appendages are avoided unless they are the most stable centered grasp.
+- The VLA is still expected to output one final 7-DoF action: `dx, dy, dz, droll, dpitch, dyaw, gripper`.
+
 VLA 모드는 YOLO와 depth로 객체의 base 좌표를 구한 뒤, 기존 방식처럼 grasp 높이까지 먼저 접근합니다. 이후 바로 잡지 않고 z를 조금 다시 올린 switch pose에서 현재 카메라 영상과 end-effector 상태를 VLA에 넣어 최종 grasp pose를 보정합니다. VLA 가중치는 로컬 `weights/vla/<org>__<model>` 경로에서만 로드하며, 시작 시 로드에 실패하면 자동으로 `center` 모드로 fallback합니다. 추론이나 최종 pose 이동이 실패하는 경우에도 기존 grasp pose로 fallback합니다.
 
 VLA 가중치 다운로드 예:

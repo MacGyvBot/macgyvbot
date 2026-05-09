@@ -225,3 +225,10 @@ weights/
 ```
 
 `yolov11_best.pt`는 메인 객체 탐지와 hand grasp tool ROI 탐지에서 기본 YOLO 모델명으로 사용됩니다. VLM weight는 `grasp_point_mode:=vlm`일 때 grasp point 후보를 고르는 데 사용됩니다. VLA weight는 `grasp_point_mode:=vla`일 때 switch pose에서 최종 grasp pose를 보정하는 데 사용됩니다.
+
+VLA prompt behavior:
+- The VLA instruction is built for a two-finger parallel-jaw gripper.
+- The final action is guided to place the fingertip midpoint on the detected object center of mass/centroid.
+- Wrist orientation is guided to align with the object's main/principal axis and graspable cross-axis.
+- The prompt includes object-specific cues from the detected class label and bounding-box aspect ratio, so elongated, cylindrical/cup-like, rounded, and handle-bearing objects receive different grasp guidance.
+- The model output is interpreted as one 7-DoF final alignment action: `dx, dy, dz, droll, dpitch, dyaw, gripper`.
