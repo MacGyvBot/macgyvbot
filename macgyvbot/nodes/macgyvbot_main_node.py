@@ -27,24 +27,26 @@ from macgyvbot.config.config import (
     ROBOT_WINDOW_NAME,
     YOLO_MODEL_NAME,
 )
-from macgyvbot.util.model_control.moveit_controller import (
+from macgyvbot.util.macgyvbot_main.model_control.moveit_controller import (
     MoveItController,
     plan_and_execute,
 )
-from macgyvbot.util.model_control.onrobot_gripper import RG
-from macgyvbot.util.model_control.robot_pose import get_ee_matrix
-from macgyvbot.util.perception.depth_projection import DepthProjector
-from macgyvbot.util.perception.grasp_point_selector import (
+from macgyvbot.util.macgyvbot_main.model_control.onrobot_gripper import RG
+from macgyvbot.util.macgyvbot_main.model_control.robot_pose import get_ee_matrix
+from macgyvbot.util.macgyvbot_main.perception.depth_projection import DepthProjector
+from macgyvbot.util.macgyvbot_main.grasp_mechanism.grasp_point_selector import (
     GraspPointSelector,
     normalize_grasp_point_mode,
 )
-from macgyvbot.util.perception.yolo_detector import YoloDetector
-from macgyvbot.util.task_pipeline.task_pipeline import PickSequenceRunner
+from macgyvbot.util.macgyvbot_main.perception.yolo_detector import YoloDetector
+from macgyvbot.util.macgyvbot_main.task_pipeline.task_pipeline import (
+    PickSequenceRunner,
+)
 
 
 class MacGyvBotNode(Node):
     def __init__(self):
-        super().__init__("macgyvbot_node")
+        super().__init__("macgyvbot_main_node")
 
         self.bridge = CvBridge()
         self.color_image = None

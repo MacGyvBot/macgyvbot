@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from macgyvbot.util.model_control.robot_pose import get_ee_matrix
+from macgyvbot.util.macgyvbot_main.model_control.robot_pose import get_ee_matrix
 
 
 class DepthProjector:

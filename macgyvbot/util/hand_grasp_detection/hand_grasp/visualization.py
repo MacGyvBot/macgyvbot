@@ -6,8 +6,10 @@ from typing import Optional
 
 import cv2
 
-from macgyvbot.util.hand_grasp.tool_detector import ToolDetection
-from macgyvbot.util.hand_grasp.utils import draw_text
+from macgyvbot.util.hand_grasp_detection.hand_grasp.tool_detector import (
+    ToolDetection,
+)
+from macgyvbot.util.hand_grasp_detection.hand_grasp.calculations import draw_text
 
 
 def draw_grasp_overlay(

@@ -32,7 +32,7 @@
 
 - hand grasp detection 노드를 `macgyvbot/nodes/` 아래로 이동했다.
 - 루트의 `hand_grasp_detection_node.py` wrapper는 사용처가 없어 제거했다.
-- depth 변환과 active hand 선택 로직을 `grasp_detection/utils.py`로 옮겼다.
+- depth 변환과 active hand 선택 로직을 `grasp_detection/calculations.py`로 옮겼다.
 - overlay drawing 로직을 `grasp_detection/visualization.py`로 분리했다.
 - YOLO 모델 경로 해석은 `ToolDetector`가 담당하도록 중복 resolver를 제거했다.
 
@@ -56,7 +56,7 @@
 ## 6. Main node wrapper 제거
 
 - 루트의 `macgyvbot.py` wrapper가 실제 entrypoint에서 사용되지 않는 것을 확인했다.
-- `setup.py`는 이미 `macgyvbot.nodes.macgyvbot_node:main`을 직접 사용하고 있어 wrapper를 제거했다.
+- `setup.py`는 이미 `macgyvbot.nodes.macgyvbot_main_node:main`을 직접 사용하고 있어 wrapper를 제거했다.
 - README의 패키지 구조와 executable 설명을 새 구조에 맞게 수정했다.
 
 ## 7. Util 폴더 정리
@@ -95,8 +95,8 @@
 ## 10. Perception 폴더 정리
 
 - YOLO detector만 `util/perception/yolo_detector.py`로 이동했다.
-- `depth_projection.py`의 depth pixel to base 변환 로직을 `macgyvbot_node.py`로 흡수했다.
-- `grasp_point_selector.py`의 grasp point 선택 흐름을 `macgyvbot_node.py`로 흡수했다.
+- `depth_projection.py`의 depth pixel to base 변환 로직을 `macgyvbot_main_node.py`로 흡수했다.
+- `grasp_point_selector.py`의 grasp point 선택 흐름을 `macgyvbot_main_node.py`로 흡수했다.
 - 기존 `perception/` 패키지를 제거하고 README의 패키지 구조를 수정했다.
 
 확인:
@@ -155,7 +155,7 @@
 ## 15. Review 반영
 
 - task pipeline 오타가 실제 패키지 경로로 굳어지지 않도록 `task_pipeline/task_pipeline.py`로 정정했다.
-- `macgyvbot_node.py`에 흡수됐던 grasp point 선택 흐름을 `util/perception/grasp_point_selector.py`로 다시 분리했다.
+- `macgyvbot_main_node.py`에 흡수됐던 grasp point 선택 흐름을 `util/perception/grasp_point_selector.py`로 다시 분리했다.
 - depth pixel to base 변환 로직을 `util/perception/depth_projection.py`로 다시 분리했다.
 - main node는 ROS wiring, 상태 수신, frame loop, pick 시작 요청 중심으로 축소했다.
 
@@ -244,10 +244,10 @@
 - YAML 설정 전환을 되돌리고 `macgyvbot/config/config.py` Python 상수 구성을 유지하도록 복원했다.
 - `macgyvbot/util/runtime_config.py`, `config/config.yaml`, YAML 의존성(`PyYAML`, `python3-yaml`)을 제거했다.
 - `grasp_by_bbox_center.py`의 단일 bbox center 선택 함수를 `util/perception/grasp_point_selector.py` 내부 helper로 합치고 파일을 제거했다.
-- `ui/debug_windows.py`의 작은 OpenCV window wrapper를 `macgyvbot_node.py` 내부 private helper로 합치고 파일을 제거했다.
+- `ui/debug_windows.py`의 작은 OpenCV window wrapper를 `macgyvbot_main_node.py` 내부 private helper로 합치고 파일을 제거했다.
 - `command_input_node`는 `/tool_command`와 `/command_feedback`만 발행하도록 정리하고, `/target_label`은 수동 호환 입력 경로로 남겼다.
-- `macgyvbot_node`가 `/tool_command`를 직접 구독해 `bring`, `release`, `stop` 명령을 처리하도록 연결했다.
-- `macgyvbot_node`가 `/robot_task_status`를 발행해 GUI가 실제 로봇 실행 상태(`accepted`, `searching`, `picking`, `waiting_handoff`, `done`, `failed`, `busy`, `returned`, `cancelled`)를 받을 수 있게 했다.
+- `macgyvbot_main_node`가 `/tool_command`를 직접 구독해 `bring`, `release`, `stop` 명령을 처리하도록 연결했다.
+- `macgyvbot_main_node`가 `/robot_task_status`를 발행해 GUI가 실제 로봇 실행 상태(`accepted`, `searching`, `picking`, `waiting_handoff`, `done`, `failed`, `busy`, `returned`, `cancelled`)를 받을 수 있게 했다.
 - `PickSequenceRunner`가 주요 실패/완료/핸드오프 대기/원위치 반환 상태를 `/robot_task_status`로 보고하도록 연결했다.
 - command parser와 hand grasp tool class 목록을 `drill`, `hammer`, `pliers`, `screwdriver`, `tape_measure`, `wrench` 기준으로 맞췄다.
 - README의 구조도와 명령 흐름을 `/tool_command` 중심 파이프라인으로 갱신했다.

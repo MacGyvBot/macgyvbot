@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Optional, Tuple
 
-from .utils import (
+from .calculations import (
     distance,
     expand_rect,
     point_in_rect,

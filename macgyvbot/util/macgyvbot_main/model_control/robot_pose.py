@@ -6,7 +6,9 @@ import numpy as np
 from geometry_msgs.msg import PoseStamped
 from scipy.spatial.transform import Rotation
 
-from macgyvbot.util.model_control.robot_safezone import clamp_to_safe_workspace
+from macgyvbot.util.macgyvbot_main.model_control.robot_safezone import (
+    clamp_to_safe_workspace,
+)
 
 from macgyvbot.config.config import BASE_FRAME, EE_LINK
 

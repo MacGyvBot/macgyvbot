@@ -10,7 +10,7 @@ command_input_node
   -> command parser로 자연어 명령 해석
   -> /tool_command, /command_feedback 발행
 
-macgyvbot_node
+macgyvbot_main_node
   -> /tool_command 또는 수동 /target_label 수신
   -> RealSense color/depth 기반 YOLO 탐지
   -> grasp point 선택
@@ -52,7 +52,7 @@ hand_grasp_detection_node
   - `/tool_command`에 JSON 명령을 발행하고, `/command_feedback`으로 해석 결과 피드백을 냅니다.
   - `/robot_task_status`를 구독해 로봇 실행 상태를 GUI 채팅창에 표시합니다.
 
-- `macgyvbot/nodes/macgyvbot_node.py`
+- `macgyvbot/nodes/macgyvbot_main_node.py`
   - 메인 로봇 실행 노드입니다.
   - RealSense color/depth/camera_info, `/tool_command`, `/target_label`, `/human_grasped_tool`을 구독합니다.
   - YOLO 탐지, grasp point 선택, depth projection, MoveIt 실행 시퀀스 시작을 조율합니다.
@@ -160,7 +160,7 @@ hand_grasp_detection_node
 
 - `macgyvbot/util/task_pipeline/task_pipeline.py`
   - pick, lift, home 복귀, 사용자 handoff 대기, 실패 시 원위치 반환까지의 실행 시퀀스를 담당합니다.
-  - `macgyvbot_node`에서 시작되지만, 실제 단계별 MoveIt/gripper 실행 흐름은 이 파일에 분리되어 있습니다.
+  - `macgyvbot_main_node`에서 시작되지만, 실제 단계별 MoveIt/gripper 실행 흐름은 이 파일에 분리되어 있습니다.
   - 주요 성공/실패 상태를 `/robot_task_status`로 보고할 수 있도록 node state를 사용합니다.
 
 ## `macgyvbot/util/hand_grasp/`
@@ -183,7 +183,7 @@ hand_grasp_detection_node
   - landmark proximity, palm/tool distance, hand-tool overlap, pinch distance, depth contact를 종합합니다.
   - 일정 frame 이상 grasp candidate가 유지되면 `HUMAN_GRASPED_TOOL`로 확정합니다.
 
-- `macgyvbot/util/hand_grasp/utils.py`
+- `macgyvbot/util/hand_grasp_detection/hand_grasp/calculations.py`
   - hand grasp 판단에 필요한 geometry/depth helper 모음입니다.
   - rectangle distance, IoU, depth median, depth contact 정보 생성, active hand 선택, text drawing 등을 제공합니다.
 

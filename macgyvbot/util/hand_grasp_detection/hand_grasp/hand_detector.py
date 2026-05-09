@@ -6,7 +6,7 @@ import cv2
 import mediapipe as mp
 import numpy as np
 
-from .utils import distance, rect_from_points, rect_iou
+from .calculations import distance, rect_from_points, rect_iou
 
 Point = Tuple[int, int]
 

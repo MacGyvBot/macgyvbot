@@ -50,7 +50,7 @@ setup(
     },
     entry_points={
             'console_scripts': [
-                'macgyvbot = macgyvbot.nodes.macgyvbot_node:main',
+                'macgyvbot = macgyvbot.nodes.macgyvbot_main_node:main',
                 'hand_grasp_detection = macgyvbot.nodes.hand_grasp_detection_node:main',
                 'command_input_node = macgyvbot.nodes.command_input_node:main',
             ],

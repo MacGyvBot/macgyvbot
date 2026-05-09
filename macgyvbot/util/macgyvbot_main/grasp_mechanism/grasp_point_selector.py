@@ -60,7 +60,7 @@ class GraspPointSelector:
         target_label,
     ):
         try:
-            from macgyvbot.util.grasp_mechanism.grasp_by_vlm import (
+            from macgyvbot.util.macgyvbot_main.grasp_mechanism.grasp_by_vlm import (
                 VLMGraspMechanism,
             )
         except ImportError as exc:

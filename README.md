@@ -11,7 +11,7 @@ MacGyvBot은 음성 명령 기반 공구 서랍 관리 로봇팔 어시스턴트
 ```text
 macgyvbot/
 ├── nodes/
-│   ├── macgyvbot_node.py                # ROS wiring, parameter, frame loop
+│   ├── macgyvbot_main_node.py           # ROS wiring, parameter, frame loop
 │   ├── hand_grasp_detection_node.py     # hand grasp detection ROS wiring
 │   └── command_input_node.py            # STT + GUI + 명령 해석 통합 노드
 ├── config/
@@ -28,7 +28,7 @@ macgyvbot/
 │   │   ├── hand_detector.py             # MediaPipe hand landmark 검출
 │   │   ├── tool_detector.py             # hand grasp용 YOLO tool ROI 검출
 │   │   ├── grasp_detector.py            # hand-tool grasp 상태 판정
-│   │   ├── utils.py                     # geometry/depth helper
+│   │   ├── calculations.py              # geometry/depth helper
 │   │   └── visualization.py             # hand grasp overlay drawing
 │   ├── grasp_mechanism/
 │   │   └── grasp_by_vlm.py              # VLM 기반 grasp point 선택
@@ -40,7 +40,109 @@ macgyvbot/
 │   └── voice_command_window.py          # PyQt command input window
 ```
 
-기존 executable 이름은 `macgyvbot`으로 유지되며, entrypoint는 `nodes/macgyvbot_node.py`를 직접 사용합니다.
+기존 executable 이름은 `macgyvbot`으로 유지되며, entrypoint는 `nodes/macgyvbot_main_node.py`를 직접 사용합니다.
+
+## Pipeline Structure
+
+현재 launch 기준 실행 구조와 ROS topic pub/sub 관계는 아래와 같습니다.
+
+```mermaid
+flowchart LR
+    subgraph launch["launch/macgyvbot.launch.py"]
+        cmd["command_input_node"]
+        hand["hand_grasp_detection_node"]
+        main["macgyvbot_main_node"]
+    end
+
+    mic["Microphone"] --> cmd
+    gui["voice_command_window.py\nGUI text input / status view"] --> cmd
+    ollama["Ollama server"] --> cmd
+
+    camColor["/camera/camera/color/image_raw"]
+    camDepth["/camera/camera/aligned_depth_to_color/image_raw"]
+    camInfo["/camera/camera/color/camera_info"]
+
+    camColor --> hand
+    camDepth --> hand
+    camColor --> main
+    camDepth --> main
+    camInfo --> main
+
+    cmd -- "pub /tool_command" --> main
+    cmd -- "pub /command_feedback" --> feedback["/command_feedback"]
+    cmd -- "pub /stt_text" --> stt["/stt_text"]
+    main -- "pub /robot_task_status" --> cmd
+
+    hand -- "pub /human_grasped_tool" --> main
+    hand -- "pub /hand_grasp_detection/annotated_image" --> main
+
+    manual["manual /target_label"] -- "pub /target_label" --> main
+```
+
+각 노드 내부에서 어떤 파일이 어떤 역할을 맡는지도 함께 보면 아래와 같습니다.
+
+```mermaid
+flowchart TD
+    subgraph command["command_input_node"]
+        cmdnode["nodes/command_input_node.py\nGUI + STT + topic wiring"]
+        ui["ui/voice_command_window.py\nPyQt GUI"]
+        sttmod["util/command_input/stt/speech_to_text.py\nmicrophone STT wrapper"]
+        parser["util/command_input/input_mapping/command_llm_parser.py\nlocal parser + LLM fallback"]
+        hard["util/command_input/input_mapping/command_hard_parser.py\nalias / fuzzy command parsing"]
+        ui --> cmdnode
+        sttmod --> cmdnode
+        parser --> cmdnode
+        hard --> parser
+    end
+
+    subgraph handgrasp["hand_grasp_detection_node"]
+        hgNode["nodes/hand_grasp_detection_node.py\ncamera subscriptions + result publishing"]
+        handDet["hand_grasp/hand_detector.py\nMediaPipe hand landmarks"]
+        toolDet["hand_grasp/tool_detector.py\nYOLO tool ROI detection"]
+        calc["hand_grasp/calculations.py\ngeometry / depth / hand selection helpers"]
+        graspDet["hand_grasp/grasp_detector.py\nhand-tool grasp state scoring"]
+        viz["hand_grasp/visualization.py\noverlay rendering"]
+        handDet --> hgNode
+        toolDet --> hgNode
+        calc --> hgNode
+        calc --> handDet
+        calc --> graspDet
+        calc --> viz
+        graspDet --> hgNode
+        viz --> hgNode
+    end
+
+    subgraph mainbot["macgyvbot_main_node"]
+        mainNode["nodes/macgyvbot_main_node.py\nmain ROS wiring + frame loop + command handling"]
+        yolo["util/macgyvbot_main/perception/yolo_detector.py\nobject detection"]
+        graspSel["util/macgyvbot_main/grasp_mechanism/grasp_point_selector.py\ncenter/VLM grasp-point routing"]
+        vlm["util/macgyvbot_main/grasp_mechanism/grasp_by_vlm.py\nVLM grasp pixel inference"]
+        depthProj["util/macgyvbot_main/perception/depth_projection.py\npixel+depth to base pose"]
+        motion["util/macgyvbot_main/model_control/moveit_controller.py\nMoveIt planning / execution"]
+        pose["util/macgyvbot_main/model_control/robot_pose.py\npose/orientation helpers"]
+        safe["util/macgyvbot_main/model_control/robot_safezone.py\nworkspace clamp"]
+        grip["util/macgyvbot_main/model_control/onrobot_gripper.py\nRG gripper control"]
+        pipeline["util/macgyvbot_main/task_pipeline/task_pipeline.py\npick / handoff / return sequence"]
+        yolo --> mainNode
+        graspSel --> mainNode
+        depthProj --> mainNode
+        motion --> mainNode
+        grip --> mainNode
+        pipeline --> mainNode
+        vlm --> graspSel
+        pose --> depthProj
+        pose --> motion
+        pose --> pipeline
+        safe --> motion
+        safe --> pipeline
+    end
+```
+
+토픽 기준으로 요약하면:
+
+- `command_input_node`는 사용자 입력을 받아 `/tool_command`, `/command_feedback`, `/stt_text`를 발행하고 `/robot_task_status`를 구독합니다.
+- `hand_grasp_detection_node`는 카메라 입력을 받아 `/human_grasped_tool`, `/hand_grasp_detection/annotated_image`를 발행합니다.
+- `macgyvbot_main_node`는 카메라/명령/hand grasp 결과를 구독해서 pick pipeline을 실행하고 `/robot_task_status`를 발행합니다.
 
 ## 주요 기능
 

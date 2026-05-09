@@ -4,7 +4,9 @@ import time
 
 import rclpy
 
-from macgyvbot.util.model_control.robot_safezone import clamp_to_safe_workspace
+from macgyvbot.util.macgyvbot_main.model_control.robot_safezone import (
+    clamp_to_safe_workspace,
+)
 
 from macgyvbot.config.config import (
     APPROACH_Z_OFFSET,
@@ -17,7 +19,7 @@ from macgyvbot.config.config import (
     MIN_TRAVEL_Z,
     SAFE_Z,
 )
-from macgyvbot.util.model_control.robot_pose import (
+from macgyvbot.util.macgyvbot_main.model_control.robot_pose import (
     current_ee_orientation,
     get_ee_matrix,
     make_safe_pose,

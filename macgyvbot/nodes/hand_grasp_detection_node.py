@@ -11,20 +11,26 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
 
-from macgyvbot.util.hand_grasp.grasp_detector import GraspDetector
-from macgyvbot.util.hand_grasp.hand_detector import HandDetector
-from macgyvbot.util.hand_grasp.tool_detector import (
+from macgyvbot.util.hand_grasp_detection.hand_grasp.grasp_detector import (
+    GraspDetector,
+)
+from macgyvbot.util.hand_grasp_detection.hand_grasp.hand_detector import (
+    HandDetector,
+)
+from macgyvbot.util.hand_grasp_detection.hand_grasp.tool_detector import (
     DEFAULT_MODEL_PATH,
     DEFAULT_TOOL_CLASSES,
     ToolDetection,
     ToolDetector,
 )
-from macgyvbot.util.hand_grasp.utils import (
+from macgyvbot.util.hand_grasp_detection.hand_grasp.calculations import (
     build_depth_grasp_info,
     depth_to_mm,
     select_active_hand,
 )
-from macgyvbot.util.hand_grasp.visualization import draw_grasp_overlay
+from macgyvbot.util.hand_grasp_detection.hand_grasp.visualization import (
+    draw_grasp_overlay,
+)
 
 
 class HandGraspDetectionNode(Node):

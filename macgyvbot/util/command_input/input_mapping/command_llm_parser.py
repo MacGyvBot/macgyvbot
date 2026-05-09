@@ -4,7 +4,7 @@ import json
 import re
 from urllib import error, request
 
-from macgyvbot.util.input_mapping.command_hard_parser import (
+from macgyvbot.util.command_input.input_mapping.command_hard_parser import (
     find_action,
     find_tool,
 )

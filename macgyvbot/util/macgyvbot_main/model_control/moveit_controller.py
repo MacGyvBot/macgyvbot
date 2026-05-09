@@ -5,10 +5,12 @@ import math
 import numpy as np
 from moveit.core.robot_state import RobotState
 
-from macgyvbot.util.model_control.robot_safezone import clamp_to_safe_workspace
+from macgyvbot.util.macgyvbot_main.model_control.robot_safezone import (
+    clamp_to_safe_workspace,
+)
 
 from macgyvbot.config.config import GROUP_NAME, EE_LINK, WRIST_JOINT_NAME
-from macgyvbot.util.model_control.robot_pose import normalize_angle_deg
+from macgyvbot.util.macgyvbot_main.model_control.robot_pose import normalize_angle_deg
 
 
 def plan_and_execute(
