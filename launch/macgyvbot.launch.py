@@ -1,5 +1,6 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch.substitutions import PathJoinSubstitution
@@ -7,6 +8,10 @@ from launch_ros.substitutions import FindPackageShare
 from moveit_configs_utils import MoveItConfigsBuilder
 
 def generate_launch_description():
+    use_voice_command = LaunchConfiguration("use_voice_command")
+    use_stt = LaunchConfiguration("use_stt")
+    llm_model = LaunchConfiguration("llm_model")
+
     # Doosan M0609 MoveIt 기본 설정 (URDF, SRDF, kinematics, controllers 등)
     moveit_config = (
         MoveItConfigsBuilder(
@@ -35,6 +40,21 @@ def generate_launch_description():
                 default_value="yolov11_best.pt",
             ),
             DeclareLaunchArgument(
+                "use_voice_command",
+                default_value="true",
+                description="STT + 통합 명령 해석 노드를 실행할지 여부",
+            ),
+            DeclareLaunchArgument(
+                "use_stt",
+                default_value="true",
+                description="마이크 STT 노드를 실행할지 여부",
+            ),
+            DeclareLaunchArgument(
+                "llm_model",
+                default_value="qwen2.5:0.5b",
+                description="Ollama command parser에 사용할 로컬 LLM 모델명",
+            ),
+            DeclareLaunchArgument(
                 "grasp_point_mode",
                 default_value="center",
                 description="Grasp point selection mode: center or vlm",
@@ -48,6 +68,7 @@ def generate_launch_description():
                     moveit_config.to_dict(),
                     moveit_py_params,
                     {
+                        "yolo_model": LaunchConfiguration("yolo_model"),
                         "grasp_point_mode": LaunchConfiguration(
                             "grasp_point_mode"
                         ),
@@ -69,7 +90,7 @@ def generate_launch_description():
                         "publish_annotated": True,
                         "display": False,
                         "yolo_model": LaunchConfiguration("yolo_model"),
-                        "tool_classes": "drill,hammer,pliers,screwdriver,wrench",
+                        "tool_classes": "drill,hammer,pliers,screwdriver,tape_measure,wrench",
                         "yolo_conf": 0.20,
                         "yolo_imgsz": 640,
                         "max_hands": 2,
@@ -77,6 +98,23 @@ def generate_launch_description():
                         "depth_min_contact_landmarks": 4,
                     }
                 ],
-            )
+            ),
+            Node(
+                package="macgyvbot",
+                executable="command_input_node",
+                name="command_input_node",
+                output="screen",
+                parameters=[
+                    {
+                        "use_gui": True,
+                        "enable_microphone": use_stt,
+                        "model": llm_model,
+                        "use_local_parser": True,
+                        "use_llm_fallback": True,
+                        "min_confidence": 0.55,
+                    }
+                ],
+                condition=IfCondition(use_voice_command),
+            ),
         ]
     )

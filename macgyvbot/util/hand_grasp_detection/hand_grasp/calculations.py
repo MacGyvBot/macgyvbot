@@ -144,6 +144,36 @@ def build_depth_grasp_info(
     }
 
 
+def select_active_hand(hand_infos: list[dict], tool_roi: Optional[Rect]) -> Optional[dict]:
+    """Return the hand closest to the tool ROI, or None when unavailable."""
+    if not hand_infos or tool_roi is None:
+        return None
+
+    return min(
+        hand_infos,
+        key=lambda hand_info: point_to_rect_distance(
+            hand_info["palm_center"],
+            tool_roi,
+        ),
+    )
+
+
+def depth_to_mm(depth_image, encoding: str):
+    """Convert a ROS depth image array to millimeters."""
+    import numpy as np
+
+    depth = np.asarray(depth_image)
+    if encoding == "32FC1":
+        depth = np.nan_to_num(depth.astype(np.float32), nan=0.0)
+        return depth * 1000.0
+
+    if np.issubdtype(depth.dtype, np.floating):
+        depth = np.nan_to_num(depth.astype(np.float32), nan=0.0)
+        return depth * 1000.0 if float(np.nanmax(depth)) < 20.0 else depth
+
+    return depth.astype(np.float32)
+
+
 def _empty_depth_info(tool_depth: Optional[float]) -> dict:
     return {
         "depth_available": tool_depth is not None,

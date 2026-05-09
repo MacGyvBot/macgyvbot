@@ -33,3 +33,7 @@ log/
 .env
 .env.*
 !.env.example
+
+
+# weight
+models/*

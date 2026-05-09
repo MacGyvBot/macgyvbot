@@ -2,27 +2,35 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Optional
 
 import cv2
-import numpy as np
 import rclpy
-from ament_index_python.packages import get_package_share_directory
 from cv_bridge import CvBridge
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
 
-from .grasp_detection.grasp_detector import GraspDetector
-from .grasp_detection.hand_detector import HandDetector
-from .grasp_detection.tool_detector import (
+from macgyvbot.util.hand_grasp_detection.hand_grasp.grasp_detector import (
+    GraspDetector,
+)
+from macgyvbot.util.hand_grasp_detection.hand_grasp.hand_detector import (
+    HandDetector,
+)
+from macgyvbot.util.hand_grasp_detection.hand_grasp.tool_detector import (
     DEFAULT_MODEL_PATH,
     DEFAULT_TOOL_CLASSES,
     ToolDetection,
     ToolDetector,
 )
-from .grasp_detection.utils import build_depth_grasp_info, draw_text, point_to_rect_distance
+from macgyvbot.util.hand_grasp_detection.hand_grasp.calculations import (
+    build_depth_grasp_info,
+    depth_to_mm,
+    select_active_hand,
+)
+from macgyvbot.util.hand_grasp_detection.hand_grasp.visualization import (
+    draw_grasp_overlay,
+)
 
 
 class HandGraspDetectionNode(Node):
@@ -114,11 +122,9 @@ class HandGraspDetectionNode(Node):
             for name in tool_classes.split(",")
             if name.strip()
         ]
-        resolved_model_path = self._resolve_model_path(model_path)
-
         try:
             detector = ToolDetector(
-                model_path=resolved_model_path,
+                model_path=model_path,
                 target_classes=target_classes,
                 confidence_threshold=confidence_threshold,
                 image_size=image_size,
@@ -128,26 +134,10 @@ class HandGraspDetectionNode(Node):
             return None
 
         self.get_logger().info(
-            f"YOLO tool detector enabled: model={resolved_model_path}, "
+            f"YOLO tool detector enabled: model={detector.model_path}, "
             f"classes={target_classes or 'ANY'}"
         )
         return detector
-
-    def _resolve_model_path(self, model_path: str) -> str:
-        path = Path(model_path).expanduser()
-        if path.exists() or path.is_absolute():
-            return str(path)
-
-        package_share = Path(get_package_share_directory("macgyvbot"))
-        candidates = [
-            package_share / "models" / model_path,
-            package_share / model_path,
-        ]
-        for candidate in candidates:
-            if candidate.exists():
-                return str(candidate)
-
-        return model_path
 
     def _depth_cb(self, msg: Image) -> None:
         try:
@@ -156,7 +146,7 @@ class HandGraspDetectionNode(Node):
             self.get_logger().warn(f"Depth image conversion failed: {exc}")
             return
 
-        self.latest_depth_mm = self._depth_to_mm(depth_image, msg.encoding)
+        self.latest_depth_mm = depth_to_mm(depth_image, msg.encoding)
 
     def _color_cb(self, msg: Image) -> None:
         try:
@@ -172,7 +162,7 @@ class HandGraspDetectionNode(Node):
         )
         tool_roi = tool_detection.roi if tool_detection is not None else None
         hand_infos = self.hand_detector.detect_all(frame)
-        active_hand = self._select_active_hand(hand_infos, tool_roi)
+        active_hand = select_active_hand(hand_infos, tool_roi)
         hand_for_state = active_hand if active_hand is not None else (
             hand_infos[0] if hand_infos else None
         )
@@ -183,7 +173,13 @@ class HandGraspDetectionNode(Node):
 
         if self.publish_annotated or self.display:
             annotated = frame.copy()
-            self._draw_overlay(annotated, hand_infos, active_hand, tool_detection, result)
+            draw_grasp_overlay(
+                annotated,
+                hand_infos,
+                active_hand,
+                tool_detection,
+                result,
+            )
             if self.annotated_pub is not None:
                 self.annotated_pub.publish(
                     self.bridge.cv2_to_imgmsg(annotated, encoding="bgr8")
@@ -238,73 +234,6 @@ class HandGraspDetectionNode(Node):
             "tool_roi": tool_detection.roi if tool_detection else None,
         }
         self.result_pub.publish(String(data=json.dumps(payload, ensure_ascii=False)))
-
-    def _draw_overlay(
-        self,
-        frame,
-        hand_infos: list[dict],
-        active_hand: Optional[dict],
-        tool_detection: Optional[ToolDetection],
-        result: dict,
-    ) -> None:
-        if tool_detection is not None:
-            x1, y1, x2, y2 = tool_detection.roi
-            color = (0, 255, 0) if result["human_grasped_tool"] else (255, 120, 0)
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-            draw_text(
-                frame,
-                f"{tool_detection.label} {tool_detection.confidence:.2f}",
-                (x1, max(24, y1 - 10)),
-                color,
-                scale=0.55,
-            )
-
-        active_hand_index = active_hand["hand_index"] if active_hand else None
-        for hand_info in hand_infos:
-            is_active = hand_info["hand_index"] == active_hand_index
-            point_color = (0, 255, 255) if is_active else (255, 200, 0)
-            for point in hand_info["landmarks"].values():
-                cv2.circle(frame, point, 4 if is_active else 3, point_color, -1)
-
-        draw_text(frame, f"State: {result['state']}", (20, 32))
-        draw_text(
-            frame,
-            f"human_grasped_tool: {result['human_grasped_tool']}",
-            (20, 62),
-            scale=0.6,
-        )
-        draw_text(
-            frame,
-            f"depth_contact: {result['depth_contact_count']}",
-            (20, 92),
-            scale=0.6,
-        )
-
-    @staticmethod
-    def _select_active_hand(hand_infos: list[dict], tool_roi) -> Optional[dict]:
-        if not hand_infos or tool_roi is None:
-            return None
-
-        return min(
-            hand_infos,
-            key=lambda hand_info: point_to_rect_distance(
-                hand_info["palm_center"],
-                tool_roi,
-            ),
-        )
-
-    @staticmethod
-    def _depth_to_mm(depth_image, encoding: str):
-        depth = np.asarray(depth_image)
-        if encoding == "32FC1":
-            depth = np.nan_to_num(depth.astype(np.float32), nan=0.0)
-            return depth * 1000.0
-
-        if np.issubdtype(depth.dtype, np.floating):
-            depth = np.nan_to_num(depth.astype(np.float32), nan=0.0)
-            return depth * 1000.0 if float(np.nanmax(depth)) < 20.0 else depth
-
-        return depth.astype(np.float32)
 
     def destroy_node(self) -> bool:
         self.hand_detector.close()

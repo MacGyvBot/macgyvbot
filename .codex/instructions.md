@@ -8,6 +8,20 @@
 - 로봇 제어, 그리퍼, 서랍 개폐, 사용자 전달 동작은 안전 영향을 먼저 검토한다.
 - 실제 장비 실행이 필요한 변경은 dry-run, 시뮬레이션, 낮은 속도 제한을 우선 적용한다.
 - 대용량 모델 파일, 데이터셋, 영상, ROS bag 파일은 저장소에 추가하지 않는다.
+- `macgyvbot/macgyvbot.py`는 기존 호환용 wrapper로 유지하고, 새 로직을 추가하지 않는다.
+- 새 기능은 역할별 모듈에 배치하고, ROS node 파일은 wiring 중심으로 얇게 유지한다.
+
+## 패키지 구조 기준
+
+- `macgyvbot/nodes/`: ROS node entrypoint, subscription/publisher, parameter, launch wiring
+- `macgyvbot/core/`: 공통 설정, 상태, pick/handoff 같은 시퀀스 orchestration
+- `macgyvbot/perception/`: YOLO/VLM 인식, grasp point 선택, depth projection, 좌표 변환
+- `macgyvbot/motion/`: MoveIt planning, pose helper, gripper/robot motion adapter
+- `macgyvbot/ui/`: OpenCV debug window 등 메인 pick pipeline UI helper
+- `macgyvbot/voice_command/`: STT/LLM command parser 같은 음성 명령 도메인 로직
+- 기존 standalone 노드가 있는 경우, 새 노드는 우선 `macgyvbot/nodes/`에 추가하고 `setup.py` console script만 연결한다.
+- 여러 노드가 공유하는 topic, frame, offset, mode 상수는 가능한 한 `core/config.py` 또는 도메인별 config 모듈로 모은다.
+- README의 패키지 구조 트리와 실제 파일 배치가 어긋나면 함께 수정한다.
 
 ## Python 스타일
 
@@ -28,6 +42,8 @@
 - 새 노드나 실행 파일을 추가하면 `setup.py`, `package.xml`, launch 파일을 함께 확인한다.
 - frame 변환은 단위를 명확히 유지한다. depth, 좌표, 오프셋 값은 meter 기준을 기본으로 한다.
 - ROS 로그는 `get_logger()`를 사용하고, 실제 작업자가 이해하기 쉬운 한국어 메시지를 선호한다.
+- `macgyvbot.launch.py`에 launch argument를 추가하면 해당 노드 parameter에도 실제로 전달되는지 확인한다.
+- 기존 topic은 즉시 제거하지 말고 remap, parameter, wrapper 등을 통해 가능한 한 호환성을 유지한다.
 
 ## 안전 규칙
 
