@@ -355,21 +355,121 @@ class VLAStateModel:
         ee_x, ee_y, ee_z = switch_state.ee_pose.position_xyz
         obj_x, obj_y, obj_z = object_context.base_position_xyz
         task = object_context.task_instruction or f"grasp the {object_context.label}"
+        object_feature_guidance = self._describe_object_grasp_features(
+            object_context
+        )
 
         return (
-            f"Move from the current pre-grasp pose to a stable grasp pose for the "
-            f"{object_context.label}. Align the gripper orientation to the object's "
-            f"main axis; if the object appears rotated, rotate the wrist to match it "
-            f"before closing. Keep the grasp centered at the object's center of mass "
-            f"(centroid) and avoid side-offset grasps. Prioritize orientation alignment "
-            f"and grasp stability, then keep translation conservative. Task: {task}. "
+            f"Move the robot from the current pre-grasp switch pose to the final "
+            f"stable grasp pose for the {object_context.label}. The robot has a "
+            f"two-finger parallel-jaw gripper. Choose a grasp where the midpoint "
+            f"between the two fingertips lands exactly on the object's center of "
+            f"mass/centroid, not on an edge, corner, handle, or visually offset "
+            f"point. Rotate the wrist so the gripper closing direction is aligned "
+            f"with the object's graspable cross-axis and the gripper body is "
+            f"aligned with the object's main/principal axis. If the object is "
+            f"rotated in the image, rotate the wrist to match that rotation before "
+            f"descending. Keep the two fingers symmetric around the object center "
+            f"so the object is pinched evenly from both sides. Avoid side-offset "
+            f"grasps, diagonal misalignment, or poses that would push the object "
+            f"away. Prioritize exact centroid alignment first, orientation "
+            f"alignment second, and only then make the smallest conservative "
+            f"translation needed to reach the grasp pose. Object-specific grasp "
+            f"features: {object_feature_guidance} Use these object features when "
+            f"choosing the final wrist rotation and closing direction. Output one precise "
+            f"7-DoF end-effector action for this final alignment step: dx, dy, dz, "
+            f"droll, dpitch, dyaw, and gripper. Task: {task}. "
             f"Current end-effector position in base frame: "
             f"x={ee_x:.3f}, y={ee_y:.3f}, z={ee_z:.3f}. "
-            f"Detected object position in base frame: "
+            f"Detected object center of mass in base frame: "
             f"x={obj_x:.3f}, y={obj_y:.3f}, z={obj_z:.3f}. "
             f"The robot is currently at a switch pose above the object by "
             f"{object_context.switch_offset_z_m:.3f} m."
         )
+
+    @staticmethod
+    def _describe_object_grasp_features(
+        object_context: DetectedObjectContext,
+    ) -> str:
+        label = (object_context.label or "object").strip().lower()
+        guidance: list[str] = []
+
+        bbox = object_context.bbox_xyxy
+        if bbox is not None:
+            x1, y1, x2, y2 = bbox
+            width = max(float(x2 - x1), 1.0)
+            height = max(float(y2 - y1), 1.0)
+            aspect_ratio = width / height
+
+            if aspect_ratio >= 1.35:
+                guidance.append(
+                    "the visible object footprint is horizontally elongated, "
+                    "so estimate the long horizontal principal axis and align "
+                    "the gripper body with it"
+                )
+            elif aspect_ratio <= 0.74:
+                guidance.append(
+                    "the visible object footprint is vertically elongated, "
+                    "so estimate the long vertical principal axis and align "
+                    "the gripper body with it"
+                )
+            else:
+                guidance.append(
+                    "the visible object footprint is compact, so prioritize a "
+                    "balanced center pinch with symmetric finger contact"
+                )
+        else:
+            guidance.append(
+                "no bounding-box shape cue is available, so infer the object's "
+                "main axis from the image appearance"
+            )
+
+        elongated_keywords = (
+            "screwdriver",
+            "driver",
+            "wrench",
+            "spanner",
+            "hammer",
+            "plier",
+            "pliers",
+            "scissor",
+            "scissors",
+            "knife",
+            "cutter",
+            "pen",
+            "pencil",
+            "stick",
+            "rod",
+        )
+        cylindrical_keywords = ("bottle", "can", "cup", "mug", "cylinder")
+        round_keywords = ("ball", "bowl", "sphere")
+        handle_keywords = ("mug", "cup", "scissors", "plier", "pliers")
+
+        if any(keyword in label for keyword in elongated_keywords):
+            guidance.append(
+                "the label suggests an elongated tool-like object; grasp near "
+                "the physical center of mass along the handle/body and align "
+                "the wrist with the object's long axis"
+            )
+        if any(keyword in label for keyword in cylindrical_keywords):
+            guidance.append(
+                "the label suggests a cylindrical or cup-like object; center "
+                "the fingers across the diameter and keep the closing direction "
+                "radial through the centroid"
+            )
+        if any(keyword in label for keyword in round_keywords):
+            guidance.append(
+                "the label suggests a rounded object; use an exact center pinch "
+                "and avoid relying on an edge or tangent contact"
+            )
+        if any(keyword in label for keyword in handle_keywords):
+            guidance.append(
+                "if a handle or thin appendage is visible, do not grasp only "
+                "that appendage unless it is the most stable centered grasp; "
+                "prefer the object's main mass"
+            )
+
+        return "; ".join(guidance) + "."
 
     def _coerce_to_switch_state(
         self,
