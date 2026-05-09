@@ -10,30 +10,139 @@ MacGyvBot은 음성 명령 기반 공구 서랍 관리 로봇팔 어시스턴트
 
 ```text
 macgyvbot/
-├── macgyvbot.py                         # 기존 호환용 wrapper entrypoint
 ├── nodes/
-│   ├── macgyvbot_node.py                # ROS wiring, parameter, frame loop
-│   ├── stt_node.py                      # Google STT 기반 /stt_text 발행
-│   ├── llm_command_node.py              # STT text -> tool command, /target_label
-│   ├── voice_command_ui_node.py         # 터미널 기반 음성 명령 UI
-│   └── voice_command_gui_node.py        # PyQt 기반 음성 명령 GUI
-├── core/
-│   ├── config.py                        # topic, frame, safety offset, grasp mode
-│   └── pick_sequence.py                 # pick, handoff, 원위치 반환 시퀀스
-├── perception/
-│   ├── yolo_detector.py                 # YOLO 모델 경로 해석 및 추론 wrapper
-│   ├── grasp_point_selector.py          # center/VLM grasp pixel 선택
-│   └── depth_projection.py              # depth pixel -> camera/base 좌표 투영
-├── motion/
-│   ├── moveit_controller.py             # MoveIt planning 실행 및 J6 yaw 회전
-│   └── pose_utils.py                    # pose 생성, EE transform/orientation helper
+│   ├── macgyvbot_main_node.py           # ROS wiring, parameter, frame loop
+│   ├── hand_grasp_detection_node.py     # hand grasp detection ROS wiring
+│   └── command_input_node.py            # STT + GUI + 명령 해석 통합 노드
+├── config/
+│   └── config.py                        # topic, frame, safety offset, grasp mode
+├── util/
+│   ├── model_control/
+│   │   ├── moveit_controller.py         # MoveIt planning 실행 및 J6 yaw 회전
+│   │   ├── robot_pose.py                # pose 생성, EE transform/orientation helper
+│   │   ├── onrobot_gripper.py           # OnRobot RG gripper 연결 및 제어
+│   │   └── robot_safezone.py            # robot workspace safe zone clamp
+│   ├── perception/
+│   │   └── yolo_detector.py             # YOLO 모델 경로 해석 및 추론 wrapper
+│   ├── hand_grasp/
+│   │   ├── hand_detector.py             # MediaPipe hand landmark 검출
+│   │   ├── tool_detector.py             # hand grasp용 YOLO tool ROI 검출
+│   │   ├── grasp_detector.py            # hand-tool grasp 상태 판정
+│   │   ├── calculations.py              # geometry/depth helper
+│   │   └── visualization.py             # hand grasp overlay drawing
+│   ├── grasp_mechanism/
+│   │   └── grasp_by_vlm.py              # VLM 기반 grasp point 선택
+│   ├── input_mapping/
+│   │   └── command_hard_parser.py       # LLM fallback 전 alias/fuzzy parser
+│   └── task_pipeline/
+│       └── task_pipeline.py             # pick, handoff, 원위치 반환 시퀀스
 ├── ui/
-│   └── debug_windows.py                 # OpenCV debug window 출력
-└── voice_command/
-    └── command_parser.py                # LLM fallback 전 alias/fuzzy parser
+│   └── voice_command_window.py          # PyQt command input window
 ```
 
-기존 executable 이름은 `macgyvbot`으로 유지됩니다. 호환성을 위해 `macgyvbot/macgyvbot.py`는 새 노드의 wrapper entrypoint로 남겨 둡니다.
+기존 executable 이름은 `macgyvbot`으로 유지되며, entrypoint는 `nodes/macgyvbot_main_node.py`를 직접 사용합니다.
+
+## Pipeline Structure
+
+현재 launch 기준 실행 구조와 ROS topic pub/sub 관계는 아래와 같습니다.
+
+```mermaid
+flowchart LR
+    subgraph launch["launch/macgyvbot.launch.py"]
+        cmd["command_input_node"]
+        hand["hand_grasp_detection_node"]
+        main["macgyvbot_main_node"]
+    end
+
+    mic["Microphone"] --> cmd
+    gui["voice_command_window.py\nGUI text input / status view"] --> cmd
+    ollama["Ollama server"] --> cmd
+
+    camColor["/camera/camera/color/image_raw"]
+    camDepth["/camera/camera/aligned_depth_to_color/image_raw"]
+    camInfo["/camera/camera/color/camera_info"]
+
+    camColor --> hand
+    camDepth --> hand
+    camColor --> main
+    camDepth --> main
+    camInfo --> main
+
+    cmd -- "pub /tool_command" --> main
+    cmd -- "pub /command_feedback" --> feedback["/command_feedback"]
+    cmd -- "pub /stt_text" --> stt["/stt_text"]
+    main -- "pub /robot_task_status" --> cmd
+
+    hand -- "pub /human_grasped_tool" --> main
+    hand -- "pub /hand_grasp_detection/annotated_image" --> main
+
+    manual["manual /target_label"] -- "pub /target_label" --> main
+```
+
+각 노드 내부에서 어떤 파일이 어떤 역할을 맡는지도 함께 보면 아래와 같습니다.
+
+```mermaid
+flowchart TD
+    subgraph command["command_input_node"]
+        cmdnode["nodes/command_input_node.py\nGUI + STT + topic wiring"]
+        ui["ui/voice_command_window.py\nPyQt GUI"]
+        sttmod["util/command_input/stt/speech_to_text.py\nmicrophone STT wrapper"]
+        parser["util/command_input/input_mapping/command_llm_parser.py\nlocal parser + LLM fallback"]
+        hard["util/command_input/input_mapping/command_hard_parser.py\nalias / fuzzy command parsing"]
+        ui --> cmdnode
+        sttmod --> cmdnode
+        parser --> cmdnode
+        hard --> parser
+    end
+
+    subgraph handgrasp["hand_grasp_detection_node"]
+        hgNode["nodes/hand_grasp_detection_node.py\ncamera subscriptions + result publishing"]
+        handDet["hand_grasp/hand_detector.py\nMediaPipe hand landmarks"]
+        toolDet["hand_grasp/tool_detector.py\nYOLO tool ROI detection"]
+        calc["hand_grasp/calculations.py\ngeometry / depth / hand selection helpers"]
+        graspDet["hand_grasp/grasp_detector.py\nhand-tool grasp state scoring"]
+        viz["hand_grasp/visualization.py\noverlay rendering"]
+        handDet --> hgNode
+        toolDet --> hgNode
+        calc --> hgNode
+        calc --> handDet
+        calc --> graspDet
+        calc --> viz
+        graspDet --> hgNode
+        viz --> hgNode
+    end
+
+    subgraph mainbot["macgyvbot_main_node"]
+        mainNode["nodes/macgyvbot_main_node.py\nmain ROS wiring + frame loop + command handling"]
+        yolo["util/macgyvbot_main/perception/yolo_detector.py\nobject detection"]
+        graspSel["util/macgyvbot_main/grasp_mechanism/grasp_point_selector.py\ncenter/VLM grasp-point routing"]
+        vlm["util/macgyvbot_main/grasp_mechanism/grasp_by_vlm.py\nVLM grasp pixel inference"]
+        depthProj["util/macgyvbot_main/perception/depth_projection.py\npixel+depth to base pose"]
+        motion["util/macgyvbot_main/model_control/moveit_controller.py\nMoveIt planning / execution"]
+        pose["util/macgyvbot_main/model_control/robot_pose.py\npose/orientation helpers"]
+        safe["util/macgyvbot_main/model_control/robot_safezone.py\nworkspace clamp"]
+        grip["util/macgyvbot_main/model_control/onrobot_gripper.py\nRG gripper control"]
+        pipeline["util/macgyvbot_main/task_pipeline/task_pipeline.py\npick / handoff / return sequence"]
+        yolo --> mainNode
+        graspSel --> mainNode
+        depthProj --> mainNode
+        motion --> mainNode
+        grip --> mainNode
+        pipeline --> mainNode
+        vlm --> graspSel
+        pose --> depthProj
+        pose --> motion
+        pose --> pipeline
+        safe --> motion
+        safe --> pipeline
+    end
+```
+
+토픽 기준으로 요약하면:
+
+- `command_input_node`는 사용자 입력을 받아 `/tool_command`, `/command_feedback`, `/stt_text`를 발행하고 `/robot_task_status`를 구독합니다.
+- `hand_grasp_detection_node`는 카메라 입력을 받아 `/human_grasped_tool`, `/hand_grasp_detection/annotated_image`를 발행합니다.
+- `macgyvbot_main_node`는 카메라/명령/hand grasp 결과를 구독해서 pick pipeline을 실행하고 `/robot_task_status`를 발행합니다.
 
 ## 주요 기능
 
@@ -163,12 +272,12 @@ source ~/ros2_ws/install/setup.bash
 ros2 launch macgyvbot macgyvbot.launch.py grasp_point_mode:=vla
 ```
 
-VLA 모드는 YOLO와 depth로 객체의 base 좌표를 구한 뒤, 기존 방식처럼 grasp 높이까지 먼저 접근합니다. 이후 바로 잡지 않고 z를 조금 다시 올린 switch pose에서 현재 카메라 영상과 end-effector 상태를 VLA에 넣어 최종 grasp pose를 보정합니다. VLA 가중치는 로컬 `models/vla/<org>__<model>` 경로에서만 로드하며, 시작 시 로드에 실패하면 자동으로 `center` 모드로 fallback합니다. 추론이나 최종 pose 이동이 실패하는 경우에도 기존 grasp pose로 fallback합니다.
+VLA 모드는 YOLO와 depth로 객체의 base 좌표를 구한 뒤, 기존 방식처럼 grasp 높이까지 먼저 접근합니다. 이후 바로 잡지 않고 z를 조금 다시 올린 switch pose에서 현재 카메라 영상과 end-effector 상태를 VLA에 넣어 최종 grasp pose를 보정합니다. VLA 가중치는 로컬 `weights/vla/<org>__<model>` 경로에서만 로드하며, 시작 시 로드에 실패하면 자동으로 `center` 모드로 fallback합니다. 추론이나 최종 pose 이동이 실패하는 경우에도 기존 grasp pose로 fallback합니다.
 
 VLA 가중치 다운로드 예:
 
 ```bash
-python3 scripts/download_vla_weights.py
+python3 weights/download_vla_weights.py
 ```
 
 ## 내부 구조
@@ -181,13 +290,13 @@ python3 scripts/download_vla_weights.py
 
 관련 코드 구조:
 
-- `macgyvbot/nodes/macgyvbot_node.py`: ROS wiring, parameter, VLA startup fallback, frame loop를 담당합니다.
-- `macgyvbot/core/pick_sequence.py`: pick sequence 전체와 VLA 최종 grasp pose 보정을 담당합니다.
-- `macgyvbot/perception/grasp_point_selector.py`: center/VLM 기반 grasp pixel 선택을 담당합니다.
-- `macgyvbot/grasp_point_detection.py`: VLM 기반 grasp point 선택 모듈입니다.
-- `macgyvbot/grasp_point_vla.py`: VLA 기반 최종 grasp pose 보정 모듈입니다.
+- `macgyvbot/nodes/macgyvbot_main_node.py`: ROS wiring, parameter, VLA startup fallback, frame loop를 담당합니다.
+- `macgyvbot/util/macgyvbot_main/task_pipeline/task_pipeline.py`: pick sequence 전체와 VLA 최종 grasp pose 보정을 담당합니다.
+- `macgyvbot/util/macgyvbot_main/grasp_mechanism/grasp_point_selector.py`: center/VLM/VLA mode 선택과 grasp pixel 선택을 담당합니다.
+- `macgyvbot/util/macgyvbot_main/grasp_mechanism/grasp_by_vlm.py`: VLM 기반 grasp point 선택 모듈입니다.
+- `macgyvbot/util/macgyvbot_main/grasp_mechanism/grasp_by_vla.py`: VLA 기반 최종 grasp pose 보정 모듈입니다.
 
-`macgyvbot.launch.py`는 로봇 메인 노드, hand grasp detection, STT, LLM command node를 함께 실행합니다. CLI UI는 로그와 입력이 섞이지 않도록 별도 터미널에서 실행합니다.
+`macgyvbot.launch.py`는 로봇 메인 노드, hand grasp detection, STT/GUI/명령 해석 통합 노드를 함께 실행합니다.
 
 ### Terminal 4: Ollama 서버 실행
 
@@ -204,22 +313,16 @@ ollama pull qwen2.5:0.5b
 ollama serve
 ```
 
-### Terminal 5: 음성 명령 CLI UI 실행
+### Terminal 5: 음성 명령 통합 노드 실행
 
 ```bash
 source /opt/ros/humble/setup.bash
 source ~/ros2_ws/install/setup.bash
 
-ros2 run macgyvbot voice_command_ui_node
+ros2 run macgyvbot command_input_node
 ```
 
-CLI UI는 `/stt_text`, `/command_feedback`, `/tool_command`, `/target_label`을 확인하며 사용자 입력도 `/stt_text`로 발행합니다.
-
-GUI 채팅창을 사용할 경우:
-
-```bash
-ros2 run macgyvbot voice_command_gui_node
-```
+통합 노드는 GUI 채팅 입력과 마이크 STT를 함께 처리하며, `/tool_command`, `/command_feedback`을 발행합니다. 로봇 실행 상태는 `/robot_task_status`로 GUI에 돌아옵니다.
 
 GUI 실행에 PyQt5가 필요합니다.
 
@@ -238,15 +341,15 @@ You > 망치 줘
 흐름:
 
 ```text
-voice_command_ui_node 또는 stt_node
+command_input_node (GUI + STT input)
   -> /stt_text
-  -> llm_command_node
+  -> command parser (hard parser -> LLM fallback)
   -> /tool_command
-  -> /target_label
   -> macgyvbot
+  -> /robot_task_status
 ```
 
-마이크 STT 없이 CLI 입력만 테스트하려면 Terminal 3에서 STT를 끄고 실행합니다.
+마이크 STT 없이 키보드 입력만 테스트하려면 `use_stt:=false`로 실행합니다.
 
 ```bash
 ros2 launch macgyvbot macgyvbot.launch.py use_stt:=false
@@ -260,11 +363,11 @@ ros2 launch macgyvbot macgyvbot.launch.py use_stt:=false
 ros2 topic pub --once /target_label std_msgs/msg/String "{data: screwdriver}"
 ```
 
-사용 가능한 공구 label은 학습한 YOLO 모델의 class 이름과 같아야 합니다. 현재 예시는 `hammer`, `screwdriver`, `pliers`, `tape_measure`를 기준으로 합니다.
+사용 가능한 공구 label은 학습한 YOLO 모델의 class 이름과 같아야 합니다. 현재 명령 파서는 `drill`, `hammer`, `pliers`, `screwdriver`, `tape_measure`, `wrench`를 기준으로 합니다.
 
 ## 음성 명령 입력만 테스트
 
-마이크 STT 없이 CLI 입력만 확인할 때는 `macgyvbot.launch.py`에서 STT를 끄고 실행한 뒤, CLI UI를 별도 터미널에서 실행합니다.
+마이크 STT 없이 키보드 입력만 확인할 때는 `macgyvbot.launch.py`에서 STT를 끄고 실행합니다.
 
 ```bash
 source /opt/ros/humble/setup.bash
@@ -273,21 +376,17 @@ source ~/ros2_ws/install/setup.bash
 ros2 launch macgyvbot macgyvbot.launch.py use_stt:=false
 ```
 
-다른 터미널:
-
-```bash
-ros2 run macgyvbot voice_command_ui_node
-```
+별도 UI 노드 실행은 필요하지 않습니다.
 
 ## 잡기 인식 노드 실행
 
-`macgyvbot.launch.py`는 hand grasp detection 노드를 함께 실행합니다. 잡기 인식 노드만 단독으로 확인할 때는 아래 명령을 사용합니다.
+`macgyvbot.launch.py`는 hand grasp detection 노드를 함께 실행합니다.
 
 ```bash
 source /opt/ros/humble/setup.bash
 source ~/ros2_ws/install/setup.bash
 
-ros2 launch macgyvbot hand_grasp_detection.launch.py
+ros2 launch macgyvbot macgyvbot.launch.py
 ```
 
 기본 구독 토픽:
@@ -305,7 +404,7 @@ ros2 launch macgyvbot hand_grasp_detection.launch.py
 예:
 
 ```bash
-ros2 launch macgyvbot hand_grasp_detection.launch.py yolo_model:=/path/to/yolov11_best.pt
+ros2 launch macgyvbot macgyvbot.launch.py yolo_model:=/path/to/yolov11_best.pt
 ```
 
 ## 테스트
