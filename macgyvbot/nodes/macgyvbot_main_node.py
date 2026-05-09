@@ -27,10 +27,6 @@ from macgyvbot.config.config import (
     ROBOT_WINDOW_NAME,
     YOLO_MODEL_NAME,
 )
-from macgyvbot.util.macgyvbot_main.grasp_mechanism.grasp_point_selector import (
-    GraspPointSelector,
-    normalize_grasp_point_mode,
-)
 from macgyvbot.util.macgyvbot_main.model_control.moveit_controller import (
     MoveItController,
     plan_and_execute,
@@ -38,6 +34,10 @@ from macgyvbot.util.macgyvbot_main.model_control.moveit_controller import (
 from macgyvbot.util.macgyvbot_main.model_control.onrobot_gripper import RG
 from macgyvbot.util.macgyvbot_main.model_control.robot_pose import get_ee_matrix
 from macgyvbot.util.macgyvbot_main.perception.depth_projection import DepthProjector
+from macgyvbot.util.macgyvbot_main.grasp_mechanism.grasp_point_selector import (
+    GraspPointSelector,
+    normalize_grasp_point_mode,
+)
 from macgyvbot.util.macgyvbot_main.perception.yolo_detector import YoloDetector
 from macgyvbot.util.macgyvbot_main.task_pipeline.task_pipeline import (
     PickSequenceRunner,
@@ -58,19 +58,20 @@ class MacGyvBotNode(Node):
         self.human_grasped_tool = False
         self.last_grasp_result = None
         self.hand_grasp_image = None
+        self.vla_state_model = None
         self.home_xyz = None
         self.home_ori = None
         self.current_command = None
         self._last_search_status_target = None
 
         self.grasp_point_mode = self._read_grasp_point_mode()
+        self._preload_vla_or_fallback_to_center()
+        self.yolo_model = self._read_yolo_model()
+        self.detector = YoloDetector(self.yolo_model)
         self.grasp_point_selector = GraspPointSelector(
             self.grasp_point_mode,
             self.get_logger(),
         )
-        self.grasp_point_mode = self.grasp_point_selector.prepare_runtime_mode()
-        self.yolo_model = self._read_yolo_model()
-        self.detector = YoloDetector(self.yolo_model)
 
         calib_file = (
             Path(get_package_share_directory("macgyvbot"))
@@ -119,6 +120,70 @@ class MacGyvBotNode(Node):
             .lower()
         )
         return normalize_grasp_point_mode(grasp_point_mode, self.get_logger())
+
+    def _preload_vla_or_fallback_to_center(self):
+        if self.grasp_point_mode != GRASP_POINT_MODE_VLA:
+            return
+
+        self.get_logger().info(
+            "VLA 모드가 선택되어 시작 시점에 VLA 가중치 로드를 확인합니다."
+        )
+        if self.ensure_vla_state_model_loaded() is not None:
+            return
+
+        self.get_logger().warn(
+            "VLA 가중치 로드에 실패하여 grasp_point_mode를 "
+            f"'{GRASP_POINT_MODE_CENTER}'로 fallback합니다."
+        )
+        self.grasp_point_mode = GRASP_POINT_MODE_CENTER
+
+    def ensure_vla_state_model_loaded(self):
+        try:
+            from macgyvbot.grasp_point_vla import VLAStateModel
+        except ImportError as exc:
+            self.get_logger().warn(f"VLA grasp 모듈 import 실패: {exc}")
+            return None
+
+        if self.vla_state_model is not None:
+            if (
+                self.vla_state_model.model is not None
+                and self.vla_state_model.processor is not None
+            ):
+                config = self.vla_state_model.config
+                self.get_logger().info(
+                    f"VLA 가중치 사용 준비 완료: model_id={config.model_id}, "
+                    f"device={self.vla_state_model.device}, "
+                    f"dtype={self.vla_state_model.torch_dtype}"
+                )
+                return self.vla_state_model
+        else:
+            self.get_logger().info("VLA grasp 모델 인스턴스 초기화를 시작합니다.")
+            self.vla_state_model = VLAStateModel()
+
+        config = self.vla_state_model.config
+        self.get_logger().info(f"VLA 가중치 로드 시작: model_id={config.model_id}")
+
+        try:
+            self.vla_state_model.load()
+        except Exception as exc:
+            self.get_logger().warn(
+                f"VLA 가중치 로드 실패: model_id={config.model_id}, error={exc}"
+            )
+            try:
+                self.vla_state_model.unload()
+            except Exception:
+                pass
+            self.vla_state_model = None
+            return None
+
+        quantization = "4bit" if config.use_4bit else "full-precision"
+        self.get_logger().info(
+            f"VLA 가중치 로드 성공: model_id={config.model_id}, "
+            f"device={self.vla_state_model.device}, "
+            f"dtype={self.vla_state_model.torch_dtype}, "
+            f"quantization={quantization}"
+        )
+        return self.vla_state_model
 
     def _read_yolo_model(self):
         self.declare_parameter("yolo_model", YOLO_MODEL_NAME)

@@ -3,11 +3,15 @@
 import time
 
 import rclpy
+from scipy.spatial.transform import Rotation
+
+from macgyvbot.util.macgyvbot_main.model_control.robot_safezone import (
+    clamp_to_safe_workspace,
+)
 
 from macgyvbot.config.config import (
     APPROACH_Z_OFFSET,
     COLLISION_MARGIN,
-    GRASP_POINT_MODE_VLA,
     GRASP_Z_OFFSET,
     HAND_GRASP_TIMEOUT_SEC,
     MAX_DESCENT_FROM_APPROACH,
@@ -15,15 +19,13 @@ from macgyvbot.config.config import (
     MIN_PICK_Z,
     MIN_TRAVEL_Z,
     SAFE_Z,
+    GRASP_POINT_MODE_VLA,
     VLA_SWITCH_Z_OFFSET,
 )
 from macgyvbot.util.macgyvbot_main.model_control.robot_pose import (
     current_ee_orientation,
     get_ee_matrix,
     make_safe_pose,
-)
-from macgyvbot.util.macgyvbot_main.model_control.robot_safezone import (
-    clamp_to_safe_workspace,
 )
 
 
@@ -246,12 +248,13 @@ class PickSequenceRunner:
                     else:
                         moved_to_vla_switch_pose = abs(switch_z - grasp_z) > 0.005
 
-                vla_result = self.state.grasp_point_selector.refine_grasp_pose_with_vla(
-                    self.robot,
+                vla_result = self.refine_grasp_pose_with_vla(
+                    target_x=target_x,
+                    target_y=target_y,
+                    switch_z=(switch_z if switch_z is not None else grasp_z),
                     label=label,
                     bbox=bbox,
                     object_xyz=(bx, by, bz),
-                    switch_z=(switch_z if switch_z is not None else grasp_z),
                     color_image=color_image,
                     task_instruction=task_instruction,
                 )
@@ -345,8 +348,8 @@ class PickSequenceRunner:
                     target_x,
                     target_y,
                     travel_z,
-                    grasp_z,
-                    ori,
+                    final_grasp_z,
+                    final_ori,
                     log,
                 )
                 status = "returned" if returned else "failed"
@@ -447,6 +450,134 @@ class PickSequenceRunner:
             return False
 
         return True
+
+    def refine_grasp_pose_with_vla(
+        self,
+        target_x,
+        target_y,
+        switch_z,
+        label,
+        bbox,
+        object_xyz,
+        color_image,
+        task_instruction=None,
+    ):
+        log = self.state.logger()
+
+        if color_image is None:
+            log.warn("VLA grasp 생략: color image가 없습니다.")
+            return None
+
+        try:
+            from macgyvbot.grasp_point_vla import (
+                DetectedObjectContext,
+                Pose3D,
+                RobotArmState,
+            )
+        except ImportError as exc:
+            log.warn(f"VLA grasp 모듈 import 실패: {exc}")
+            return None
+
+        vla_state_model = self.state.ensure_vla_state_model_loaded()
+        if vla_state_model is None:
+            return None
+
+        ee_matrix = get_ee_matrix(self.robot)
+        ee_quat = Rotation.from_matrix(ee_matrix[:3, :3]).as_quat()
+        current_state = RobotArmState(
+            ee_pose=Pose3D(
+                position_xyz=(
+                    float(ee_matrix[0, 3]),
+                    float(ee_matrix[1, 3]),
+                    float(ee_matrix[2, 3]),
+                ),
+                quaternion_xyzw=tuple(float(v) for v in ee_quat),
+            ),
+        )
+
+        bbox_xyxy = None
+        if bbox is not None:
+            bbox_xyxy = self.clamp_bbox_to_image(bbox, color_image)
+
+        object_context = DetectedObjectContext(
+            label=label,
+            base_position_xyz=(
+                float(object_xyz[0]),
+                float(object_xyz[1]),
+                float(object_xyz[2]),
+            ),
+            bbox_xyxy=bbox_xyxy,
+            switch_offset_z_m=max(switch_z - float(object_xyz[2]), 0.0),
+            task_instruction=task_instruction,
+        )
+
+        try:
+            proposal = vla_state_model.propose_grasp_state(
+                color_image,
+                current_state=current_state,
+                object_context=object_context,
+            )
+        except Exception as exc:
+            log.warn(f"VLA grasp 상태 추론 실패: {exc}")
+            return None
+
+        final_pose = proposal.recommended_state.ee_pose
+        final_xyz = final_pose.position_xyz
+        final_ori = self.quat_to_ori_dict(final_pose.quaternion_xyzw)
+
+        log.info(
+            f"VLA final grasp pose: x={final_xyz[0]:.3f}, "
+            f"y={final_xyz[1]:.3f}, z={final_xyz[2]:.3f}, "
+            f"gripper={proposal.action.gripper}"
+        )
+        log.info(
+            "VLA action delta: "
+            f"xyz={proposal.action.delta_xyz}, "
+            f"rpy={proposal.action.delta_rpy}, "
+            f"full={proposal.action.full_action}"
+        )
+        if proposal.notes:
+            log.info(f"VLA notes: {'; '.join(proposal.notes)}")
+
+        ok = self.motion.plan_and_execute(
+            log,
+            pose_goal=make_safe_pose(
+                final_xyz[0],
+                final_xyz[1],
+                final_xyz[2],
+                final_ori,
+                log,
+            ),
+        )
+        if not ok:
+            log.warn("VLA final grasp pose 이동 실패. 기존 grasp pose를 사용합니다.")
+            return None
+
+        return {
+            "x": float(final_xyz[0]),
+            "y": float(final_xyz[1]),
+            "z": float(final_xyz[2]),
+            "ori": final_ori,
+            "proposal": proposal,
+        }
+
+    @staticmethod
+    def clamp_bbox_to_image(bbox, image):
+        height, width = image.shape[:2]
+        x1 = max(0, min(width - 1, int(bbox[0])))
+        y1 = max(0, min(height - 1, int(bbox[1])))
+        x2 = max(0, min(width, int(bbox[2])))
+        y2 = max(0, min(height, int(bbox[3])))
+        return x1, y1, x2, y2
+
+    @staticmethod
+    def quat_to_ori_dict(quat_xyzw):
+        return {
+            "x": float(quat_xyzw[0]),
+            "y": float(quat_xyzw[1]),
+            "z": float(quat_xyzw[2]),
+            "w": float(quat_xyzw[3]),
+        }
 
     def wait_for_human_grasp(self, logger):
         start_time = time.monotonic()
