@@ -29,7 +29,7 @@ class CommandInputNode(Node):
         super().__init__('command_input_node')
 
         self.declare_parameter('use_gui', True)
-        self.declare_parameter('enable_microphone', True)
+        self.declare_parameter('enable_microphone', False)
         self.declare_parameter('language', 'ko-KR')
         self.declare_parameter('device_index', -1)
         self.declare_parameter('energy_threshold', 300.0)
