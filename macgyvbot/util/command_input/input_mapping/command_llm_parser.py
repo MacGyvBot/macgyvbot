@@ -179,6 +179,13 @@ class CommandLlmParser:
             self._info('local parser가 공구를 확정하지 못했습니다.')
             return None
 
+        if match_method == 'fuzzy' and match_score < self._min_confidence:
+            self._info(
+                f'local fuzzy parser 결과가 낮아 LLM fallback으로 넘깁니다: '
+                f'tool={tool_name}, keyword={matched_keyword}, score={match_score:.2f}'
+            )
+            return None
+
         command = {
             'tool_name': tool_name,
             'action': action,
