@@ -176,6 +176,19 @@ class CommandLlmParser:
         action = find_action(text)
 
         if not tool_name:
+            if action == 'return' and self._has_deictic_target(text):
+                command = {
+                    'tool_name': 'unknown',
+                    'action': 'return',
+                    'target_mode': 'deictic',
+                    'raw_text': text,
+                    'match_method': 'local_deictic',
+                    'match_score': 1.0,
+                    'confidence': 1.0,
+                }
+                self._info('local parser가 지시어 기반 return 명령으로 확정했습니다.')
+                return command
+
             self._info('local parser가 공구를 확정하지 못했습니다.')
             return None
 
@@ -204,6 +217,10 @@ class CommandLlmParser:
             f'method={match_method}, score={match_score:.2f}'
         )
         return command
+
+    def _has_deictic_target(self, text):
+        normalized = self._normalize_answer(text)
+        return any(word in normalized for word in DEICTIC_WORDS)
 
     def _handle_pending_confirmation(self, text):
         if self._pending_command is None:
