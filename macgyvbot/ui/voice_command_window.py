@@ -1,18 +1,19 @@
 """PyQt window components for the macgyvbot voice command GUI node."""
 
 from datetime import datetime
-from html import escape
 
 try:
     from PyQt5.QtCore import Qt, QTimer
     from PyQt5.QtWidgets import (
         QApplication,
+        QFrame,
         QHBoxLayout,
         QLabel,
         QLineEdit,
         QMainWindow,
         QPushButton,
-        QTextEdit,
+        QScrollArea,
+        QSizePolicy,
         QVBoxLayout,
         QWidget,
     )
@@ -31,9 +32,16 @@ else:
             self.resize(860, 680)
             self.setMinimumSize(680, 540)
 
-            self._chat_view = QTextEdit()
-            self._chat_view.setReadOnly(True)
-            self._chat_view.setAcceptRichText(True)
+            self._chat_scroll = QScrollArea()
+            self._chat_scroll.setWidgetResizable(True)
+            self._chat_container = QWidget()
+            self._chat_container.setObjectName('chatContainer')
+            self._chat_layout = QVBoxLayout()
+            self._chat_layout.setContentsMargins(22, 18, 22, 18)
+            self._chat_layout.setSpacing(4)
+            self._chat_layout.addStretch(1)
+            self._chat_container.setLayout(self._chat_layout)
+            self._chat_scroll.setWidget(self._chat_container)
 
             self._input = QLineEdit()
             self._input.setPlaceholderText('메시지를 입력하거나 음성으로 말해주세요.')
@@ -42,7 +50,8 @@ else:
             self._send_button = QPushButton('전송  >')
             self._send_button.clicked.connect(self._send_text)
 
-            self._status = QLabel('로봇 연결 상태: 대기 중')
+            self._connection_status = QLabel('연결 상태: GUI 연결됨')
+            self._current_status = QLabel('현재 상태: 명령 대기')
             self._title = QLabel('MacGyvBot Assistant')
             self._subtitle = QLabel('음성 명령 기반 공구 전달 로봇')
             self._avatar = QLabel('M')
@@ -64,13 +73,19 @@ else:
             header_layout.setAlignment(self._title, Qt.AlignHCenter)
             header_layout.setAlignment(self._subtitle, Qt.AlignHCenter)
 
+            status_layout = QHBoxLayout()
+            status_layout.setContentsMargins(0, 0, 0, 0)
+            status_layout.setSpacing(10)
+            status_layout.addWidget(self._connection_status)
+            status_layout.addWidget(self._current_status)
+
             layout = QVBoxLayout()
             layout.setContentsMargins(16, 8, 16, 10)
             layout.setSpacing(0)
             layout.addLayout(header_layout)
-            layout.addWidget(self._chat_view)
+            layout.addWidget(self._chat_scroll)
             layout.addLayout(input_layout)
-            layout.addWidget(self._status)
+            layout.addLayout(status_layout)
 
             root = QWidget()
             root.setLayout(layout)
@@ -105,177 +120,224 @@ else:
             self._append_command_card(command)
 
         def set_status(self, text):
-            self._status.setText(f'로봇 연결 상태: {text}')
+            self._current_status.setText(f'현재 상태: {text}')
 
         def _append_bubble(self, speaker, text, align, role):
             colors = {
-                'user': ('#2F6FDC', '#FFFFFF', '#1E5EC8'),
-                'bot': ('#FFFFFF', '#1D2733', '#D9E3F0'),
-                'system': ('#F2F7FF', '#45617A', '#D8E8FA'),
+                'user': ('#2F6FDC', '#FFFFFF', '#1F58B8', '#D6E8FF'),
+                'bot': ('#FFFFFF', '#1D2733', '#C8D8EA', '#2F6FDC'),
+                'system': ('#EAF3FF', '#36566F', '#BDD6F2', '#5B7FA8'),
             }
-            background, foreground, border = colors[role]
-            width = '64%' if role == 'user' else '72%'
-            speaker_html = escape(speaker)
-            text_html = escape(str(text)).replace('\n', '<br>')
-            time_html = self._timestamp()
-            avatar = self._avatar_html(role)
-            left_avatar = avatar if role != 'user' else ''
-            right_avatar = avatar if role == 'user' else ''
-            html = f'''
-            <table width="100%" cellspacing="0" cellpadding="0">
-              <tr>
-                <td align="{align}" style="padding:8px 6px;">
-                  {left_avatar}
-                  <div style="
-                    max-width:{width};
-                    display:inline-block;
-                    margin:2px 8px;
-                    padding:12px 15px;
-                    border-radius:16px;
-                    background-color:{background};
-                    border:1px solid {border};
-                    color:{foreground};
-                    font-size:15px;
-                    line-height:1.55;
-                    box-shadow:0 2px 8px rgba(31, 63, 101, 0.08);
-                    text-align:left;
-                  ">
-                    <div style="font-size:12px; color:#7B8EA5; margin-bottom:4px;">
-                      {speaker_html}
-                    </div>
-                    {text_html}
-                  </div>
-                  {right_avatar}
-                  <span style="color:#99A7B8; font-size:11px; vertical-align:bottom;">
-                    {time_html}
-                  </span>
-                </td>
-              </tr>
-            </table>
-            '''
-            self._chat_view.append(html)
-            self._chat_view.verticalScrollBar().setValue(
-                self._chat_view.verticalScrollBar().maximum()
+            background, foreground, border, speaker_color = colors[role]
+
+            row = QWidget()
+            row_layout = QVBoxLayout()
+            row_layout.setContentsMargins(0, 4, 0, 8)
+            row_layout.setSpacing(2)
+            row.setLayout(row_layout)
+
+            speaker_label = QLabel(speaker)
+            speaker_label.setStyleSheet(
+                f'color: {speaker_color}; font-size: 12px; font-weight: 700;'
+            )
+            speaker_label.setAlignment(
+                Qt.AlignRight if role == 'user' else Qt.AlignLeft
+            )
+            row_layout.addWidget(speaker_label)
+
+            line = QHBoxLayout()
+            line.setContentsMargins(0, 0, 0, 0)
+            line.setSpacing(8)
+
+            bubble = QLabel(str(text))
+            bubble.setWordWrap(True)
+            bubble.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            bubble.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
+            bubble.setMaximumWidth(440 if role == 'user' else 520)
+            bubble.setStyleSheet(
+                f'''
+                QLabel {{
+                    background-color: {background};
+                    color: {foreground};
+                    border: 1px solid {border};
+                    border-radius: 16px;
+                    padding: 11px 14px;
+                    font-size: 15px;
+                    line-height: 1.45;
+                }}
+                '''
+            )
+
+            time_label = QLabel(self._timestamp())
+            time_label.setStyleSheet('color: #8394A8; font-size: 11px;')
+            time_label.setAlignment(Qt.AlignBottom)
+
+            if role == 'user':
+                line.addStretch(1)
+                line.addWidget(time_label, 0, Qt.AlignBottom)
+                line.addWidget(bubble, 0, Qt.AlignRight)
+            else:
+                line.addWidget(bubble, 0, Qt.AlignLeft)
+                line.addWidget(time_label, 0, Qt.AlignBottom)
+                line.addStretch(1)
+
+            row_layout.addLayout(line)
+            self._add_chat_widget(row)
+
+        def _add_chat_widget(self, widget):
+            self._chat_layout.insertWidget(self._chat_layout.count() - 1, widget)
+            QTimer.singleShot(0, self._scroll_to_bottom)
+
+        def _scroll_to_bottom(self):
+            self._chat_scroll.verticalScrollBar().setValue(
+                self._chat_scroll.verticalScrollBar().maximum()
             )
 
         def _append_command_card(self, command):
-            tool_name = escape(str(command.get('tool_name', 'unknown')))
-            action = escape(self._action_label(command.get('action', 'unknown')))
-            target_mode = escape(self._target_label(command.get('target_mode', 'unknown')))
-            method = escape(self._method_label(command.get('match_method', 'unknown')))
+            tool_name = str(command.get('tool_name', 'unknown'))
+            action = self._action_label(command.get('action', 'unknown'))
+            target_mode = self._target_label(command.get('target_mode', 'unknown'))
+            method = self._method_label(command.get('match_method', 'unknown'))
             confidence = command.get('confidence', 0.0)
             try:
                 confidence_value = max(0.0, min(1.0, float(confidence)))
             except (TypeError, ValueError):
                 confidence_value = 0.0
             confidence_percent = int(round(confidence_value * 100))
-            time_html = self._timestamp()
-            html = f'''
-            <table width="100%" cellspacing="0" cellpadding="0">
-              <tr>
-                <td align="left" style="padding:2px 6px 12px 6px;">
-                  {self._avatar_html('bot')}
-                  <div style="
-                    display:inline-block;
-                    width:330px;
-                    margin:2px 8px;
-                    border:1px solid #D6E2F0;
-                    border-radius:16px;
-                    background:#FFFFFF;
-                    color:#233142;
-                    box-shadow:0 4px 12px rgba(31, 63, 101, 0.10);
-                    overflow:hidden;
-                    vertical-align:top;
-                  ">
-                    <div style="
-                      padding:11px 14px;
-                      background:#EEF6FF;
-                      color:#2E69B8;
-                      font-weight:700;
-                      font-size:13px;
-                    ">
-                      명령 해석 결과
-                    </div>
-                    <table width="100%" cellspacing="0" cellpadding="0"
-                      style="font-size:13px; line-height:1.7; padding:12px 14px;">
-                      {self._card_row('공구', tool_name)}
-                      {self._card_row('동작', action)}
-                      {self._card_row('대상', target_mode)}
-                      {self._card_row('방식', method)}
-                      <tr>
-                        <td style="color:#6D7F93; width:82px; padding:4px 0;">신뢰도</td>
-                        <td style="padding:4px 0;">
-                          {confidence_percent}%
-                          <div style="
-                            display:inline-block;
-                            width:120px;
-                            height:7px;
-                            margin-left:8px;
-                            background:#E8EEF5;
-                            border-radius:4px;
-                            vertical-align:middle;
-                          ">
-                            <div style="
-                              width:{confidence_percent}%;
-                              height:7px;
-                              background:#4FBF7A;
-                              border-radius:4px;
-                            "></div>
-                          </div>
-                        </td>
-                      </tr>
-                    </table>
-                  </div>
-                  <span style="color:#99A7B8; font-size:11px; vertical-align:bottom;">
-                    {time_html}
-                  </span>
-                </td>
-              </tr>
-            </table>
-            '''
-            self._chat_view.append(html)
-            self._chat_view.verticalScrollBar().setValue(
-                self._chat_view.verticalScrollBar().maximum()
+
+            row = QWidget()
+            row_layout = QVBoxLayout()
+            row_layout.setContentsMargins(0, 4, 0, 10)
+            row_layout.setSpacing(2)
+            row.setLayout(row_layout)
+
+            speaker_label = QLabel('M')
+            speaker_label.setStyleSheet(
+                'color: #2F6FDC; font-size: 12px; font-weight: 700;'
             )
+            row_layout.addWidget(speaker_label)
+
+            line = QHBoxLayout()
+            line.setContentsMargins(0, 0, 0, 0)
+            line.setSpacing(8)
+
+            card = QFrame()
+            card.setMaximumWidth(380)
+            card.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
+            card.setStyleSheet(
+                '''
+                QFrame {
+                    background-color: #FFFFFF;
+                    border: 1px solid #C8D8EA;
+                    border-radius: 16px;
+                }
+                '''
+            )
+            card_layout = QVBoxLayout()
+            card_layout.setContentsMargins(0, 0, 0, 0)
+            card_layout.setSpacing(0)
+            card.setLayout(card_layout)
+
+            header = QLabel('명령 해석 결과')
+            header.setStyleSheet(
+                '''
+                QLabel {
+                    background-color: #EEF6FF;
+                    color: #2E69B8;
+                    border-top-left-radius: 15px;
+                    border-top-right-radius: 15px;
+                    padding: 10px 14px;
+                    font-size: 13px;
+                    font-weight: 800;
+                }
+                '''
+            )
+            card_layout.addWidget(header)
+
+            body = QWidget()
+            body_layout = QVBoxLayout()
+            body_layout.setContentsMargins(14, 12, 14, 12)
+            body_layout.setSpacing(8)
+            body.setLayout(body_layout)
+            body_layout.addLayout(self._card_row_widget('공구', tool_name))
+            body_layout.addLayout(self._card_row_widget('동작', action))
+            body_layout.addLayout(self._card_row_widget('대상', target_mode))
+            body_layout.addLayout(self._card_row_widget('방식', method))
+            body_layout.addLayout(
+                self._confidence_row_widget(confidence_percent, confidence_value)
+            )
+            card_layout.addWidget(body)
+
+            time_label = QLabel(self._timestamp())
+            time_label.setStyleSheet('color: #8394A8; font-size: 11px;')
+            time_label.setAlignment(Qt.AlignBottom)
+
+            line.addWidget(card, 0, Qt.AlignLeft)
+            line.addWidget(time_label, 0, Qt.AlignBottom)
+            line.addStretch(1)
+            row_layout.addLayout(line)
+            self._add_chat_widget(row)
 
         @staticmethod
-        def _card_row(label, value):
-            return f'''
-              <tr>
-                <td style="color:#6D7F93; width:82px; padding:4px 0;">{escape(label)}</td>
-                <td style="font-weight:600; padding:4px 0;">{value}</td>
-              </tr>
-            '''
+        def _card_row_widget(label, value):
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(14)
+
+            label_widget = QLabel(label)
+            label_widget.setFixedWidth(72)
+            label_widget.setStyleSheet('color: #6D7F93; font-size: 13px;')
+
+            value_widget = QLabel(str(value))
+            value_widget.setStyleSheet(
+                'color: #1D2733; font-size: 13px; font-weight: 700;'
+            )
+            value_widget.setWordWrap(True)
+
+            row.addWidget(label_widget)
+            row.addWidget(value_widget, 1)
+            return row
+
+        def _confidence_row_widget(self, confidence_percent, confidence_value):
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(14)
+
+            label_widget = QLabel('신뢰도')
+            label_widget.setFixedWidth(72)
+            label_widget.setStyleSheet('color: #6D7F93; font-size: 13px;')
+
+            value_layout = QHBoxLayout()
+            value_layout.setContentsMargins(0, 0, 0, 0)
+            value_layout.setSpacing(8)
+
+            percent_label = QLabel(f'{confidence_percent}%')
+            percent_label.setStyleSheet(
+                'color: #1D2733; font-size: 13px; font-weight: 700;'
+            )
+
+            bar = QFrame()
+            bar.setFixedSize(120, 8)
+            bar.setStyleSheet(
+                'background-color: #E8EEF5; border: none; border-radius: 4px;'
+            )
+            fill = QFrame(bar)
+            fill.setGeometry(0, 0, int(120 * confidence_value), 8)
+            fill.setStyleSheet(
+                'background-color: #4FBF7A; border: none; border-radius: 4px;'
+            )
+
+            value_layout.addWidget(percent_label)
+            value_layout.addWidget(bar)
+            value_layout.addStretch(1)
+
+            row.addWidget(label_widget)
+            row.addLayout(value_layout, 1)
+            return row
 
         @staticmethod
         def _timestamp():
             return datetime.now().strftime('%H:%M:%S')
-
-        @staticmethod
-        def _avatar_html(role):
-            if role == 'user':
-                text = '나'
-                background = '#9CB7DC'
-                color = '#FFFFFF'
-            else:
-                text = 'M'
-                background = '#EAF3FF'
-                color = '#2F6FDC'
-            return f'''
-              <span style="
-                display:inline-block;
-                width:34px;
-                height:34px;
-                line-height:34px;
-                border-radius:17px;
-                text-align:center;
-                background:{background};
-                color:{color};
-                font-weight:800;
-                vertical-align:top;
-                border:1px solid #D5E4F5;
-              ">{text}</span>
-            '''
 
         @staticmethod
         def _action_label(action):
@@ -318,11 +380,13 @@ else:
                 QLabel {
                     color: #163B5C;
                 }
-                QTextEdit {
-                    background-color: #F8FBFF;
-                    border: 1px solid #CAD9EA;
+                QScrollArea {
+                    background-color: #E7F1FA;
+                    border: 1px solid #B7CEE7;
                     border-radius: 14px;
-                    padding: 14px;
+                }
+                QWidget#chatContainer {
+                    background-color: #E7F1FA;
                 }
                 QLineEdit {
                     background-color: #FFFFFF;
@@ -363,13 +427,24 @@ else:
                 'font-size: 22px; font-weight: 800; color: #223B5C;'
             )
             self._subtitle.setStyleSheet('font-size: 13px; color: #6A7E96;')
-            self._status.setStyleSheet(
+            self._connection_status.setStyleSheet(
                 '''
                 background-color: #FFFFFF;
                 border: 1px solid #D5E2F0;
                 border-radius: 10px;
                 padding: 8px 12px;
                 color: #4FBF7A;
+                font-size: 13px;
+                font-weight: 600;
+                '''
+            )
+            self._current_status.setStyleSheet(
+                '''
+                background-color: #FFFFFF;
+                border: 1px solid #D5E2F0;
+                border-radius: 10px;
+                padding: 8px 12px;
+                color: #49677F;
                 font-size: 13px;
                 font-weight: 600;
                 '''
