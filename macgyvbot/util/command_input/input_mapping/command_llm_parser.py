@@ -71,6 +71,8 @@ NO_WORDS = {
     'ㄴㄴ',
 }
 
+LOCAL_FUZZY_ACCEPT_THRESHOLD = 0.85
+
 
 class CommandLlmParser:
     def __init__(
@@ -192,7 +194,10 @@ class CommandLlmParser:
             self._info('local parser가 공구를 확정하지 못했습니다.')
             return None
 
-        if match_method == 'fuzzy' and match_score < self._min_confidence:
+        if (
+            match_method == 'fuzzy'
+            and match_score < LOCAL_FUZZY_ACCEPT_THRESHOLD
+        ):
             self._info(
                 f'local fuzzy parser 결과가 낮아 LLM fallback으로 넘깁니다: '
                 f'tool={tool_name}, keyword={matched_keyword}, score={match_score:.2f}'
@@ -404,13 +409,14 @@ class CommandLlmParser:
 - confidence는 0.0부터 1.0 사이 숫자다.
 - "드라이버", "나사 돌리는 거", "나사 조이는 거", "돌려서 쓰는 거"는 screwdriver에 가깝다.
 - "구멍 뚫는 거", "전동 드릴", "드릴"은 drill에 가깝다.
-- "못 박는 거", "두드리는 거", "치는 거"는 hammer에 가깝다.
+- "못 박는 거", "두드리는 거", "치는 거", "때리는 거"는 hammer에 가깝다.
 - "볼트 조이는 거", "너트 푸는 거", "스패너 같은 거"는 wrench에 가깝다.
 - "길이 재는 거", "치수 재는 거"는 tape_measure에 가깝다.
 - "집는 거", "잡는 거", "펜치 같은 거"는 pliers에 가깝다.
-- "이거", "그거", "저거"처럼 공구명이 없는 지시어는 target_mode를 deictic으로 둔다.
+- "나사 돌리는 거", "못 두드리는 거"처럼 기능 표현이 있으면 target_mode는 named다.
+- "이거", "그거", "저거"처럼 공구명이나 기능 표현이 없는 지시어는 target_mode를 deictic으로 둔다.
 - deictic은 return action에서만 허용한다. deictic bring은 tool_name을 추측하지 말고 unknown으로 둔다.
-- "정리해", "가져다놔", "제자리에 둬", "서랍에 넣어", "반납해"는 return action이다.
+- "정리해", "가져다놔", "가져가", "제자리에 둬", "서랍에 넣어", "반납해"는 return action이다.
 
 예시:
 입력: 드라이버 가져다줘
@@ -424,6 +430,12 @@ class CommandLlmParser:
 
 입력: 이거 정리해
 출력: {{"tool_name":"unknown","action":"return","target_mode":"deictic","confidence":0.88}}
+
+입력: 나사 돌리는 거 정리해
+출력: {{"tool_name":"screwdriver","action":"return","target_mode":"named","confidence":0.88}}
+
+입력: 못 두드리는 거 정리해
+출력: {{"tool_name":"hammer","action":"return","target_mode":"named","confidence":0.88}}
 
 입력: 드라이버 가져다놔
 출력: {{"tool_name":"screwdriver","action":"return","target_mode":"named","confidence":0.92}}
@@ -608,8 +620,13 @@ class CommandLlmParser:
             '가져다가놓',
             '가져다놔',
             '가져다놓',
+            '가져가',
+            '가져가줘',
+            '가져가세요',
             '갖다놔',
             '갖다놓',
+            '치워',
+            '치워줘',
             '정리',
             '제자리',
             '되돌려',
@@ -642,7 +659,7 @@ class CommandLlmParser:
         )
         has_impact_expression = any(
             word in normalized
-            for word in ('못', '박', '두드리', '치', '때리', '망치')
+            for word in ('박', '두드리', '치', '때리', '망치')
         )
         has_measure_expression = any(
             word in normalized
@@ -693,6 +710,25 @@ class CommandLlmParser:
         if has_deictic_target and not has_tool_clue:
             return 'unknown', 'deictic', confidence
 
+        inferred_tool = self._infer_tool_from_function_words(
+            has_turn_expression=has_turn_expression,
+            has_impact_expression=has_impact_expression,
+            has_measure_expression=has_measure_expression,
+            has_grip_expression=has_grip_expression,
+            has_drill_expression=has_drill_expression,
+            has_wrench_expression=has_wrench_expression,
+        )
+        if inferred_tool is not None:
+            if tool_name != inferred_tool:
+                self._warn(
+                    f'문장 기능 표현 기준으로 tool_name을 보정합니다: '
+                    f'{tool_name} -> {inferred_tool}'
+                )
+            return inferred_tool, 'named', confidence
+
+        if has_tool_clue and tool_name != 'unknown':
+            return tool_name, 'named', confidence
+
         if target_mode == 'unknown':
             target_mode = 'named' if tool_name != 'unknown' else 'unknown'
 
@@ -706,6 +742,29 @@ class CommandLlmParser:
             return 'screwdriver', 'named', confidence
 
         return tool_name, target_mode, confidence
+
+    @staticmethod
+    def _infer_tool_from_function_words(
+        has_turn_expression,
+        has_impact_expression,
+        has_measure_expression,
+        has_grip_expression,
+        has_drill_expression,
+        has_wrench_expression,
+    ):
+        if has_drill_expression:
+            return 'drill'
+        if has_wrench_expression:
+            return 'wrench'
+        if has_impact_expression:
+            return 'hammer'
+        if has_measure_expression:
+            return 'tape_measure'
+        if has_grip_expression:
+            return 'pliers'
+        if has_turn_expression:
+            return 'screwdriver'
+        return None
 
     def _info(self, message):
         if self._logger is not None:
