@@ -256,6 +256,10 @@ class CommandInputNode(Node):
         except (TypeError, ValueError):
             confidence_text = str(confidence)
 
+        if self.window is not None and hasattr(self.window, 'append_command_result'):
+            self.window.append_command_result(command)
+            return
+
         self._append_system(
             f'parsed: tool={tool_name}, action={action}, target={target_mode}, '
             f'method={method}, confidence={confidence_text}'
