@@ -1,7 +1,6 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
-from launch.substitutions import PythonExpression
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch.substitutions import PathJoinSubstitution
@@ -12,6 +11,7 @@ def generate_launch_description():
     use_voice_command = LaunchConfiguration("use_voice_command")
     use_stt = LaunchConfiguration("use_stt")
     llm_model = LaunchConfiguration("llm_model")
+    llm_timeout_sec = LaunchConfiguration("llm_timeout_sec")
 
     # Doosan M0609 MoveIt 기본 설정 (URDF, SRDF, kinematics, controllers 등)
     moveit_config = (
@@ -43,7 +43,7 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "use_voice_command",
                 default_value="true",
-                description="STT/CLI UI/LLM 명령 해석 노드를 함께 실행할지 여부",
+                description="STT + 통합 명령 해석 노드를 실행할지 여부",
             ),
             DeclareLaunchArgument(
                 "use_stt",
@@ -52,8 +52,13 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "llm_model",
-                default_value="qwen2.5:0.5b",
+                default_value="gemma3:1b",
                 description="Ollama command parser에 사용할 로컬 LLM 모델명",
+            ),
+            DeclareLaunchArgument(
+                "llm_timeout_sec",
+                default_value="25.0",
+                description="Ollama command parser 응답 대기 시간(초)",
             ),
             DeclareLaunchArgument(
                 "grasp_point_mode",
@@ -91,7 +96,7 @@ def generate_launch_description():
                         "publish_annotated": True,
                         "display": False,
                         "yolo_model": LaunchConfiguration("yolo_model"),
-                        "tool_classes": "drill,hammer,pliers,screwdriver,wrench",
+                        "tool_classes": "drill,hammer,pliers,screwdriver,tape_measure,wrench",
                         "yolo_conf": 0.20,
                         "yolo_imgsz": 640,
                         "max_hands": 2,
@@ -102,26 +107,17 @@ def generate_launch_description():
             ),
             Node(
                 package="macgyvbot",
-                executable="stt_node",
-                name="stt_node",
-                output="screen",
-                condition=IfCondition(
-                    PythonExpression([
-                        "'", use_voice_command, "' == 'true' and '",
-                        use_stt, "' == 'true'",
-                    ])
-                ),
-            ),
-            Node(
-                package="macgyvbot",
-                executable="llm_command_node",
-                name="llm_command_node",
+                executable="command_input_node",
+                name="command_input_node",
                 output="screen",
                 parameters=[
                     {
+                        "use_gui": True,
+                        "enable_microphone": use_stt,
+                        "model": llm_model,
                         "use_local_parser": True,
                         "use_llm_fallback": True,
-                        "model": llm_model,
+                        "timeout_sec": llm_timeout_sec,
                         "min_confidence": 0.55,
                     }
                 ],

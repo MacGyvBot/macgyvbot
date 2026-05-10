@@ -34,9 +34,9 @@ setup(
         ('share/' + package_name + '/launch', glob('launch/*.launch.py')),
         ('share/' + package_name + '/config', glob('config/*.yaml')),
         ('share/' + package_name + '/calibration', glob('calibration/*.npy') + glob('calibration/*.md')),
-        ('share/' + package_name + '/models', glob('models/*.pt')),
-    ] + gather_data_files('models/vlm', 'share/' + package_name + '/models/vlm')
-      + gather_data_files('scripts', 'share/' + package_name + '/scripts'),
+        ('share/' + package_name + '/weights', glob('weights/*.pt')),
+        ('share/' + package_name + '/weights', glob('weights/*.py')),
+    ] + gather_data_files('weights/vlm', 'share/' + package_name + '/weights/vlm'),
     install_requires=['setuptools', 'SpeechRecognition'],
     zip_safe=True,
     maintainer='ssu',
@@ -50,12 +50,9 @@ setup(
     },
     entry_points={
             'console_scripts': [
-                'macgyvbot = macgyvbot.nodes.macgyvbot_node:main',
-                'hand_grasp_detection = macgyvbot.hand_grasp_detection_node:main',
-                'stt_node = macgyvbot.nodes.stt_node:main',
-                'llm_command_node = macgyvbot.nodes.llm_command_node:main',
-                'voice_command_ui_node = macgyvbot.nodes.voice_command_ui_node:main',
-                'voice_command_gui_node = macgyvbot.nodes.voice_command_gui_node:main',
+                'macgyvbot = macgyvbot.nodes.macgyvbot_main_node:main',
+                'hand_grasp_detection = macgyvbot.nodes.hand_grasp_detection_node:main',
+                'command_input_node = macgyvbot.nodes.command_input_node:main',
             ],
     },
 )
