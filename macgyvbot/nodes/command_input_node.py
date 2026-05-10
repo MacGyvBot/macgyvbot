@@ -29,7 +29,7 @@ class CommandInputNode(Node):
         super().__init__('command_input_node')
 
         self.declare_parameter('use_gui', True)
-        self.declare_parameter('enable_microphone', True)
+        self.declare_parameter('enable_microphone', False)
         self.declare_parameter('language', 'ko-KR')
         self.declare_parameter('device_index', -1)
         self.declare_parameter('energy_threshold', 300.0)
@@ -48,8 +48,8 @@ class CommandInputNode(Node):
             'ollama_url',
             'http://localhost:11434/api/generate',
         )
-        self.declare_parameter('model', 'qwen2.5:0.5b')
-        self.declare_parameter('timeout_sec', 8.0)
+        self.declare_parameter('model', 'gemma3:1b')
+        self.declare_parameter('timeout_sec', 25.0)
         self.declare_parameter('min_confidence', 0.55)
         self.declare_parameter('use_local_parser', True)
         self.declare_parameter('use_llm_fallback', True)
@@ -247,6 +247,7 @@ class CommandInputNode(Node):
 
         tool_name = command.get('tool_name', 'unknown')
         action = command.get('action', 'unknown')
+        target_mode = command.get('target_mode', 'named')
         method = command.get('match_method', 'unknown')
         confidence = command.get('confidence', 0.0)
 
@@ -256,7 +257,7 @@ class CommandInputNode(Node):
             confidence_text = str(confidence)
 
         self._append_system(
-            f'parsed: tool={tool_name}, action={action}, '
+            f'parsed: tool={tool_name}, action={action}, target={target_mode}, '
             f'method={method}, confidence={confidence_text}'
         )
 
@@ -289,8 +290,7 @@ class CommandInputNode(Node):
             return
 
         if status == 'rejected':
-            self._append_bot(message or '명령을 이해하지 못했습니다. 다시 입력해주세요.')
-            self._append_system(f'reason={reason}')
+            self._append_bot(self._build_rejected_message(reason, message))
             self._set_status('재입력 필요')
             return
 
@@ -330,6 +330,35 @@ class CommandInputNode(Node):
             self._set_status(state)
         else:
             self._append_system(message or f'{tool_name}: {state}')
+
+    def _build_rejected_message(self, reason, message):
+        if reason == 'llm_failed':
+            return (
+                '문장을 끝까지 이해하지 못했습니다. '
+                '드라이버, 드릴, 플라이어, 망치, 렌치, 줄자 중 어떤 공구인지 '
+                '조금 더 구체적으로 말해주세요.'
+            )
+        if reason == 'unknown_tool':
+            return (
+                '어떤 공구인지 확실하지 않습니다. '
+                '드라이버, 드릴, 플라이어, 망치, 렌치, 줄자 중에서 다시 말해주세요.'
+            )
+        if reason == 'unknown_action':
+            return (
+                '무엇을 할지 확실하지 않습니다. '
+                '가져다줘, 정리해, 멈춰처럼 말해주세요.'
+            )
+        if reason == 'deictic_bring_not_supported':
+            return (
+                '가져오기 명령은 공구 이름이 필요합니다. '
+                '어떤 공구를 가져올지 말해주세요.'
+            )
+        if reason == 'low_confidence':
+            return (
+                '제가 이해한 내용이 확실하지 않습니다. '
+                '공구 이름과 동작을 조금 더 명확히 말해주세요.'
+            )
+        return message or '명령을 이해하지 못했습니다. 다시 입력해주세요.'
 
     def _append_user(self, text, source='keyboard'):
         if self.window is not None:

@@ -276,11 +276,13 @@ curl -fsSL https://ollama.com/install.sh | sh
 ```
 
 ```bash
-ollama pull qwen2.5:0.5b
+ollama pull gemma3:1b
 ollama serve
 ```
 
 ### Terminal 5: 음성 명령 통합 노드 실행
+
+로봇/카메라 없이 GUI와 명령 해석만 확인할 때는 통합 노드를 단독 실행합니다. 단독 실행 기본값은 GUI 입력 테스트에 맞춰 `enable_microphone=false`, `use_llm_fallback=true`, `model=gemma3:1b`입니다.
 
 ```bash
 source /opt/ros/humble/setup.bash
@@ -289,7 +291,23 @@ source ~/ros2_ws/install/setup.bash
 ros2 run macgyvbot command_input_node
 ```
 
-통합 노드는 GUI 채팅 입력과 마이크 STT를 함께 처리하며, `/tool_command`, `/command_feedback`을 발행합니다. 로봇 실행 상태는 `/robot_task_status`로 GUI에 돌아옵니다.
+명시적으로 같은 설정을 줄 수도 있습니다.
+
+```bash
+ros2 run macgyvbot command_input_node --ros-args \
+  -p use_gui:=true \
+  -p enable_microphone:=false \
+  -p use_llm_fallback:=true \
+  -p model:=gemma3:1b
+```
+
+마이크 STT까지 단독으로 확인하려면 `enable_microphone:=true`로 실행합니다.
+
+```bash
+ros2 run macgyvbot command_input_node --ros-args -p enable_microphone:=true
+```
+
+통합 노드는 GUI 채팅 입력과 선택적 마이크 STT를 처리하며, `/tool_command`, `/command_feedback`을 발행합니다. 로봇 실행 상태는 `/robot_task_status`로 GUI에 돌아옵니다.
 
 GUI 실행에 PyQt5가 필요합니다.
 
@@ -316,11 +334,31 @@ command_input_node (GUI + STT input)
   -> /robot_task_status
 ```
 
-마이크 STT 없이 키보드 입력만 테스트하려면 `use_stt:=false`로 실행합니다.
+전체 로봇 launch에서 마이크 STT 없이 키보드 입력만 테스트하려면 `use_stt:=false`로 실행합니다.
 
 ```bash
 ros2 launch macgyvbot macgyvbot.launch.py use_stt:=false
 ```
+
+실행컴에서 브랜치를 바꾼 뒤에는 반드시 다시 빌드하고 새 터미널에서 source 해야 합니다.
+
+```bash
+git switch feature/#2-voice-command
+git pull
+
+cd ~/ros2_ws
+colcon build --packages-select macgyvbot
+source install/setup.bash
+```
+
+실행 중인 파라미터가 맞는지 확인하려면 아래 명령을 사용합니다.
+
+```bash
+ros2 param get /command_input_node use_llm_fallback
+ros2 param get /command_input_node model
+```
+
+기대값은 `True`, `gemma3:1b`입니다.
 
 ## 수동 대상 공구 요청
 
@@ -334,7 +372,7 @@ ros2 topic pub --once /target_label std_msgs/msg/String "{data: screwdriver}"
 
 ## 음성 명령 입력만 테스트
 
-마이크 STT 없이 키보드 입력만 확인할 때는 `macgyvbot.launch.py`에서 STT를 끄고 실행합니다.
+전체 로봇 launch에서 마이크 STT 없이 키보드 입력만 확인할 때는 `macgyvbot.launch.py`에서 STT를 끄고 실행합니다.
 
 ```bash
 source /opt/ros/humble/setup.bash
