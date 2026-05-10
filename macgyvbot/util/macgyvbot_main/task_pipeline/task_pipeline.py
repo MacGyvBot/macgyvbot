@@ -12,12 +12,16 @@ from macgyvbot.config.config import (
     APPROACH_Z_OFFSET,
     COLLISION_MARGIN,
     GRASP_Z_OFFSET,
+    GRASP_VERIFY_POLL_SEC,
+    GRASP_VERIFY_TIMEOUT_SEC,
+    GRASP_RETRY_LIMIT,
     HAND_GRASP_TIMEOUT_SEC,
     MAX_DESCENT_FROM_APPROACH,
     MIN_GRASP_CLEARANCE,
     MIN_PICK_Z,
     MIN_TRAVEL_Z,
     SAFE_Z,
+    SEQUENCE_WAIT_POLL_SEC,
 )
 from macgyvbot.util.macgyvbot_main.model_control.robot_pose import (
     current_ee_orientation,
@@ -101,7 +105,7 @@ class PickSequenceRunner:
             )
 
             self.gripper.open_gripper()
-            time.sleep(0.5)
+            self.cooperative_wait(0.5)
 
             log.info("1단계: 안전 이동 높이 확보")
             ok = self.motion.plan_and_execute(
@@ -203,9 +207,22 @@ class PickSequenceRunner:
             else:
                 log.info("4단계: approach_z와 grasp_z가 같아 추가 하강 생략")
 
-            log.info("5단계: 그리퍼 닫기")
-            self.gripper.close_gripper()
-            time.sleep(1.0)
+            log.info("5단계: 공구 grasp 시도")
+            if not self.try_robot_grasp(log):
+                log.error("공구 grasp 실패. Pick 시퀀스 중단")
+                self.state._publish_robot_status(
+                    "failed",
+                    message="공구 grasp에 실패했습니다.",
+                    reason="robot_grasp_failed",
+                    command=self.state.current_command,
+                )
+                return
+
+            self.state._publish_robot_status(
+                "grasp_success",
+                message="공구 grasp에 성공했습니다.",
+                command=self.state.current_command,
+            )
 
             log.info("6단계: 안전 높이 복귀")
             ok = self.motion.plan_and_execute(
@@ -280,7 +297,7 @@ class PickSequenceRunner:
 
             log.info("9단계: 사용자 잡기 확인 후 그리퍼 오픈(놓기)")
             self.gripper.open_gripper()
-            time.sleep(0.8)
+            self.cooperative_wait(0.8)
 
             log.info("Pick 시퀀스 완료")
             self.state._publish_robot_status(
@@ -330,7 +347,7 @@ class PickSequenceRunner:
 
         logger.info("반환 3단계: 원래 위치에 공구 놓기")
         self.gripper.open_gripper()
-        time.sleep(0.8)
+        self.cooperative_wait(0.8)
 
         logger.info("반환 4단계: 공구를 놓은 뒤 안전 높이로 복귀")
         ok = self.motion.plan_and_execute(
@@ -378,6 +395,59 @@ class PickSequenceRunner:
                 )
                 return False
 
-            time.sleep(0.1)
+            self.cooperative_wait(0.1)
 
         return False
+
+    def try_robot_grasp(self, logger):
+        for attempt in range(1, GRASP_RETRY_LIMIT + 1):
+            logger.info(f"그리퍼 grasp 시도 {attempt}/{GRASP_RETRY_LIMIT}")
+            self.state._publish_robot_status(
+                "grasping",
+                message=f"공구 grasp 시도 {attempt}/{GRASP_RETRY_LIMIT}",
+                command=self.state.current_command,
+            )
+
+            self.gripper.close_gripper()
+            if self.verify_robot_grasp(logger):
+                return True
+
+            logger.warn(f"공구 grasp 실패. 재시도 준비 {attempt}/{GRASP_RETRY_LIMIT}")
+            self.gripper.open_gripper()
+            self.cooperative_wait(0.5)
+
+        return False
+
+    def verify_robot_grasp(self, logger):
+        start_time = time.monotonic()
+        last_status = None
+
+        while time.monotonic() - start_time < GRASP_VERIFY_TIMEOUT_SEC:
+            try:
+                status = self.gripper.get_status()
+            except Exception as exc:
+                logger.warn(f"그리퍼 상태 읽기 실패: {exc}")
+                return False
+
+            last_status = status
+            grip_detected = len(status) > 1 and bool(status[1])
+            busy = bool(status[0]) if status else False
+
+            if grip_detected:
+                logger.info("그리퍼 grip detected 신호로 grasp 성공을 확인했습니다.")
+                return True
+
+            if not busy:
+                break
+
+            self.cooperative_wait(GRASP_VERIFY_POLL_SEC)
+
+        logger.warn(f"그리퍼 grasp 확인 실패: status={last_status}")
+        return False
+
+    @staticmethod
+    def cooperative_wait(duration_sec):
+        end_time = time.monotonic() + max(0.0, float(duration_sec))
+        while rclpy.ok() and time.monotonic() < end_time:
+            remaining = end_time - time.monotonic()
+            time.sleep(min(SEQUENCE_WAIT_POLL_SEC, max(0.0, remaining)))

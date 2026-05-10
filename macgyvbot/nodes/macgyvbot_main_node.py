@@ -44,8 +44,8 @@ from macgyvbot.util.macgyvbot_main.perception.yolo_detector import YoloDetector
 from macgyvbot.util.macgyvbot_main.task_pipeline.task_pipeline import (
     PickSequenceRunner,
 )
-from macgyvbot.util.macgyvbot_main.task_pipeline.user_tool_grasp import (
-    UserToolGraspRunner,
+from macgyvbot.util.macgyvbot_main.task_pipeline.return_sequence import (
+    ReturnSequenceRunner,
 )
 
 
@@ -60,7 +60,7 @@ class MacGyvBotNode(Node):
         self.picking = False
         self.target_label = None
         self.pending_pick_thread = None
-        self.pending_user_tool_grasp_thread = None
+        self.pending_return_thread = None
         self.human_grasped_tool = False
         self.last_grasp_result = None
         self.hand_grasp_image = None
@@ -102,7 +102,12 @@ class MacGyvBotNode(Node):
             self.gripper,
             self,
         )
-        self.user_tool_grasp_runner = UserToolGraspRunner(self.gripper, self)
+        self.return_runner = ReturnSequenceRunner(
+            self.robot,
+            self.motion,
+            self.gripper,
+            self,
+        )
         self.robot_status_pub = self.create_publisher(
             String,
             ROBOT_STATUS_TOPIC,
@@ -220,7 +225,7 @@ class MacGyvBotNode(Node):
             return
 
         if action == "return":
-            self.start_user_tool_grasp_sequence(command)
+            self.start_return_sequence(command)
             return
 
         if action == "release":
@@ -374,35 +379,33 @@ class MacGyvBotNode(Node):
         )
         self.pending_pick_thread.start()
 
-    def start_user_tool_grasp_sequence(self, command):
+    def start_return_sequence(self, command):
         if self.picking:
             tool_name = command.get("tool_name", "unknown")
             self.get_logger().warn(
-                "이미 로봇 동작 중이라 사용자 반납 공구 grasp 요청을 무시합니다."
+                "이미 로봇 동작 중이라 반납 요청을 무시합니다."
             )
             self._publish_robot_status(
                 "busy",
                 tool_name=tool_name,
                 action="return",
-                message="이미 로봇 동작 중이라 반납 공구 grasp 요청을 무시합니다.",
+                message="이미 로봇 동작 중이라 반납 요청을 무시합니다.",
                 reason="already_picking",
                 command=command,
             )
             return
 
         tool_name = command.get("tool_name", "unknown")
-        self.get_logger().info(
-            f"사용자 반납 공구 grasp 시퀀스 시작: tool={tool_name}"
-        )
+        self.get_logger().info(f"반납 시퀀스 시작: tool={tool_name}")
         self.picking = True
         self.target_label = None
         self.current_command = command
-        self.pending_user_tool_grasp_thread = threading.Thread(
-            target=self.user_tool_grasp_runner.run,
+        self.pending_return_thread = threading.Thread(
+            target=self.return_runner.run,
             args=(command,),
             daemon=True,
         )
-        self.pending_user_tool_grasp_thread.start()
+        self.pending_return_thread.start()
 
     def run(self):
         self._move_home_and_capture_pose()

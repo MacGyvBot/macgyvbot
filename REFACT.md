@@ -255,3 +255,52 @@
 확인:
 - `rg`로 삭제된 `runtime_config`, `debug_windows`, `grasp_by_bbox_center` 실행 참조가 남지 않았는지 확인했다.
 - `python3 -m py_compile`로 변경된 Python 파일 문법 검사를 수행했다.
+
+## 23. Main merge 후 return 파이프라인 경로 정리
+
+- `origin/main`의 최신 리팩터링 구조를 현재 브랜치에 병합했다.
+- 현재 브랜치의 사용자 반납 공구 grasp 기능을 새 task pipeline 구조에 맞게 보존했다.
+- `macgyvbot_main_node.py`가 `return` action을 받을 수 있도록 연결했다.
+- command parser의 `return` 키워드와 `drill`, `wrench` 별칭이 main 기준 공구 목록과 함께 유지되도록 정리했다.
+- 삭제된 `llm_command_node.py` 대신 `command_input_node.py`와 `command_llm_parser.py` 중심 구조를 유지했다.
+- README, EXPLAIN, `.codex/instructions.md`의 경로 설명을 현재 `util/command_input`, `util/hand_grasp_detection`, `util/macgyvbot_main` 구조에 맞췄다.
+
+확인:
+- `python -m compileall -q macgyvbot test`로 Python 문법 검사를 수행했다.
+- `python -m pytest -q test/test_command_parser.py`로 command parser 테스트를 통과했다.
+- 전체 `pytest`는 로컬 Windows 환경에 `ament_copyright`, `ament_flake8`, `ament_pep257`가 없어 수집 단계에서 중단됐다.
+
+## 24. ReturnSequenceRunner 추가
+
+- 기존 사용자 반납 공구 grasp 단계만 담당하던 runner를 `ReturnSequenceRunner`로 확장했다.
+- `return` action 흐름을 사용자 handoff 대기, 그리퍼 close, 임시 위치 이동, 공구 식별, 공구별 원위치 배치, Home 복귀 순서로 정리했다.
+- 공구별 원위치 pose는 실제 서랍 좌표 보정이 쉽도록 `TOOL_HOME_POSES` 설정으로 분리했다.
+- 반납 임시 위치와 접근 높이도 `RETURN_STAGING_POSE`, `RETURN_APPROACH_Z_OFFSET` 설정으로 분리했다.
+- `macgyvbot_main_node.py`가 `ReturnSequenceRunner`를 실행하도록 연결하고 이전 `user_tool_grasp.py`는 제거했다.
+
+확인:
+- `python -m compileall -q macgyvbot test`로 Python 문법 검사를 수행했다.
+- `python -m pytest -q test/test_command_parser.py`로 command parser 테스트를 통과했다.
+
+## 25. Grasp 성공/실패 상태 판정 추가
+
+- Issue #31의 `/robot_task_status` 완료 조건에 맞춰 gripper close 이후 grasp 성공/실패 판정을 추가했다.
+- OnRobot RG의 status bit 중 `grip detected` 신호를 성공 기준으로 사용한다.
+- pick 시퀀스는 grasp 성공 시 `status=grasp_success`를 발행하고, 실패 시 최대 5회 재시도한 뒤 `status=failed`, `reason=robot_grasp_failed`를 발행하며 lift 전에 중단한다.
+- return 시퀀스도 사용자에게서 공구를 받은 뒤 같은 기준으로 최대 5회 재시도하고, 실패 시 `reason=return_grasp_failed`를 발행한다.
+- gripper status polling 시간은 `GRASP_VERIFY_TIMEOUT_SEC`, `GRASP_VERIFY_POLL_SEC` 설정으로 분리했다.
+- 최대 재시도 횟수는 `GRASP_RETRY_LIMIT` 설정으로 분리했다.
+
+확인:
+- `python -m compileall -q macgyvbot test`로 Python 문법 검사를 수행했다.
+- `python -m pytest -q test/test_command_parser.py`로 command parser 테스트를 통과했다.
+
+## 26. Sequence wait 쪼개기
+
+- pick/return 시퀀스의 긴 `time.sleep()` 호출을 짧은 polling wait helper로 교체했다.
+- gripper open/release 대기, hand grasp polling, grasp retry polling이 `SEQUENCE_WAIT_POLL_SEC` 단위로 나뉘어 동작한다.
+- 긴 고정 sleep 동안 카메라/상태 갱신이 늦어지는 현상을 줄이기 위한 변경이다.
+
+확인:
+- `python -m compileall -q macgyvbot test`로 Python 문법 검사를 수행했다.
+- `python -m pytest -q test/test_command_parser.py`로 command parser 테스트를 통과했다.

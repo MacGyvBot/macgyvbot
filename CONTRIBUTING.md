@@ -53,7 +53,7 @@ type:
 - 노드 이름은 역할이 명확하게 드러나도록 작성합니다.
 - topic, service, action 이름과 메시지 타입을 문서화합니다.
 - 새 노드나 파라미터를 추가하면 launch 파일을 함께 업데이트합니다.
-- 설정값은 YAML 파일로 분리합니다.
+- 공유 설정은 현재 `macgyvbot/config/config.py`에 모읍니다. launch에서 바꿔야 하는 실행 옵션은 launch parameter로 노출합니다.
 - 실제 로봇 실행 전에 dry-run 또는 시뮬레이션 실행을 권장합니다.
 
 ## 🚨 안전 규칙
