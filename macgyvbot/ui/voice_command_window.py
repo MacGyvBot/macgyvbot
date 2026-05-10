@@ -50,9 +50,9 @@ else:
             self._send_button = QPushButton('전송  >')
             self._send_button.clicked.connect(self._send_text)
 
-            self._connection_status = QLabel(
-                '연결 상태: 로봇 미확인 | 카메라 미확인 | GUI 연결됨'
-            )
+            self._robot_connection_status = QLabel('로봇 노드: 미확인')
+            self._camera_connection_status = QLabel('카메라: 미확인')
+            self._gui_connection_status = QLabel('GUI: 연결됨')
             self._current_status = QLabel('현재 상태: 명령 대기')
             self._title = QLabel('MacGyvBot Assistant')
             self._subtitle = QLabel('음성 명령 기반 공구 전달 로봇')
@@ -75,10 +75,17 @@ else:
             header_layout.setAlignment(self._title, Qt.AlignHCenter)
             header_layout.setAlignment(self._subtitle, Qt.AlignHCenter)
 
-            status_layout = QHBoxLayout()
+            connection_layout = QHBoxLayout()
+            connection_layout.setContentsMargins(0, 0, 0, 0)
+            connection_layout.setSpacing(8)
+            connection_layout.addWidget(self._robot_connection_status)
+            connection_layout.addWidget(self._camera_connection_status)
+            connection_layout.addWidget(self._gui_connection_status)
+
+            status_layout = QVBoxLayout()
             status_layout.setContentsMargins(0, 0, 0, 0)
-            status_layout.setSpacing(10)
-            status_layout.addWidget(self._connection_status)
+            status_layout.setSpacing(8)
+            status_layout.addLayout(connection_layout)
             status_layout.addWidget(self._current_status)
 
             layout = QVBoxLayout()
@@ -124,8 +131,10 @@ else:
         def set_status(self, text):
             self._current_status.setText(f'현재 상태: {text}')
 
-        def set_connection_status(self, text):
-            self._connection_status.setText(f'연결 상태: {text}')
+        def set_connection_status(self, robot_text, camera_text, gui_text='연결됨'):
+            self._robot_connection_status.setText(f'로봇 노드: {robot_text}')
+            self._camera_connection_status.setText(f'카메라: {camera_text}')
+            self._gui_connection_status.setText(f'GUI: {gui_text}')
 
         def _append_bubble(self, speaker, text, align, role):
             colors = {
@@ -160,6 +169,7 @@ else:
             bubble.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
             max_width = self._message_max_width()
             bubble.setMaximumWidth(max_width)
+            bubble.setMinimumWidth(self._message_min_width(max_width, role))
             bubble.setStyleSheet(
                 f'''
                 QLabel {{
@@ -365,7 +375,12 @@ else:
 
         def _message_max_width(self):
             viewport_width = self._chat_scroll.viewport().width()
-            return max(360, min(560, int(viewport_width * 0.48)))
+            return max(380, min(620, int(viewport_width * 0.50)))
+
+        @staticmethod
+        def _message_min_width(max_width, role):
+            preferred_width = 320 if role == 'user' else 360
+            return min(max_width, preferred_width)
 
         @staticmethod
         def _method_label(method):
@@ -437,7 +452,18 @@ else:
                 'font-size: 22px; font-weight: 800; color: #223B5C;'
             )
             self._subtitle.setStyleSheet('font-size: 13px; color: #6A7E96;')
-            self._connection_status.setStyleSheet(
+            connection_style = '''
+                background-color: #FFFFFF;
+                border: 1px solid #D5E2F0;
+                border-radius: 10px;
+                padding: 8px 12px;
+                color: #2F6FDC;
+                font-size: 13px;
+                font-weight: 600;
+            '''
+            self._robot_connection_status.setStyleSheet(connection_style)
+            self._camera_connection_status.setStyleSheet(connection_style)
+            self._gui_connection_status.setStyleSheet(
                 '''
                 background-color: #FFFFFF;
                 border: 1px solid #D5E2F0;

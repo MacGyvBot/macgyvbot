@@ -369,14 +369,14 @@ class CommandInputNode(Node):
 
         robot_text = self._robot_connection_text()
         camera_text = self._camera_connection_text()
-        connection_text = f'로봇 노드 {robot_text} | 카메라 {camera_text} | GUI 연결됨'
+        connection_text = f'{robot_text}|{camera_text}|연결됨'
 
         if connection_text == self._last_connection_text:
             return
 
         self._last_connection_text = connection_text
         if hasattr(self.window, 'set_connection_status'):
-            self.window.set_connection_status(connection_text)
+            self.window.set_connection_status(robot_text, camera_text)
 
     def _robot_connection_text(self):
         node_names = set(self.get_node_names())
