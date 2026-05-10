@@ -29,8 +29,8 @@ else:
             super().__init__()
             self._node = node
             self.setWindowTitle('MacGyvBot Assistant')
-            self.resize(860, 680)
-            self.setMinimumSize(680, 540)
+            self.resize(1080, 720)
+            self.setMinimumSize(960, 620)
 
             self._chat_scroll = QScrollArea()
             self._chat_scroll.setWidgetResizable(True)
@@ -51,16 +51,18 @@ else:
             self._send_button.clicked.connect(self._send_text)
 
             self._robot_connection_status = QLabel('로봇 노드: 미확인')
-            self._camera_connection_status = QLabel('카메라: 미확인')
-            self._gui_connection_status = QLabel('GUI: 연결됨')
+            self._camera_connection_status = QLabel('카메라 노드: 미확인')
+            self._gui_connection_status = QLabel('GUI 노드: 연결됨')
             self._current_status = QLabel('현재 상태: 명령 대기')
+            self._task_target_status = QLabel('작업 대상: 없음')
+            self._task_stage_status = QLabel('작업 단계: 대기')
             self._title = QLabel('MacGyvBot Assistant')
             self._subtitle = QLabel('음성 명령 기반 공구 전달 로봇')
             self._avatar = QLabel('M')
             self._avatar.setAlignment(Qt.AlignCenter)
 
             input_layout = QHBoxLayout()
-            input_layout.setContentsMargins(16, 10, 16, 12)
+            input_layout.setContentsMargins(0, 12, 0, 0)
             input_layout.setSpacing(10)
             input_layout.addWidget(self._input)
             input_layout.addWidget(self._send_button)
@@ -75,26 +77,49 @@ else:
             header_layout.setAlignment(self._title, Qt.AlignHCenter)
             header_layout.setAlignment(self._subtitle, Qt.AlignHCenter)
 
-            connection_layout = QHBoxLayout()
-            connection_layout.setContentsMargins(0, 0, 0, 0)
-            connection_layout.setSpacing(8)
-            connection_layout.addWidget(self._robot_connection_status)
-            connection_layout.addWidget(self._camera_connection_status)
-            connection_layout.addWidget(self._gui_connection_status)
+            status_title = QLabel('Robot Status')
+            status_title.setObjectName('statusPanelTitle')
+            status_subtitle = QLabel('실시간 연결 및 작업 상태')
+            status_subtitle.setObjectName('statusPanelSubtitle')
 
-            status_layout = QVBoxLayout()
-            status_layout.setContentsMargins(0, 0, 0, 0)
-            status_layout.setSpacing(8)
-            status_layout.addLayout(connection_layout)
-            status_layout.addWidget(self._current_status)
+            status_panel = QFrame()
+            status_panel.setObjectName('statusPanel')
+            status_panel.setFixedWidth(250)
+            status_panel_layout = QVBoxLayout()
+            status_panel_layout.setContentsMargins(16, 16, 16, 16)
+            status_panel_layout.setSpacing(10)
+            status_panel.setLayout(status_panel_layout)
+            status_panel_layout.addWidget(status_title)
+            status_panel_layout.addWidget(status_subtitle)
+            status_panel_layout.addSpacing(8)
+            status_panel_layout.addWidget(self._robot_connection_status)
+            status_panel_layout.addWidget(self._camera_connection_status)
+            status_panel_layout.addWidget(self._gui_connection_status)
+            status_panel_layout.addSpacing(12)
+            status_panel_layout.addWidget(self._current_status)
+            status_panel_layout.addWidget(self._task_target_status)
+            status_panel_layout.addWidget(self._task_stage_status)
+            status_panel_layout.addStretch(1)
+
+            chat_panel = QWidget()
+            chat_panel_layout = QVBoxLayout()
+            chat_panel_layout.setContentsMargins(0, 0, 0, 0)
+            chat_panel_layout.setSpacing(0)
+            chat_panel.setLayout(chat_panel_layout)
+            chat_panel_layout.addWidget(self._chat_scroll)
+            chat_panel_layout.addLayout(input_layout)
+
+            content_layout = QHBoxLayout()
+            content_layout.setContentsMargins(0, 0, 0, 0)
+            content_layout.setSpacing(14)
+            content_layout.addWidget(status_panel)
+            content_layout.addWidget(chat_panel, 1)
 
             layout = QVBoxLayout()
             layout.setContentsMargins(16, 8, 16, 10)
-            layout.setSpacing(0)
+            layout.setSpacing(10)
             layout.addLayout(header_layout)
-            layout.addWidget(self._chat_scroll)
-            layout.addLayout(input_layout)
-            layout.addLayout(status_layout)
+            layout.addLayout(content_layout, 1)
 
             root = QWidget()
             root.setLayout(layout)
@@ -125,6 +150,10 @@ else:
         def append_system(self, text):
             self._append_bubble('상태', text, align='left', role='system')
 
+        def append_confirmation(self, text):
+            self.append_bot(text)
+            self._append_confirmation_actions()
+
         def append_command_result(self, command):
             self._append_command_card(command)
 
@@ -133,12 +162,25 @@ else:
 
         def set_connection_status(self, robot_text, camera_text, gui_text='연결됨'):
             self._robot_connection_status.setText(f'로봇 노드: {robot_text}')
-            self._camera_connection_status.setText(f'카메라: {camera_text}')
-            self._gui_connection_status.setText(f'GUI: {gui_text}')
+            self._camera_connection_status.setText(f'카메라 노드: {camera_text}')
+            self._gui_connection_status.setText(f'GUI 노드: {gui_text}')
+            self._robot_connection_status.setStyleSheet(
+                self._connection_style(robot_text)
+            )
+            self._camera_connection_status.setStyleSheet(
+                self._connection_style(camera_text)
+            )
+            self._gui_connection_status.setStyleSheet(
+                self._connection_style(gui_text)
+            )
+
+        def set_task_status(self, target_text, stage_text):
+            self._task_target_status.setText(f'작업 대상: {target_text}')
+            self._task_stage_status.setText(f'작업 단계: {stage_text}')
 
         def _append_bubble(self, speaker, text, align, role):
             colors = {
-                'user': ('#2F6FDC', '#FFFFFF', '#1F58B8', '#D6E8FF'),
+                'user': ('#2F6FDC', '#FFFFFF', '#1F58B8', '#17406F'),
                 'bot': ('#FFFFFF', '#1D2733', '#C8D8EA', '#2F6FDC'),
                 'system': ('#EAF3FF', '#36566F', '#BDD6F2', '#5B7FA8'),
             }
@@ -200,14 +242,54 @@ else:
             row_layout.addLayout(line)
             self._add_chat_widget(row)
 
+        def _append_confirmation_actions(self):
+            row = QWidget()
+            row_layout = QHBoxLayout()
+            row_layout.setContentsMargins(0, 0, 0, 10)
+            row_layout.setSpacing(8)
+            row.setLayout(row_layout)
+
+            yes_button = QPushButton('예, 맞아요')
+            no_button = QPushButton('아니요')
+            for button in (yes_button, no_button):
+                button.setCursor(Qt.PointingHandCursor)
+                button.setStyleSheet(
+                    '''
+                    QPushButton {
+                        background-color: #FFFFFF;
+                        color: #2F6FDC;
+                        border: 1px solid #BFD4EE;
+                        border-radius: 12px;
+                        padding: 8px 14px;
+                        font-size: 13px;
+                        font-weight: 700;
+                    }
+                    QPushButton:hover {
+                        background-color: #EEF6FF;
+                    }
+                    '''
+                )
+
+            yes_button.clicked.connect(lambda: self._send_quick_reply('네'))
+            no_button.clicked.connect(lambda: self._send_quick_reply('아니오'))
+
+            row_layout.addWidget(yes_button, 0, Qt.AlignLeft)
+            row_layout.addWidget(no_button, 0, Qt.AlignLeft)
+            row_layout.addStretch(1)
+            self._add_chat_widget(row)
+
+        def _send_quick_reply(self, text):
+            self.append_user(text)
+            self._node.publish_user_text(text)
+
         def _add_chat_widget(self, widget):
             self._chat_layout.insertWidget(self._chat_layout.count() - 1, widget)
             QTimer.singleShot(0, self._scroll_to_bottom)
+            QTimer.singleShot(80, self._scroll_to_bottom)
 
         def _scroll_to_bottom(self):
-            self._chat_scroll.verticalScrollBar().setValue(
-                self._chat_scroll.verticalScrollBar().maximum()
-            )
+            scrollbar = self._chat_scroll.verticalScrollBar()
+            scrollbar.setValue(scrollbar.maximum())
 
         def _append_command_card(self, command):
             tool_name = str(command.get('tool_name', 'unknown'))
@@ -227,7 +309,7 @@ else:
             row_layout.setSpacing(2)
             row.setLayout(row_layout)
 
-            speaker_label = QLabel('M')
+            speaker_label = QLabel('MacGyvBot')
             speaker_label.setStyleSheet(
                 'color: #2F6FDC; font-size: 12px; font-weight: 700;'
             )
@@ -238,11 +320,12 @@ else:
             line.setSpacing(8)
 
             card = QFrame()
+            card.setObjectName('commandCard')
             card.setMaximumWidth(380)
             card.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
             card.setStyleSheet(
                 '''
-                QFrame {
+                QFrame#commandCard {
                     background-color: #FFFFFF;
                     border: 1px solid #C8D8EA;
                     border-radius: 16px;
@@ -271,6 +354,7 @@ else:
             card_layout.addWidget(header)
 
             body = QWidget()
+            body.setObjectName('commandCardBody')
             body_layout = QVBoxLayout()
             body_layout.setContentsMargins(14, 12, 14, 12)
             body_layout.setSpacing(8)
@@ -333,14 +417,28 @@ else:
             )
 
             bar = QFrame()
+            bar.setObjectName('confidenceBar')
             bar.setFixedSize(120, 8)
             bar.setStyleSheet(
-                'background-color: #E8EEF5; border: none; border-radius: 4px;'
+                '''
+                QFrame#confidenceBar {
+                    background-color: #E8EEF5;
+                    border: none;
+                    border-radius: 4px;
+                }
+                '''
             )
             fill = QFrame(bar)
+            fill.setObjectName('confidenceFill')
             fill.setGeometry(0, 0, int(120 * confidence_value), 8)
             fill.setStyleSheet(
-                'background-color: #4FBF7A; border: none; border-radius: 4px;'
+                '''
+                QFrame#confidenceFill {
+                    background-color: #4FBF7A;
+                    border: none;
+                    border-radius: 4px;
+                }
+                '''
             )
 
             value_layout.addWidget(percent_label)
@@ -353,7 +451,7 @@ else:
 
         @staticmethod
         def _timestamp():
-            return datetime.now().strftime('%H:%M:%S')
+            return datetime.now().strftime('%H:%M')
 
         @staticmethod
         def _action_label(action):
@@ -381,6 +479,22 @@ else:
         def _message_min_width(max_width, role):
             preferred_width = 320 if role == 'user' else 360
             return min(max_width, preferred_width)
+
+        @staticmethod
+        def _connection_style(status_text):
+            connected = status_text in ('연결됨', '실행 중')
+            color = '#25A55F' if connected else '#7A8794'
+            border = '#CFEBDD' if connected else '#D5E2F0'
+            background = '#F5FFF9' if connected else '#FFFFFF'
+            return f'''
+                background-color: {background};
+                border: 1px solid {border};
+                border-radius: 10px;
+                padding: 8px 12px;
+                color: {color};
+                font-size: 13px;
+                font-weight: 700;
+            '''
 
         @staticmethod
         def _method_label(method):
@@ -412,6 +526,20 @@ else:
                 }
                 QWidget#chatContainer {
                     background-color: #E7F1FA;
+                }
+                QFrame#statusPanel {
+                    background-color: #F8FBFF;
+                    border: 1px solid #C9DAEC;
+                    border-radius: 16px;
+                }
+                QLabel#statusPanelTitle {
+                    color: #223B5C;
+                    font-size: 17px;
+                    font-weight: 900;
+                }
+                QLabel#statusPanelSubtitle {
+                    color: #6A7E96;
+                    font-size: 12px;
                 }
                 QLineEdit {
                     background-color: #FFFFFF;
@@ -452,27 +580,14 @@ else:
                 'font-size: 22px; font-weight: 800; color: #223B5C;'
             )
             self._subtitle.setStyleSheet('font-size: 13px; color: #6A7E96;')
-            connection_style = '''
-                background-color: #FFFFFF;
-                border: 1px solid #D5E2F0;
-                border-radius: 10px;
-                padding: 8px 12px;
-                color: #2F6FDC;
-                font-size: 13px;
-                font-weight: 600;
-            '''
-            self._robot_connection_status.setStyleSheet(connection_style)
-            self._camera_connection_status.setStyleSheet(connection_style)
+            self._robot_connection_status.setStyleSheet(
+                self._connection_style('미확인')
+            )
+            self._camera_connection_status.setStyleSheet(
+                self._connection_style('미확인')
+            )
             self._gui_connection_status.setStyleSheet(
-                '''
-                background-color: #FFFFFF;
-                border: 1px solid #D5E2F0;
-                border-radius: 10px;
-                padding: 8px 12px;
-                color: #4FBF7A;
-                font-size: 13px;
-                font-weight: 600;
-                '''
+                self._connection_style('연결됨')
             )
             self._current_status.setStyleSheet(
                 '''
@@ -485,3 +600,14 @@ else:
                 font-weight: 600;
                 '''
             )
+            task_style = '''
+                background-color: #FFFFFF;
+                border: 1px solid #D5E2F0;
+                border-radius: 10px;
+                padding: 8px 12px;
+                color: #49677F;
+                font-size: 13px;
+                font-weight: 600;
+            '''
+            self._task_target_status.setStyleSheet(task_style)
+            self._task_stage_status.setStyleSheet(task_style)

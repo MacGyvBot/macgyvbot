@@ -307,9 +307,13 @@ class CommandInputNode(Node):
             return
 
         if status == 'pending_confirmation':
-            self._append_bot(
+            confirmation_message = (
                 message or '제가 이해한 명령이 맞나요? 네 또는 아니오로 답해주세요.'
             )
+            if self.window is not None and hasattr(self.window, 'append_confirmation'):
+                self.window.append_confirmation(confirmation_message)
+            else:
+                self._append_bot(confirmation_message)
             self._set_status('확인 응답 대기')
             return
 
@@ -348,17 +352,22 @@ class CommandInputNode(Node):
             self._last_target_label = tool_name
             self._append_system(message or f'{tool_name}: {state}')
             self._set_status(message or state)
+            self._set_task_status(tool_name, message or state)
         elif state in ('done', 'completed', 'success'):
             self._append_bot(message or f'{tool_name} 전달 동작이 완료되었습니다.')
             self._set_status('완료')
+            self._set_task_status(tool_name, message or '완료')
         elif state in ('failed', 'error'):
             self._append_bot(message or f'{tool_name} 동작 중 문제가 발생했습니다.')
             self._set_status('실패')
+            self._set_task_status(tool_name, message or '실패')
         elif state in ('busy', 'cancelled', 'returned', 'rejected'):
             self._append_bot(message or f'{tool_name}: {state}')
             self._set_status(state)
+            self._set_task_status(tool_name, message or state)
         else:
             self._append_system(message or f'{tool_name}: {state}')
+            self._set_task_status(tool_name, message or state)
 
     def _camera_status_cb(self, _msg):
         self._last_camera_stamp_ns = self.get_clock().now().nanoseconds
@@ -440,6 +449,10 @@ class CommandInputNode(Node):
     def _set_status(self, text):
         if self.window is not None:
             self.window.set_status(text)
+
+    def _set_task_status(self, target_text, stage_text):
+        if self.window is not None and hasattr(self.window, 'set_task_status'):
+            self.window.set_task_status(target_text, stage_text)
 
     def destroy_node(self):
         if self._stt_service is not None:
