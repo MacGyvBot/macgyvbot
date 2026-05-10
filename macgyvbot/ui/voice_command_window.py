@@ -50,7 +50,9 @@ else:
             self._send_button = QPushButton('전송  >')
             self._send_button.clicked.connect(self._send_text)
 
-            self._connection_status = QLabel('연결 상태: GUI 연결됨')
+            self._connection_status = QLabel(
+                '연결 상태: 로봇 미확인 | 카메라 미확인 | GUI 연결됨'
+            )
             self._current_status = QLabel('현재 상태: 명령 대기')
             self._title = QLabel('MacGyvBot Assistant')
             self._subtitle = QLabel('음성 명령 기반 공구 전달 로봇')
@@ -122,6 +124,9 @@ else:
         def set_status(self, text):
             self._current_status.setText(f'현재 상태: {text}')
 
+        def set_connection_status(self, text):
+            self._connection_status.setText(f'연결 상태: {text}')
+
         def _append_bubble(self, speaker, text, align, role):
             colors = {
                 'user': ('#2F6FDC', '#FFFFFF', '#1F58B8', '#D6E8FF'),
@@ -153,7 +158,8 @@ else:
             bubble.setWordWrap(True)
             bubble.setTextInteractionFlags(Qt.TextSelectableByMouse)
             bubble.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
-            bubble.setMaximumWidth(440 if role == 'user' else 520)
+            max_width = self._message_max_width()
+            bubble.setMaximumWidth(max_width)
             bubble.setStyleSheet(
                 f'''
                 QLabel {{
@@ -353,9 +359,13 @@ else:
         def _target_label(target_mode):
             return {
                 'named': '직접 지정',
-                'deictic': '가리킨 대상',
+                'deictic': '건네받은 공구',
                 'unknown': '알 수 없음',
             }.get(str(target_mode), str(target_mode))
+
+        def _message_max_width(self):
+            viewport_width = self._chat_scroll.viewport().width()
+            return max(360, min(560, int(viewport_width * 0.48)))
 
         @staticmethod
         def _method_label(method):
