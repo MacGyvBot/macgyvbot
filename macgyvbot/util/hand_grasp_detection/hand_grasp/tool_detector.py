@@ -93,9 +93,12 @@ class ToolDetector:
         if path.exists() or path.is_absolute():
             return path
 
-        package_root = Path(__file__).resolve().parents[1]
-        project_root = Path(__file__).resolve().parents[2]
+        package_root = Path(__file__).resolve().parents[3]
+        project_root = Path(__file__).resolve().parents[4]
+        cwd = Path.cwd()
         candidates = [
+            cwd / "weights" / path,
+            cwd / path,
             project_root / "weights" / path,
             package_root / "weights" / path,
             package_root / path,
@@ -105,9 +108,13 @@ class ToolDetector:
                 return candidate
 
         if model_path == "yolo11_best.pt":
-            corrected_path = project_root / "weights" / DEFAULT_MODEL_PATH
-            if corrected_path.exists():
-                print(f"WARNING: yolo11_best.pt not found. Using {DEFAULT_MODEL_PATH}.")
-                return corrected_path
+            for root in (project_root, cwd, package_root):
+                corrected_path = root / "weights" / DEFAULT_MODEL_PATH
+                if corrected_path.exists():
+                    print(
+                        "WARNING: yolo11_best.pt not found. "
+                        f"Using {DEFAULT_MODEL_PATH}."
+                    )
+                    return corrected_path
 
         return model_path

@@ -35,5 +35,7 @@ log/
 !.env.example
 
 
-# weight
-models/*
+# Weights
+weights/*
+!weights/.gitkeep
+!weights/download_vlm_weights.py
