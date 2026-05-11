@@ -34,26 +34,15 @@ HAND_GRASP_TIMEOUT_SEC = 20.0
 GRASP_VERIFY_TIMEOUT_SEC = 3.0
 GRASP_VERIFY_POLL_SEC = 0.2
 GRASP_RETRY_LIMIT = 5
+GRASP_ADVANCE_DISTANCE_M = 0.30
+GRIPPER_CLOSED_WIDTH_THRESHOLD_MM = 5.0
+FORCE_TORQUE_TOPIC = "/force_torque_sensor_broadcaster/wrench"
+RETURN_HOME_DESCENT_STEP_M = 0.01
+RETURN_HOME_FORCE_THRESHOLD_N = 8.0
+RETURN_HOME_FORCE_TIMEOUT_SEC = 8.0
 SEQUENCE_WAIT_POLL_SEC = 0.03
 ROBOT_WINDOW_NAME = "YOLO Robot Pick"
 HAND_GRASP_WINDOW_NAME = "Hand Grasp Detection"
-
-RETURN_STAGING_POSE = {
-    "x": 0.35,
-    "y": 0.00,
-    "z": SAFE_Z,
-}
-RETURN_PLACE_Z = 0.32
-RETURN_APPROACH_Z_OFFSET = 0.12
-
-TOOL_HOME_POSES = {
-    "drill": {"x": 0.45, "y": -0.20, "z": RETURN_PLACE_Z},
-    "hammer": {"x": 0.45, "y": -0.10, "z": RETURN_PLACE_Z},
-    "pliers": {"x": 0.45, "y": 0.00, "z": RETURN_PLACE_Z},
-    "screwdriver": {"x": 0.45, "y": 0.10, "z": RETURN_PLACE_Z},
-    "tape_measure": {"x": 0.45, "y": 0.20, "z": RETURN_PLACE_Z},
-    "wrench": {"x": 0.45, "y": 0.30, "z": RETURN_PLACE_Z},
-}
 
 GRASP_POINT_MODE_CENTER = "center"
 GRASP_POINT_MODE_VLM = "vlm"
