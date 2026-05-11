@@ -9,9 +9,9 @@ from std_msgs.msg import String
 from macgyvbot.config.config import (
     GRASP_ADVANCE_DISTANCE_M,
     HAND_GRASP_TIMEOUT_SEC,
+    RETURN_HOME_DESCENT_START_Z,
     RETURN_HOME_DESCENT_STEP_M,
     RETURN_HOME_FORCE_THRESHOLD_N,
-    RETURN_HOME_FORCE_TIMEOUT_SEC,
     GRASP_VERIFY_POLL_SEC,
     GRASP_VERIFY_TIMEOUT_SEC,
     GRASP_RETRY_LIMIT,
@@ -238,8 +238,8 @@ class ReturnSequenceRunner:
         return True
 
     def _place_tool_at_robot_home(self, tool_name, ori, command, logger):
-        target_x, target_y, target_z = self.state.home_xyz
-        approach_z = max(target_z, SAFE_Z)
+        target_x, target_y, _ = self.state.home_xyz
+        approach_z = max(RETURN_HOME_DESCENT_START_Z, SAFE_Z_MIN)
 
         self._publish_status(
             "placing_return_tool",
@@ -296,7 +296,6 @@ class ReturnSequenceRunner:
     ):
         self.state.latest_wrench = None
         current_z = float(start_z)
-        start_time = time.monotonic()
 
         self._publish_status(
             "lowering_return_tool",
@@ -322,13 +321,6 @@ class ReturnSequenceRunner:
             if current_z <= SAFE_Z_MIN:
                 logger.warn(
                     "Z 반력이 임계값에 도달하지 않았지만 안전 최소 Z까지 하강했습니다: "
-                    f"last_force_z={force_z}"
-                )
-                return current_z
-
-            if time.monotonic() - start_time >= RETURN_HOME_FORCE_TIMEOUT_SEC:
-                logger.warn(
-                    "Z 반력 감지 제한 시간이 지나 현재 위치에서 하강을 중단합니다: "
                     f"last_force_z={force_z}"
                 )
                 return current_z
