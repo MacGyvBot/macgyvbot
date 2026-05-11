@@ -68,7 +68,7 @@ class ReturnSequenceRunner:
             if grasp_result is None:
                 self._fail(
                     requested_tool,
-                    "전방 30cm 위치에서 사용자가 들고 있는 공구를 확인하지 못했습니다.",
+                    "전방 20cm 위치에서 사용자가 들고 있는 공구를 확인하지 못했습니다.",
                     "user_tool_not_detected",
                     command,
                     log,
@@ -214,11 +214,11 @@ class ReturnSequenceRunner:
         self._publish_status(
             "moving_return_grasp_pose",
             tool_name,
-            "반납 공구를 감지하기 위해 전방 30cm 위치로 이동합니다.",
+            "반납 공구를 감지하기 위해 전방 20cm 위치로 이동합니다.",
             command,
         )
         logger.info(
-            "반납 1단계: 공구 감지 전 전방 30cm 전진 "
+            "반납 1단계: 공구 감지 전 전방 20cm 전진 "
             f"x={self.state.home_xyz[0]:.3f}->{x:.3f}, y={y:.3f}, z={z:.3f}"
         )
         ok = self.motion.plan_and_execute(

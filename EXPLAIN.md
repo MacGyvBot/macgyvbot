@@ -162,12 +162,12 @@ hand_grasp_detection_node
   - pick, lift, home 복귀, 사용자 handoff 대기, 실패 시 원위치 반환까지의 실행 시퀀스를 담당합니다.
   - `macgyvbot_main_node`에서 시작되지만, 실제 단계별 MoveIt/gripper 실행 흐름은 이 파일에 분리되어 있습니다.
   - 주요 성공/실패 상태를 `/robot_task_status`로 보고할 수 있도록 node state를 사용합니다.
-  - Home 근처에서 공구를 먼저 grasp한 뒤 Home 기준 전방 30cm 사용자 전달 위치로 이동합니다.
+  - Home 근처에서 공구를 먼저 grasp한 뒤 Home 기준 전방 20cm 사용자 전달 위치로 이동하고, 전달 후 Home으로 복귀합니다.
   - gripper close 뒤 OnRobot RG의 `grip detected`와 폭을 함께 확인해 `grasp_success` 또는 `robot_grasp_failed`를 발행합니다.
   - grasp 확인 실패 시 `GRASP_RETRY_LIMIT`회까지 open/close를 재시도합니다.
 
 - `macgyvbot/util/macgyvbot_main/task_pipeline/return_sequence.py`
-  - `return` 명령에서 Home 기준 전방 30cm 위치로 이동한 뒤 사용자 handoff를 기다리고 공구를 받습니다.
+  - `return` 명령에서 Home 기준 전방 20cm 위치로 이동한 뒤 사용자 handoff를 기다리고 공구를 받습니다.
   - hand grasp detection 결과나 명령의 공구명을 기준으로 공구를 식별합니다.
   - 반납 위치인 Home으로 이동한 뒤 Z를 낮추며 `force_torque_topic`의 Z 반대방향 힘이 임계값 이상인지 확인합니다.
   - 힘이 감지되거나 안전 최소 Z/timeout에 도달하면 하강을 멈추고 gripper를 release합니다.

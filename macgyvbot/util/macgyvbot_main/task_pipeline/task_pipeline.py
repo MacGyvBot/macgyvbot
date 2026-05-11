@@ -290,10 +290,15 @@ class PickSequenceRunner:
             self.gripper.open_gripper()
             self.cooperative_wait(0.8)
 
+            log.info("10단계: 전달 후 Home 위치로 복귀")
+            ok = self.move_home_after_handoff(travel_z, ori, log)
+            if not ok:
+                return
+
             log.info("Pick 시퀀스 완료")
             self.state._publish_robot_status(
                 "done",
-                message="공구 전달 동작이 완료되었습니다.",
+                message="공구 전달 후 Home 복귀까지 완료되었습니다.",
                 command=self.state.current_command,
             )
 
@@ -384,7 +389,7 @@ class PickSequenceRunner:
         )
         logger.info(
             "7단계: 사용자 전달 위치 이동 "
-            f"Home 기준 전방 30cm x={self.state.home_xyz[0]:.3f}->{safe_x:.3f}, "
+            f"Home 기준 전방 20cm x={self.state.home_xyz[0]:.3f}->{safe_x:.3f}, "
             f"y={safe_y:.3f}, z={safe_z:.3f}"
         )
         ok = self.motion.plan_and_execute(
@@ -402,6 +407,29 @@ class PickSequenceRunner:
             return None, None, None
 
         return safe_x, safe_y, safe_z
+
+    def move_home_after_handoff(self, travel_z, ori, logger):
+        ok = self.motion.plan_and_execute(
+            logger,
+            pose_goal=make_safe_pose(
+                self.state.home_xyz[0],
+                self.state.home_xyz[1],
+                max(travel_z, self.state.home_xyz[2], SAFE_Z),
+                ori,
+                logger,
+            ),
+        )
+        if not ok:
+            logger.error("전달 후 Home 복귀 실패")
+            self.state._publish_robot_status(
+                "failed",
+                message="공구 전달 후 Home 복귀에 실패했습니다.",
+                reason="home_after_handoff_failed",
+                command=self.state.current_command,
+            )
+            return False
+
+        return True
 
     def wait_for_human_grasp(self, logger):
         start_time = time.monotonic()
