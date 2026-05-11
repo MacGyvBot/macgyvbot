@@ -2,14 +2,12 @@
 
 from pathlib import Path
 
-try:
-    from ament_index_python.packages import (
-        PackageNotFoundError,
-        get_package_share_directory,
-    )
-except ModuleNotFoundError:
-    PackageNotFoundError = Exception
-    get_package_share_directory = None
+from ament_index_python.packages import (
+    PackageNotFoundError,
+    get_package_share_directory,
+)
+
+DEFAULT_MODEL_PATH = "yolov11_best.pt"
 
 
 def resolve_model_path(model_name):
@@ -17,33 +15,41 @@ def resolve_model_path(model_name):
     if path.exists() or path.is_absolute():
         return str(path)
 
-    package_share = _package_share_path()
-    source_root = Path(__file__).resolve().parents[4]
+    package_root = Path(__file__).resolve().parents[3]
+    project_root = Path(__file__).resolve().parents[4]
     cwd = Path.cwd()
+    try:
+        package_share = Path(get_package_share_directory("macgyvbot"))
+    except PackageNotFoundError:
+        package_share = None
+
     candidates = [
-        package_share / "weights" / path if package_share else None,
-        package_share / path if package_share else None,
+        *((package_share / "weights" / path,) if package_share is not None else ()),
         cwd / "weights" / path,
         cwd / path,
-        source_root / "weights" / path,
-        source_root / path,
+        project_root / "weights" / path,
+        package_root / "weights" / path,
+        package_root / path,
     ]
 
     for candidate in candidates:
-        if candidate is not None and candidate.exists():
+        if candidate.exists():
             return str(candidate)
 
+    if model_name == "yolo11_best.pt":
+        roots = [project_root, cwd, package_root]
+        if package_share is not None:
+            roots.insert(0, package_share)
+        for root in roots:
+            corrected_path = root / "weights" / DEFAULT_MODEL_PATH
+            if corrected_path.exists():
+                print(
+                    "WARNING: yolo11_best.pt not found. "
+                    f"Using {DEFAULT_MODEL_PATH}."
+                )
+                return str(corrected_path)
+
     return model_name
-
-
-def _package_share_path():
-    if get_package_share_directory is None:
-        return None
-
-    try:
-        return Path(get_package_share_directory("macgyvbot"))
-    except PackageNotFoundError:
-        return None
 
 
 class YoloDetector:

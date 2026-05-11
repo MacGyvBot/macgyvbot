@@ -4,6 +4,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional, Tuple
 
+from ament_index_python.packages import (
+    PackageNotFoundError,
+    get_package_share_directory,
+)
+
 Rect = Tuple[int, int, int, int]
 
 DEFAULT_MODEL_PATH = "yolov11_best.pt"
@@ -96,7 +101,12 @@ class ToolDetector:
         package_root = Path(__file__).resolve().parents[3]
         project_root = Path(__file__).resolve().parents[4]
         cwd = Path.cwd()
+        try:
+            package_share = Path(get_package_share_directory("macgyvbot"))
+        except PackageNotFoundError:
+            package_share = None
         candidates = [
+            *((package_share / "weights" / path,) if package_share is not None else ()),
             cwd / "weights" / path,
             cwd / path,
             project_root / "weights" / path,
@@ -108,7 +118,10 @@ class ToolDetector:
                 return candidate
 
         if model_path == "yolo11_best.pt":
-            for root in (project_root, cwd, package_root):
+            roots = [project_root, cwd, package_root]
+            if package_share is not None:
+                roots.insert(0, package_share)
+            for root in roots:
                 corrected_path = root / "weights" / DEFAULT_MODEL_PATH
                 if corrected_path.exists():
                     print(
