@@ -10,6 +10,9 @@ def read_grasp_confirmation(gripper, logger):
     busy = bool(status[0]) if status else False
     width_mm = _read_width_mm(gripper, logger)
 
+    if busy:
+        return False, busy, status, width_mm
+
     if not grip_detected:
         return False, busy, status, width_mm
 

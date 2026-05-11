@@ -14,6 +14,7 @@ from macgyvbot.config.config import (
     GRASP_ADVANCE_DISTANCE_M,
     GRASP_Z_OFFSET,
     GRASP_VERIFY_POLL_SEC,
+    GRASP_VERIFY_STABLE_COUNT,
     GRASP_VERIFY_TIMEOUT_SEC,
     GRASP_RETRY_LIMIT,
     HAND_GRASP_TIMEOUT_SEC,
@@ -471,6 +472,7 @@ class PickSequenceRunner:
     def verify_robot_grasp(self, logger):
         start_time = time.monotonic()
         last_status = None
+        stable_count = 0
 
         while time.monotonic() - start_time < GRASP_VERIFY_TIMEOUT_SEC:
             try:
@@ -488,9 +490,13 @@ class PickSequenceRunner:
             }
 
             if confirmed:
-                return True
+                stable_count += 1
+                if stable_count >= GRASP_VERIFY_STABLE_COUNT:
+                    return True
+            else:
+                stable_count = 0
 
-            if not busy:
+            if not busy and stable_count == 0:
                 break
 
             self.cooperative_wait(GRASP_VERIFY_POLL_SEC)

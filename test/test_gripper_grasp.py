@@ -50,6 +50,17 @@ class TestGripperGraspConfirmation(unittest.TestCase):
         self.assertEqual(status[1], 1)
         self.assertEqual(width, 20.0)
 
+    def test_rejects_grip_detected_while_motion_is_busy(self):
+        confirmed, busy, status, width = read_grasp_confirmation(
+            FakeGripper([1, 1, 0, 0, 0, 0, 0], 20.0),
+            FakeLogger(),
+        )
+
+        self.assertFalse(confirmed)
+        self.assertTrue(busy)
+        self.assertEqual(status[1], 1)
+        self.assertEqual(width, 20.0)
+
 
 if __name__ == "__main__":
     unittest.main()

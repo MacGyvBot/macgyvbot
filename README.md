@@ -353,7 +353,8 @@ ros2 topic pub --once /tool_command std_msgs/msg/String \
 
 Pick/return 중 로봇 그리퍼가 공구를 실제로 잡았는지는 OnRobot RG 상태의
 `grip detected` 신호와 그리퍼 폭으로 확인합니다. 그리퍼가 완전히 닫힌 폭이면
-`grip detected`가 켜져도 성공으로 처리하지 않습니다. 성공하면
+`grip detected`가 켜져도 성공으로 처리하지 않습니다. 그리퍼 동작이 끝난 뒤
+조건이 연속으로 유지될 때만 성공으로 처리합니다. 성공하면
 `status=grasp_success`가 발행되고, 신호가 확인되지 않거나 완전 닫힘 상태이면
 `status=failed`, `reason=robot_grasp_failed` 또는 `reason=return_grasp_failed`가
 발행됩니다. grasp 실패 시에는 최대 `GRASP_RETRY_LIMIT`회까지 gripper open/close
