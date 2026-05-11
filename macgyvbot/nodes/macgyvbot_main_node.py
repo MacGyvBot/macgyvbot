@@ -20,6 +20,7 @@ from std_msgs.msg import String
 
 from macgyvbot.config.config import (
     DEFAULT_GRASP_POINT_MODE,
+    DRAWER_LABEL,
     FORCE_TORQUE_TOPIC,
     GROUP_NAME,
     HAND_GRASP_IMAGE_TOPIC,
@@ -345,10 +346,10 @@ class MacGyvBotNode(Node):
         self._last_search_status_target = None
         self.get_logger().info(f"타겟 객체 설정: {self.target_label} ({source})")
         self._publish_robot_status(
-            "accepted",
+            "searching_drawer",
             tool_name=val,
             action="bring",
-            message=f"{val} 탐색을 시작합니다.",
+            message=f"{val}를 꺼낼 공구함 찾기를 시작합니다.",
             command=command,
         )
 
@@ -389,10 +390,10 @@ class MacGyvBotNode(Node):
 
         self.picking = True
         self._publish_robot_status(
-            "picking",
+            "moving_to_drawer",
             tool_name=self.target_label,
             action="bring",
-            message=f"{self.target_label} pick 동작을 시작합니다.",
+            message="공구함으로 이동 중입니다.",
             command=self.current_command,
         )
         self.pending_pick_thread = threading.Thread(
@@ -520,21 +521,16 @@ class MacGyvBotNode(Node):
 
     def _handle_target_detection(self, boxes, annotated_frame):
         found = False
+        search_label = DRAWER_LABEL
 
         for box in boxes:
             label = self.detector.names[int(box.cls)]
-            if label != self.target_label:
+            if label != search_label:
                 continue
 
             found = True
-            u, v, source, vlm_rpy_deg = self.grasp_point_selector.select(
-                box,
-                label,
-                self.color_image,
-                self.depth_image,
-                self.intrinsics,
-                self.target_label,
-            )
+            u, v = self._box_center_pixel(box)
+            source = "drawer_center"
             target = self.depth_projector.pixel_to_base_target(
                 u,
                 v,
@@ -543,28 +539,27 @@ class MacGyvBotNode(Node):
                 self.depth_image,
                 self.intrinsics,
                 self.get_logger(),
-                vlm_rpy_deg,
             )
             if target is None:
                 continue
 
-            bx, by, bz, z_m, vlm_rpy_deg = target
-            vlm_yaw_deg = self._extract_vlm_yaw(vlm_rpy_deg)
+            bx, by, bz, z_m, _ = target
             self._draw_grasp_marker(annotated_frame, u, v, source)
-            self.start_pick_sequence(bx, by, bz, z_m, vlm_yaw_deg)
+            self.start_pick_sequence(bx, by, bz, z_m)
             break
 
         if not found:
             self.get_logger().info(
-                f"'{self.target_label}' 탐색 중... 현재 프레임에서는 미검출"
+                f"'{search_label}' 탐색 중... 현재 프레임에서는 미검출"
             )
-            if self._last_search_status_target != self.target_label:
-                self._last_search_status_target = self.target_label
+            status_key = f"{self.target_label}:{search_label}"
+            if self._last_search_status_target != status_key:
+                self._last_search_status_target = status_key
                 self._publish_robot_status(
-                    "searching",
+                    "searching_drawer",
                     tool_name=self.target_label,
                     action="bring",
-                    message=f"{self.target_label} 탐색 중입니다.",
+                    message=f"{self.target_label}를 꺼낼 공구함 찾기 중입니다.",
                     command=self.current_command,
                 )
 
@@ -591,6 +586,13 @@ class MacGyvBotNode(Node):
             1,
             cv2.LINE_AA,
         )
+
+    @staticmethod
+    def _box_center_pixel(box):
+        bbox = box.xyxy[0].cpu().numpy()
+        u = int((bbox[0] + bbox[2]) / 2)
+        v = int((bbox[1] + bbox[3]) / 2)
+        return u, v
 
     def _publish_robot_status(
         self,

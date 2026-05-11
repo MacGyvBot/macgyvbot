@@ -7,27 +7,27 @@ import rclpy
 from std_msgs.msg import String
 
 from macgyvbot.config.config import (
+    DRAWER_HANDLE_LABEL,
+    DRAWER_LABEL,
     GRASP_ADVANCE_DISTANCE_M,
     HAND_GRASP_TIMEOUT_SEC,
-    RETURN_HOME_DESCENT_START_Z,
     SAFE_Z,
     SEQUENCE_WAIT_POLL_SEC,
-)
-from macgyvbot.util.macgyvbot_main.model_control.force_detection import (
-    ForceReactionDetector,
 )
 from macgyvbot.util.macgyvbot_main.model_control.grasp_verifier import (
     GraspVerifier,
 )
 from macgyvbot.util.macgyvbot_main.model_control.robot_pose import make_safe_pose
 from macgyvbot.util.macgyvbot_main.model_control.robot_safezone import (
-    SAFE_Z_MIN,
     clamp_to_safe_workspace,
+)
+from macgyvbot.util.macgyvbot_main.task_pipeline.drawer_sequence import (
+    DrawerInteraction,
 )
 
 
 class ReturnSequenceRunner:
-    """Receive a user-held tool and place it in its configured home pose."""
+    """Receive a user-held tool and place it in the drawer."""
 
     def __init__(self, robot, motion_controller, gripper, state):
         self.robot = robot
@@ -35,8 +35,10 @@ class ReturnSequenceRunner:
         self.gripper = gripper
         self.state = state
         self.grasp_verifier = GraspVerifier(gripper, self._cooperative_wait)
-        self.force_detector = ForceReactionDetector(
+        self.drawer = DrawerInteraction(
+            robot,
             motion_controller,
+            gripper,
             state,
             self._cooperative_wait,
         )
@@ -45,31 +47,111 @@ class ReturnSequenceRunner:
         log = self.state.logger()
         requested_tool = command.get("tool_name", "unknown")
         raw_text = command.get("raw_text", "")
+        drawer_motion = None
 
         try:
             self.state.human_grasped_tool = False
             self.state.last_grasp_result = None
 
             self._publish_status(
-                "waiting_return_handoff",
+                "searching_drawer",
                 requested_tool,
-                "사용자 반납 공구를 받을 준비를 시작합니다.",
+                "반납 공구를 넣을 공구함 찾기 중입니다.",
                 command,
             )
             log.info(
                 f"반납 명령 수신: tool={requested_tool}, raw_text='{raw_text}'. "
-                "그리퍼를 열고 사용자 hand-tool grasp 인식을 기다립니다."
+                "서랍을 먼저 연 뒤 사용자 hand-tool grasp 인식을 기다립니다."
             )
 
             ori = self.state.home_ori
             self.gripper.open_gripper()
             self._cooperative_wait(0.5)
 
+            drawer_target = self.drawer.wait_for_target(DRAWER_LABEL, log)
+            if drawer_target is None:
+                self._fail(
+                    requested_tool,
+                    "반납 공구를 넣을 공구함을 찾지 못했습니다.",
+                    "drawer_not_found",
+                    command,
+                    log,
+                )
+                return
+
+            self._publish_status(
+                "moving_to_drawer",
+                requested_tool,
+                "공구함으로 이동 중입니다.",
+                command,
+            )
+            if not self.drawer.move_to_drawer_view(drawer_target, log):
+                self._fail(
+                    requested_tool,
+                    "공구함으로 이동하지 못했습니다.",
+                    "drawer_move_failed",
+                    command,
+                    log,
+                )
+                return
+
+            self._publish_status(
+                "searching_drawer_handle",
+                requested_tool,
+                "서랍 손잡이를 찾는 중입니다.",
+                command,
+            )
+            handle_target = self.drawer.wait_for_target(DRAWER_HANDLE_LABEL, log)
+            if handle_target is None:
+                self._fail(
+                    requested_tool,
+                    "서랍 손잡이를 찾지 못했습니다.",
+                    "drawer_handle_not_found",
+                    command,
+                    log,
+                )
+                return
+
+            self._publish_status(
+                "opening_drawer",
+                requested_tool,
+                "서랍 손잡이를 당겨 여는 중입니다.",
+                command,
+            )
+            drawer_motion = self.drawer.open_drawer(handle_target, log)
+            if drawer_motion is None:
+                self._fail(
+                    requested_tool,
+                    "서랍을 열지 못했습니다.",
+                    "drawer_open_failed",
+                    command,
+                    log,
+                )
+                return
+
+            self._publish_status(
+                "waiting_return_handoff",
+                requested_tool,
+                "사용자 반납 공구를 받을 위치로 이동합니다.",
+                command,
+            )
             if not self._advance_for_return_detection(requested_tool, command, log):
+                self._close_drawer_after_empty_failure(
+                    drawer_motion,
+                    requested_tool,
+                    command,
+                    log,
+                )
                 return
 
             grasp_result = self._wait_for_user_held_tool(requested_tool, log)
             if grasp_result is None:
+                self._close_drawer_after_empty_failure(
+                    drawer_motion,
+                    requested_tool,
+                    command,
+                    log,
+                )
                 self._fail(
                     requested_tool,
                     "전방 20cm 위치에서 사용자가 들고 있는 공구를 확인하지 못했습니다.",
@@ -84,6 +166,12 @@ class ReturnSequenceRunner:
 
             log.info("사용자 hand-tool grasp 확인. 공구 grasp를 시도합니다.")
             if not self._try_robot_grasp(tool_name, command, log):
+                self._close_drawer_after_empty_failure(
+                    drawer_motion,
+                    tool_name,
+                    command,
+                    log,
+                )
                 self._fail(
                     tool_name,
                     "반납 공구 grasp에 실패했습니다.",
@@ -100,9 +188,34 @@ class ReturnSequenceRunner:
                 command,
             )
 
-            if not self._place_tool_at_robot_home(
+            if not self._place_tool_in_drawer(
                 tool_name,
+                drawer_target,
+                command,
+                log,
+            ):
+                return
+
+            self._publish_status(
+                "closing_drawer",
+                tool_name,
+                "공구 보관 후 서랍 문을 닫는 중입니다.",
+                command,
+            )
+            if not self.drawer.close_drawer(drawer_motion, log):
+                self._fail(
+                    tool_name,
+                    "서랍 문 닫기에 실패했습니다.",
+                    "drawer_close_failed",
+                    command,
+                    log,
+                )
+                return
+
+            if not self._move_home_after_return(
+                drawer_motion.travel_z,
                 ori,
+                tool_name,
                 command,
                 log,
             ):
@@ -111,7 +224,7 @@ class ReturnSequenceRunner:
             self._publish_status(
                 "done",
                 tool_name,
-                f"{tool_name} 반납 공구를 Home에 배치했습니다.",
+                f"{tool_name} 반납 공구를 서랍에 넣고 서랍을 닫았습니다.",
                 command,
             )
 
@@ -159,99 +272,30 @@ class ReturnSequenceRunner:
             failure_prefix="반납 공구 grasp",
         )
 
-    def _place_tool_at_robot_home(self, tool_name, ori, command, logger):
-        target_x, target_y, _ = self.state.home_xyz
-        approach_z = max(RETURN_HOME_DESCENT_START_Z, SAFE_Z_MIN)
-
+    def _place_tool_in_drawer(self, tool_name, drawer_target, command, logger):
         self._publish_status(
             "placing_return_tool",
             tool_name,
-            f"{tool_name} 반납 위치인 Home으로 이동합니다.",
+            f"{tool_name} 반납 공구를 열린 서랍 안에 넣는 중입니다.",
             command,
         )
+        if self.drawer.place_tool_in_open_drawer(drawer_target, logger):
+            return True
 
-        logger.info(
-            f"반납 2단계: {tool_name} 반납 Home 위치 이동 "
-            f"x={target_x:.3f}, y={target_y:.3f}, z={approach_z:.3f}"
-        )
-        ok = self.motion.plan_and_execute(
-            logger,
-            pose_goal=make_safe_pose(target_x, target_y, approach_z, ori, logger),
-        )
-        if not ok:
-            self._fail(
-                tool_name,
-                f"{tool_name} 반납 Home 위치 이동에 실패했습니다.",
-                "return_home_move_failed",
-                command,
-                logger,
-            )
-            return False
-
-        self._publish_status(
-            "lowering_return_tool",
+        self._fail(
             tool_name,
-            "Home에서 Z를 낮추며 반력을 확인합니다.",
-            command,
-        )
-        stop_z = self.force_detector.descend_until_z_reaction(
-            target_x,
-            target_y,
-            approach_z,
-            ori,
-            logger,
-        )
-        if stop_z is None:
-            self._fail(
-                tool_name,
-                "반납 Home Z 하강에 실패했습니다.",
-                "return_home_descent_failed",
-                command,
-                logger,
-            )
-            return False
-
-        logger.info(f"반납 4단계: {tool_name} Home 위치에 놓기")
-        self.gripper.open_gripper()
-        self._cooperative_wait(0.8)
-
-        return self._move_home_after_return(
-            target_x,
-            target_y,
-            approach_z,
-            ori,
-            tool_name,
+            "열린 서랍 내부에 반납 공구를 배치하지 못했습니다.",
+            "drawer_tool_place_failed",
             command,
             logger,
         )
+        return False
 
-    def _move_home_after_return(
-        self,
-        target_x,
-        target_y,
-        approach_z,
-        ori,
-        tool_name,
-        command,
-        logger,
-    ):
-        logger.info("반납 5단계: 공구를 놓은 뒤 Home 안전 높이로 복귀")
-        ok = self.motion.plan_and_execute(
-            logger,
-            pose_goal=make_safe_pose(target_x, target_y, approach_z, ori, logger),
-        )
-        if not ok:
-            self._fail(
-                tool_name,
-                "반납 공구를 놓은 뒤 Home 안전 높이 복귀에 실패했습니다.",
-                "return_home_retreat_failed",
-                command,
-                logger,
-            )
-            return False
-
+    def _move_home_after_return(self, safe_z, ori, tool_name, command, logger):
         final_x, final_y, final_z = self.state.home_xyz
-        final_z = max(final_z, approach_z)
+        final_z = max(final_z, safe_z, SAFE_Z)
+
+        logger.info("반납 마무리: 서랍을 닫은 뒤 Home으로 복귀")
         ok = self.motion.plan_and_execute(
             logger,
             pose_goal=make_safe_pose(final_x, final_y, final_z, ori, logger),
@@ -259,14 +303,42 @@ class ReturnSequenceRunner:
         if not ok:
             self._fail(
                 tool_name,
-                "반납 공구를 놓은 뒤 Home 복귀에 실패했습니다.",
-                "return_home_after_release_failed",
+                "서랍을 닫은 뒤 Home 복귀에 실패했습니다.",
+                "return_home_after_drawer_close_failed",
                 command,
                 logger,
             )
             return False
 
         return True
+
+    def _close_drawer_after_empty_failure(
+        self,
+        drawer_motion,
+        tool_name,
+        command,
+        logger,
+    ):
+        if drawer_motion is None:
+            return True
+
+        self._publish_status(
+            "closing_drawer",
+            tool_name,
+            "반납 공구를 잡지 못해 열린 서랍을 닫는 중입니다.",
+            command,
+        )
+        if self.drawer.close_drawer(drawer_motion, logger):
+            return True
+
+        self._fail(
+            tool_name,
+            "실패 처리 중 서랍 문 닫기에 실패했습니다.",
+            "drawer_close_after_failure_failed",
+            command,
+            logger,
+        )
+        return False
 
     @staticmethod
     def _resolve_tool_name(requested_tool, detected_tool, logger):

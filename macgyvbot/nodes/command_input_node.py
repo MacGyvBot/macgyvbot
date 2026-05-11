@@ -348,7 +348,21 @@ class CommandInputNode(Node):
         )
         message = status.get('message', '')
 
-        if state in ('accepted', 'searching', 'picking', 'waiting_handoff'):
+        active_states = (
+            'accepted',
+            'searching',
+            'picking',
+            'waiting_handoff',
+            'searching_drawer',
+            'moving_to_drawer',
+            'searching_drawer_handle',
+            'opening_drawer',
+            'closing_drawer',
+            'waiting_return_handoff',
+            'placing_return_tool',
+        )
+
+        if state in active_states:
             self._last_target_label = tool_name
             self._append_system(message or f'{tool_name}: {state}')
             self._set_status(message or state)
