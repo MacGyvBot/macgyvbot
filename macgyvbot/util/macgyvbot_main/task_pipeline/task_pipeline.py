@@ -11,6 +11,7 @@ from macgyvbot.util.macgyvbot_main.model_control.robot_safezone import (
 from macgyvbot.config.config import (
     APPROACH_Z_OFFSET,
     COLLISION_MARGIN,
+    GRASP_ADVANCE_DISTANCE_M,
     GRASP_Z_OFFSET,
     GRASP_VERIFY_POLL_SEC,
     GRASP_VERIFY_TIMEOUT_SEC,
@@ -27,6 +28,9 @@ from macgyvbot.util.macgyvbot_main.model_control.robot_pose import (
     current_ee_orientation,
     get_ee_matrix,
     make_safe_pose,
+)
+from macgyvbot.util.macgyvbot_main.model_control.gripper_grasp import (
+    read_grasp_confirmation,
 )
 
 
@@ -245,25 +249,12 @@ class PickSequenceRunner:
                 )
                 return
 
-            log.info("7단계: Home XY 복귀")
-            ok = self.motion.plan_and_execute(
+            handoff_pose = self.move_to_handoff_pose(
+                travel_z,
+                ori,
                 log,
-                pose_goal=make_safe_pose(
-                    self.state.home_xyz[0],
-                    self.state.home_xyz[1],
-                    travel_z,
-                    ori,
-                    log,
-                ),
             )
-            if not ok:
-                log.error("Home 복귀 실패")
-                self.state._publish_robot_status(
-                    "failed",
-                    message="Home 복귀 실패",
-                    reason="home_return_failed",
-                    command=self.state.current_command,
-                )
+            if handoff_pose[0] is None:
                 return
 
             log.info("8단계: 사용자 잡기 인식 대기")
@@ -381,6 +372,37 @@ class PickSequenceRunner:
 
         return True
 
+    def move_to_handoff_pose(self, travel_z, ori, logger):
+        target_x = self.state.home_xyz[0] + GRASP_ADVANCE_DISTANCE_M
+        target_y = self.state.home_xyz[1]
+        target_z = max(travel_z, self.state.home_xyz[2], SAFE_Z)
+        safe_x, safe_y, safe_z = clamp_to_safe_workspace(
+            target_x,
+            target_y,
+            target_z,
+            logger,
+        )
+        logger.info(
+            "7단계: 사용자 전달 위치 이동 "
+            f"Home 기준 전방 30cm x={self.state.home_xyz[0]:.3f}->{safe_x:.3f}, "
+            f"y={safe_y:.3f}, z={safe_z:.3f}"
+        )
+        ok = self.motion.plan_and_execute(
+            logger,
+            pose_goal=make_safe_pose(safe_x, safe_y, safe_z, ori, logger),
+        )
+        if not ok:
+            logger.error("사용자 전달 위치 이동 실패. Pick 시퀀스 중단")
+            self.state._publish_robot_status(
+                "failed",
+                message="사용자 전달 위치 이동에 실패했습니다.",
+                reason="handoff_pose_move_failed",
+                command=self.state.current_command,
+            )
+            return None, None, None
+
+        return safe_x, safe_y, safe_z
+
     def wait_for_human_grasp(self, logger):
         start_time = time.monotonic()
 
@@ -424,17 +446,20 @@ class PickSequenceRunner:
 
         while time.monotonic() - start_time < GRASP_VERIFY_TIMEOUT_SEC:
             try:
-                status = self.gripper.get_status()
+                confirmed, busy, status, width_mm = read_grasp_confirmation(
+                    self.gripper,
+                    logger,
+                )
             except Exception as exc:
                 logger.warn(f"그리퍼 상태 읽기 실패: {exc}")
                 return False
 
-            last_status = status
-            grip_detected = len(status) > 1 and bool(status[1])
-            busy = bool(status[0]) if status else False
+            last_status = {
+                "status": status,
+                "width_mm": width_mm,
+            }
 
-            if grip_detected:
-                logger.info("그리퍼 grip detected 신호로 grasp 성공을 확인했습니다.")
+            if confirmed:
                 return True
 
             if not busy:
