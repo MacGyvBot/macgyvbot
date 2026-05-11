@@ -348,3 +348,20 @@
 - Home placement 하강 중 force threshold가 너무 빠르거나 늦게 반응하지 않는지 확인해야 한다.
 - force 미감지 시 `SAFE_Z_MIN`까지 하강하는 동작이 실제 환경에서 충분히 안전한지 확인해야 한다.
 - 공구 release 후 Home 복귀 경로가 주변 물체와 충돌하지 않는지 확인해야 한다.
+
+## 28. Task pipeline helper 위치 재조정 (2026-05-11)
+
+- `handoff_motion.py`는 pick 시퀀스 전용 helper라 별도 파일로 둘 만큼 독립성이 크지 않아 `pick_sequence.py` 내부 method로 편입했다.
+- `return_placement.py`는 Home 이동, release, Home 복귀 같은 return 시퀀스 흐름과 force 감지가 섞여 있어 제거했다.
+- return Home 이동, gripper release, release 후 Home 복귀 method는 `return_sequence.py`로 옮겼다.
+- force 기반 Z 하강만 `model_control/force_detection.py`로 분리했다.
+- force 감지는 safe zone처럼 로봇 제어 안전 helper 성격이 강하므로 `task_pipeline/`보다 `model_control/` 아래에 두었다.
+- `grasp_verifier.py`는 grasp point 선택 로직이 아니라 gripper 상태와 폭을 확인하는 제어 정책이므로 `model_control/grasp_verifier.py`로 이동했다.
+- `test/test_gripper_grasp.py`의 import 경로를 새 `model_control.grasp_verifier` 기준으로 수정했다.
+- command parser 동작은 현재 리팩터링 범위의 핵심 검증 대상이 아니므로 `test/test_command_parser.py`를 제거했다.
+- README와 EXPLAIN의 패키지 구조 설명을 새 파일 위치에 맞게 수정했다.
+
+확인:
+- `python3 -m unittest discover -s test -p 'test_gripper_grasp.py'`로 gripper grasp 판정 테스트를 확인한다.
+- `python3 -m compileall -q macgyvbot launch test`로 Python 문법 검사를 확인한다.
+- `git diff --check`로 whitespace 오류를 확인한다.

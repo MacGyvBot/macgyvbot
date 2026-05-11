@@ -153,6 +153,14 @@ hand_grasp_detection_node
   - OnRobot RG gripper 제어 클래스입니다.
   - gripper open/close, TCP/Modbus 계열 통신 처리를 담당합니다.
 
+- `macgyvbot/util/macgyvbot_main/model_control/grasp_verifier.py`
+  - gripper close 뒤 동작이 끝난 상태에서 OnRobot RG의 `grip detected`와 폭을 연속 확인합니다.
+  - grasp 확인 실패 시 `GRASP_RETRY_LIMIT`회까지 open/close를 재시도합니다.
+
+- `macgyvbot/util/macgyvbot_main/model_control/force_detection.py`
+  - force/torque 입력의 Z 반대방향 힘을 보며 step 단위 Z 하강을 수행합니다.
+  - 반력이 감지되거나 안전 최소 Z에 도달하면 하강을 중단합니다.
+
 ## `macgyvbot/util/macgyvbot_main/task_pipeline/`
 
 - `macgyvbot/util/macgyvbot_main/task_pipeline/__init__.py`
@@ -164,20 +172,10 @@ hand_grasp_detection_node
   - 주요 성공/실패 상태를 `/robot_task_status`로 보고할 수 있도록 node state를 사용합니다.
   - Home 근처에서 공구를 먼저 grasp한 뒤 Home 기준 전방 20cm 사용자 전달 위치로 이동하고, 전달 후 Home으로 복귀합니다.
 
-- `macgyvbot/util/macgyvbot_main/task_pipeline/handoff_motion.py`
-  - pick 후 사용자 전달 위치 이동과 전달 후 Home 복귀 motion helper입니다.
-
-- `macgyvbot/util/macgyvbot_main/task_pipeline/grasp_verifier.py`
-  - gripper close 뒤 동작이 끝난 상태에서 OnRobot RG의 `grip detected`와 폭을 연속 확인합니다.
-  - grasp 확인 실패 시 `GRASP_RETRY_LIMIT`회까지 open/close를 재시도합니다.
-
 - `macgyvbot/util/macgyvbot_main/task_pipeline/return_sequence.py`
   - `return` 명령에서 Home 기준 전방 20cm 위치로 이동한 뒤 사용자 handoff를 기다리고 공구를 받습니다.
   - hand grasp detection 결과나 명령의 공구명을 기준으로 공구를 식별합니다.
-
-- `macgyvbot/util/macgyvbot_main/task_pipeline/return_placement.py`
-  - 반납 위치인 Home의 z=0.30m 위치로 이동한 뒤 Z를 낮추며 `force_torque_topic`의 Z 반대방향 힘이 임계값 이상인지 확인합니다.
-  - 힘이 감지되면 하강을 멈추고, 힘이 감지되지 않으면 안전 최소 Z까지 계속 하강한 뒤 gripper를 release하고 Home으로 복귀합니다.
+  - 반납 위치인 Home의 z=0.30m 위치로 이동하고, force-guided 하강 후 gripper를 release하고 Home으로 복귀합니다.
 
 ## `macgyvbot/util/hand_grasp_detection/hand_grasp/`
 

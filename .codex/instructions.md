@@ -18,7 +18,7 @@
 - `macgyvbot/util/hand_grasp_detection/`: 사용자 손과 공구 grasp 상태 판단 로직
 - `macgyvbot/util/macgyvbot_main/perception/`: YOLO 인식, depth projection, 좌표 변환
 - `macgyvbot/util/macgyvbot_main/grasp_mechanism/`: bbox center/VLM 기반 grasp point 선택
-- `macgyvbot/util/macgyvbot_main/model_control/`: MoveIt planning, pose helper, gripper/robot motion adapter
+- `macgyvbot/util/macgyvbot_main/model_control/`: MoveIt planning, pose helper, gripper/robot motion adapter, force/grasp state helper
 - `macgyvbot/util/macgyvbot_main/task_pipeline/`: pick, handoff, return 같은 시퀀스 orchestration
 - `macgyvbot/ui/`: PyQt command input GUI처럼 ROS node에서 분리 가능한 UI helper
 - 기존 standalone 노드가 있는 경우, 새 노드는 우선 `macgyvbot/nodes/`에 추가하고 `setup.py` console script만 연결한다.

@@ -11,6 +11,7 @@ from macgyvbot.util.macgyvbot_main.model_control.robot_safezone import (
 from macgyvbot.config.config import (
     APPROACH_Z_OFFSET,
     COLLISION_MARGIN,
+    GRASP_ADVANCE_DISTANCE_M,
     GRASP_Z_OFFSET,
     HAND_GRASP_TIMEOUT_SEC,
     MAX_DESCENT_FROM_APPROACH,
@@ -20,11 +21,8 @@ from macgyvbot.config.config import (
     SAFE_Z,
     SEQUENCE_WAIT_POLL_SEC,
 )
-from macgyvbot.util.macgyvbot_main.task_pipeline.grasp_verifier import (
+from macgyvbot.util.macgyvbot_main.model_control.grasp_verifier import (
     GraspVerifier,
-)
-from macgyvbot.util.macgyvbot_main.task_pipeline.handoff_motion import (
-    HandoffMotion,
 )
 from macgyvbot.util.macgyvbot_main.model_control.robot_pose import (
     current_ee_orientation,
@@ -40,7 +38,6 @@ class PickSequenceRunner:
         self.gripper = gripper
         self.state = state
         self.grasp_verifier = GraspVerifier(gripper, self.cooperative_wait)
-        self.handoff_motion = HandoffMotion(motion_controller, state)
 
     def run(self, bx, by, bz, z_m, vlm_yaw_deg=None):
         self.state.human_grasped_tool = False
@@ -250,7 +247,7 @@ class PickSequenceRunner:
                 )
                 return
 
-            handoff_pose = self.handoff_motion.move_to_handoff_pose(
+            handoff_pose = self.move_to_handoff_pose(
                 travel_z,
                 ori,
                 log,
@@ -292,7 +289,7 @@ class PickSequenceRunner:
             self.cooperative_wait(0.8)
 
             log.info("10단계: 전달 후 Home 위치로 복귀")
-            ok = self.handoff_motion.move_home_after_handoff(travel_z, ori, log)
+            ok = self.move_home_after_handoff(travel_z, ori, log)
             if not ok:
                 return
 
@@ -374,6 +371,60 @@ class PickSequenceRunner:
         )
         if not ok:
             logger.error("공구 반환 후 Home 복귀 실패")
+            return False
+
+        return True
+
+    def move_to_handoff_pose(self, travel_z, ori, logger):
+        target_x = self.state.home_xyz[0] + GRASP_ADVANCE_DISTANCE_M
+        target_y = self.state.home_xyz[1]
+        target_z = max(travel_z, self.state.home_xyz[2], SAFE_Z)
+        safe_x, safe_y, safe_z = clamp_to_safe_workspace(
+            target_x,
+            target_y,
+            target_z,
+            logger,
+        )
+        logger.info(
+            "7단계: 사용자 전달 위치 이동 "
+            f"Home 기준 전방 20cm x={self.state.home_xyz[0]:.3f}->{safe_x:.3f}, "
+            f"y={safe_y:.3f}, z={safe_z:.3f}"
+        )
+        ok = self.motion.plan_and_execute(
+            logger,
+            pose_goal=make_safe_pose(safe_x, safe_y, safe_z, ori, logger),
+        )
+        if not ok:
+            logger.error("사용자 전달 위치 이동 실패. Pick 시퀀스 중단")
+            self.state._publish_robot_status(
+                "failed",
+                message="사용자 전달 위치 이동에 실패했습니다.",
+                reason="handoff_pose_move_failed",
+                command=self.state.current_command,
+            )
+            return None, None, None
+
+        return safe_x, safe_y, safe_z
+
+    def move_home_after_handoff(self, travel_z, ori, logger):
+        ok = self.motion.plan_and_execute(
+            logger,
+            pose_goal=make_safe_pose(
+                self.state.home_xyz[0],
+                self.state.home_xyz[1],
+                max(travel_z, self.state.home_xyz[2], SAFE_Z),
+                ori,
+                logger,
+            ),
+        )
+        if not ok:
+            logger.error("전달 후 Home 복귀 실패")
+            self.state._publish_robot_status(
+                "failed",
+                message="공구 전달 후 Home 복귀에 실패했습니다.",
+                reason="home_after_handoff_failed",
+                command=self.state.current_command,
+            )
             return False
 
         return True
