@@ -304,3 +304,47 @@
 확인:
 - `python -m compileall -q macgyvbot test`로 Python 문법 검사를 수행했다.
 - `python -m pytest -q test/test_command_parser.py`로 command parser 테스트를 통과했다.
+
+## 27. Task pipeline 책임 분리 (2026-05-11)
+
+- 최근 pick/return 시퀀스에 사용자 handoff, gripper grasp 검증, Home 반납 배치, force 기반 하강 로직이 추가되면서 `task_pipeline.py`와 일부 함수가 너무 많은 책임을 갖게 된 문제를 정리했다.
+- 기존 `task_pipeline.py`는 실제로 pick 시퀀스 전반을 담당하고 있었기 때문에 파일 목적이 드러나도록 `task_pipeline/pick_sequence.py`로 이름을 변경했다.
+- `macgyvbot_main_node.py`의 `PickSequenceRunner` import 경로를 새 `pick_sequence.py` 기준으로 수정했다.
+- pick 후 사용자 전달 위치 이동과 전달 후 Home 복귀 motion을 `task_pipeline/handoff_motion.py`로 분리했다.
+- gripper close 이후 실제 공구 grasp 성공 여부를 확인하는 공통 정책을 `task_pipeline/grasp_verifier.py`로 분리했다.
+- 기존 `model_control/gripper_grasp.py`의 `read_grasp_confirmation`은 low-level gripper adapter보다 task sequence 정책에 가까우므로 `grasp_verifier.py`로 이동하고 기존 파일은 제거했다.
+- return sequence의 Home 이동, Z 하강, force 감지, gripper release, Home 복귀 흐름을 `task_pipeline/return_placement.py`로 분리했다.
+- `return_sequence.py`는 return 명령 수신, 사용자 hand-tool grasp 감지, 공구명 결정, robot grasp 시도, Home placement 호출, 상태 payload 발행 중심으로 축소했다.
+- `README.md`의 패키지 구조 트리에 `task_pipeline/` 내부 파일을 추가해 pick, return, handoff motion, return placement, grasp verifier의 위치가 바로 보이도록 했다.
+- `EXPLAIN.md`의 기존 `task_pipeline.py` 설명을 `pick_sequence.py`와 새 helper 파일 설명으로 갱신했다.
+- `test/test_gripper_grasp.py`는 삭제된 `model_control.gripper_grasp` 대신 `task_pipeline.grasp_verifier`에서 `read_grasp_confirmation`을 import하도록 수정했다.
+- 로컬 Mac 환경처럼 `rclpy`가 없는 곳에서도 순수 gripper 판정 테스트가 가능하도록 `grasp_verifier.py`의 `rclpy` import를 `cooperative_wait()` 내부 지연 import로 조정했다.
+
+변경 목적:
+- ROS node는 wiring과 상태 관리 중심으로 유지하고, 실제 시퀀스 실행 책임은 `task_pipeline/` 아래 파일들에 둔다.
+- pick, handoff, return, placement, grasp verification의 책임 경계를 코드 구조에 드러낸다.
+- pick과 return에서 gripper grasp 성공 판정 기준을 같은 코드로 재사용한다.
+- return sequence 내부에 섞여 있던 Home placement safety logic을 분리해 실제 로봇 검증 시 확인 지점을 찾기 쉽게 만든다.
+- 기존 motion parameter와 threshold 값은 바꾸지 않고, 책임 분리와 import 경로 정리에 집중한다.
+
+동작 보존:
+- pick sequence의 공구 접근, grasp, lift, 사용자 handoff 대기 흐름을 유지했다.
+- 사용자 handoff 실패 시 원래 공구 위치로 반환하는 흐름을 유지했다.
+- return sequence의 Home 기준 전방 20cm 이동 후 사용자 hand-tool grasp 감지 흐름을 유지했다.
+- return sequence의 robot gripper grasp 재시도 정책을 유지했다.
+- Home 위치에서 0.30m 근처부터 하강을 시작하는 반납 placement 흐름을 유지했다.
+- force threshold 감지 시 하강 중단, force threshold 미감지 시 안전 최소 Z까지 계속 하강하는 흐름을 유지했다.
+- 공구 release 후 Home 복귀 흐름을 유지했다.
+
+확인:
+- `python3 -m unittest discover -s test -p 'test_gripper_grasp.py'`로 gripper grasp 판정 테스트를 통과했다.
+- `python3 -m compileall -q macgyvbot launch test`로 Python 문법 검사를 수행했다.
+- `git diff --check`로 whitespace 오류가 없음을 확인했다.
+
+남은 실제 로봇 확인 항목:
+- pick 후 Home 기준 전방 20cm 사용자 전달 위치가 실제 작업자에게 안전한지 확인해야 한다.
+- gripper 폭 threshold가 실제 공구별 두께와 맞는지 확인해야 한다.
+- return 시 사용자가 집게 근처에 직접 주는 경우와 바닥에 두는 경우 모두 감지되는지 확인해야 한다.
+- Home placement 하강 중 force threshold가 너무 빠르거나 늦게 반응하지 않는지 확인해야 한다.
+- force 미감지 시 `SAFE_Z_MIN`까지 하강하는 동작이 실제 환경에서 충분히 안전한지 확인해야 한다.
+- 공구 release 후 Home 복귀 경로가 주변 물체와 충돌하지 않는지 확인해야 한다.

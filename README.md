@@ -27,6 +27,11 @@ macgyvbot/
 │       ├── model_control/               # MoveIt, pose, gripper, safe zone
 │       ├── perception/                  # YOLO, depth projection
 │       └── task_pipeline/               # pick, handoff, return 시퀀스
+│           ├── pick_sequence.py         # 공구 pick 및 사용자 전달 흐름
+│           ├── return_sequence.py       # 사용자 반납 수신 흐름
+│           ├── handoff_motion.py        # 사용자 전달 위치 이동 helper
+│           ├── return_placement.py      # Home 반납 배치 helper
+│           └── grasp_verifier.py        # gripper grasp 확인/재시도 정책
 ├── ui/
 │   └── voice_command_window.py          # PyQt command input window
 ```
