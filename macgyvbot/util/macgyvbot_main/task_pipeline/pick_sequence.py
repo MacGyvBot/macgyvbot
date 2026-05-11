@@ -10,10 +10,10 @@ from macgyvbot.util.macgyvbot_main.model_control.robot_safezone import (
 
 from macgyvbot.config.config import (
     APPROACH_Z_OFFSET,
+    BASE_FRAME,
     COLLISION_MARGIN,
     GRASP_ADVANCE_DISTANCE_M,
     GRASP_Z_OFFSET,
-    HAND_GRASP_TIMEOUT_SEC,
     MAX_DESCENT_FROM_APPROACH,
     MIN_GRASP_CLEARANCE,
     MIN_PICK_Z,
@@ -247,22 +247,19 @@ class PickSequenceRunner:
                 )
                 return
 
+            log.info("8단계: 사용자 손 위치 검색 및 전달 이동")
+            self.state._publish_robot_status(
+                "waiting_handoff",
+                message="사용자 손 위치를 찾고 전달 위치로 이동합니다.",
+                command=self.state.current_command,
+            )
             handoff_pose = self.move_to_handoff_pose(
                 travel_z,
                 ori,
                 log,
             )
             if handoff_pose[0] is None:
-                return
-
-            log.info("8단계: 사용자 잡기 인식 대기")
-            self.state._publish_robot_status(
-                "waiting_handoff",
-                message="사용자 잡기 인식을 기다립니다.",
-                command=self.state.current_command,
-            )
-            if not self.wait_for_human_grasp(log):
-                log.error("사용자 잡기 인식 실패. 원래 공구 위치로 반환합니다.")
+                log.error("사용자 손 위치 확인 실패. 원래 공구 위치로 반환합니다.")
                 returned = self.return_tool_to_original_position(
                     target_x,
                     target_y,
@@ -275,16 +272,16 @@ class PickSequenceRunner:
                 self.state._publish_robot_status(
                     status,
                     message=(
-                        "사용자 잡기 인식 실패로 공구를 원래 위치에 반환했습니다."
+                        "사용자 손 위치 확인 실패로 공구를 원래 위치에 반환했습니다."
                         if returned
-                        else "사용자 잡기 인식 실패 후 원위치 반환에도 실패했습니다."
+                        else "사용자 손 위치 확인 실패 후 원위치 반환에도 실패했습니다."
                     ),
-                    reason="handoff_timeout",
+                    reason="handoff_pose_unavailable",
                     command=self.state.current_command,
                 )
                 return
 
-            log.info("9단계: 사용자 잡기 확인 후 그리퍼 오픈(놓기)")
+            log.info("9단계: 사용자 손 위치 이동 성공 후 그리퍼 오픈")
             self.gripper.open_gripper()
             self.cooperative_wait(0.8)
 
@@ -376,6 +373,17 @@ class PickSequenceRunner:
         return True
 
     def move_to_handoff_pose(self, travel_z, ori, logger):
+        search_client = getattr(self.state, "handover_search_client", None)
+        if search_client is None:
+            logger.error("handover search client가 없어 사용자 전달 위치를 찾을 수 없습니다.")
+            self.state._publish_robot_status(
+                "failed",
+                message="사용자 전달 위치 검색 클라이언트가 없습니다.",
+                reason="handoff_search_client_missing",
+                command=self.state.current_command,
+            )
+            return None, None, None
+
         target_x = self.state.home_xyz[0] + GRASP_ADVANCE_DISTANCE_M
         target_y = self.state.home_xyz[1]
         target_z = max(travel_z, self.state.home_xyz[2], SAFE_Z)
@@ -386,7 +394,7 @@ class PickSequenceRunner:
             logger,
         )
         logger.info(
-            "7단계: 사용자 전달 위치 이동 "
+            "7단계: 사용자 전달 검색 시작 위치 이동 "
             f"Home 기준 전방 20cm x={self.state.home_xyz[0]:.3f}->{safe_x:.3f}, "
             f"y={safe_y:.3f}, z={safe_z:.3f}"
         )
@@ -395,16 +403,73 @@ class PickSequenceRunner:
             pose_goal=make_safe_pose(safe_x, safe_y, safe_z, ori, logger),
         )
         if not ok:
-            logger.error("사용자 전달 위치 이동 실패. Pick 시퀀스 중단")
+            logger.error("사용자 전달 검색 시작 위치 이동 실패. Pick 시퀀스 중단")
             self.state._publish_robot_status(
                 "failed",
-                message="사용자 전달 위치 이동에 실패했습니다.",
+                message="사용자 전달 검색 시작 위치 이동에 실패했습니다.",
                 reason="handoff_pose_move_failed",
                 command=self.state.current_command,
             )
             return None, None, None
 
-        return safe_x, safe_y, safe_z
+        found, hand_x, hand_y, hand_z, frame_id, source = search_client.request_search(
+            safe_x,
+            safe_y,
+            safe_z,
+            ori,
+            logger,
+        )
+        if not found:
+            logger.error("사용자 손 위치를 찾지 못했습니다.")
+            self.state._publish_robot_status(
+                "failed",
+                message="사용자 손 위치를 찾지 못했습니다.",
+                reason="handoff_search_failed",
+                command=self.state.current_command,
+            )
+            return None, None, None
+
+        if frame_id not in ("world", BASE_FRAME):
+            logger.error(
+                "사용자 손 위치 frame을 planning에 사용할 수 없습니다: "
+                f"frame={frame_id}, source={source}"
+            )
+            self.state._publish_robot_status(
+                "failed",
+                message="사용자 손 위치 frame이 planning frame이 아닙니다.",
+                reason="handoff_unsupported_frame",
+                command=self.state.current_command,
+            )
+            return None, None, None
+
+        safe_hand_x, safe_hand_y, safe_hand_z = clamp_to_safe_workspace(
+            hand_x,
+            hand_y,
+            hand_z,
+            logger,
+        )
+        logger.info(
+            "사용자 손 위치로 전달 이동: "
+            f"source={source}, frame={frame_id}, "
+            f"raw=({hand_x:.3f},{hand_y:.3f},{hand_z:.3f}), "
+            f"safe=({safe_hand_x:.3f},{safe_hand_y:.3f},{safe_hand_z:.3f})"
+        )
+        ok = self.motion.plan_and_execute(
+            logger,
+            pose_goal=make_safe_pose(safe_hand_x, safe_hand_y, safe_hand_z, ori, logger),
+        )
+        if not ok:
+            logger.error("사용자 손 위치로 전달 이동 실패")
+            self.state._publish_robot_status(
+                "failed",
+                message="사용자 손 위치로 이동하지 못했습니다.",
+                reason="handoff_hand_pose_move_failed",
+                command=self.state.current_command,
+            )
+            return None, None, None
+
+        return safe_hand_x, safe_hand_y, safe_hand_z
+
 
     def move_home_after_handoff(self, travel_z, ori, logger):
         ok = self.motion.plan_and_execute(
@@ -428,24 +493,6 @@ class PickSequenceRunner:
             return False
 
         return True
-
-    def wait_for_human_grasp(self, logger):
-        start_time = time.monotonic()
-
-        while rclpy.ok():
-            if self.state.human_grasped_tool:
-                logger.info("사용자가 공구를 잡은 것으로 확인됨")
-                return True
-
-            if time.monotonic() - start_time >= HAND_GRASP_TIMEOUT_SEC:
-                logger.warn(
-                    f"{HAND_GRASP_TIMEOUT_SEC:.1f}초 동안 사용자 잡기 인식이 없어 대기 종료"
-                )
-                return False
-
-            self.cooperative_wait(0.1)
-
-        return False
 
     def try_robot_grasp(self, logger):
         def publish_attempt(attempt, retry_limit):

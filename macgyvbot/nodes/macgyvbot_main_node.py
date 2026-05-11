@@ -37,6 +37,10 @@ from macgyvbot.util.macgyvbot_main.model_control.moveit_controller import (
 )
 from macgyvbot.util.macgyvbot_main.model_control.onrobot_gripper import RG
 from macgyvbot.util.macgyvbot_main.model_control.robot_pose import get_ee_matrix
+from macgyvbot.util.macgyvbot_main.model_control.square_handover_search import (
+    SquareHandoverSearchClient,
+    SquareHandoverSearchServer,
+)
 from macgyvbot.util.macgyvbot_main.perception.depth_projection import DepthProjector
 from macgyvbot.util.macgyvbot_main.grasp_mechanism.grasp_point_selector import (
     GraspPointSelector,
@@ -100,6 +104,12 @@ class MacGyvBotNode(Node):
         self.pilz_params.max_velocity_scaling_factor = 0.2
 
         self.motion = MoveItController(self.robot, self.arm, self.pilz_params)
+        self.handover_search_server = SquareHandoverSearchServer(
+            self,
+            self.motion,
+            self,
+        )
+        self.handover_search_client = SquareHandoverSearchClient(self)
         self.pick_runner = PickSequenceRunner(
             self.robot,
             self.motion,
