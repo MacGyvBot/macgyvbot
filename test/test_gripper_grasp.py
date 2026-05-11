@@ -1,6 +1,6 @@
 import unittest
 
-from macgyvbot.util.macgyvbot_main.model_control.gripper_grasp import (
+from macgyvbot.util.macgyvbot_main.task_pipeline.grasp_verifier import (
     read_grasp_confirmation,
 )
 
