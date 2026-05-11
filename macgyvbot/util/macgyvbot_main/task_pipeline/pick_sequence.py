@@ -1,4 +1,4 @@
-"""Pick, handoff, and return sequence orchestration."""
+"""Pick sequence orchestration."""
 
 import time
 
@@ -11,12 +11,7 @@ from macgyvbot.util.macgyvbot_main.model_control.robot_safezone import (
 from macgyvbot.config.config import (
     APPROACH_Z_OFFSET,
     COLLISION_MARGIN,
-    GRASP_ADVANCE_DISTANCE_M,
     GRASP_Z_OFFSET,
-    GRASP_VERIFY_POLL_SEC,
-    GRASP_VERIFY_STABLE_COUNT,
-    GRASP_VERIFY_TIMEOUT_SEC,
-    GRASP_RETRY_LIMIT,
     HAND_GRASP_TIMEOUT_SEC,
     MAX_DESCENT_FROM_APPROACH,
     MIN_GRASP_CLEARANCE,
@@ -25,13 +20,16 @@ from macgyvbot.config.config import (
     SAFE_Z,
     SEQUENCE_WAIT_POLL_SEC,
 )
+from macgyvbot.util.macgyvbot_main.task_pipeline.grasp_verifier import (
+    GraspVerifier,
+)
+from macgyvbot.util.macgyvbot_main.task_pipeline.handoff_motion import (
+    HandoffMotion,
+)
 from macgyvbot.util.macgyvbot_main.model_control.robot_pose import (
     current_ee_orientation,
     get_ee_matrix,
     make_safe_pose,
-)
-from macgyvbot.util.macgyvbot_main.model_control.gripper_grasp import (
-    read_grasp_confirmation,
 )
 
 
@@ -41,6 +39,8 @@ class PickSequenceRunner:
         self.motion = motion_controller
         self.gripper = gripper
         self.state = state
+        self.grasp_verifier = GraspVerifier(gripper, self.cooperative_wait)
+        self.handoff_motion = HandoffMotion(motion_controller, state)
 
     def run(self, bx, by, bz, z_m, vlm_yaw_deg=None):
         self.state.human_grasped_tool = False
@@ -250,7 +250,7 @@ class PickSequenceRunner:
                 )
                 return
 
-            handoff_pose = self.move_to_handoff_pose(
+            handoff_pose = self.handoff_motion.move_to_handoff_pose(
                 travel_z,
                 ori,
                 log,
@@ -292,7 +292,7 @@ class PickSequenceRunner:
             self.cooperative_wait(0.8)
 
             log.info("10단계: 전달 후 Home 위치로 복귀")
-            ok = self.move_home_after_handoff(travel_z, ori, log)
+            ok = self.handoff_motion.move_home_after_handoff(travel_z, ori, log)
             if not ok:
                 return
 
@@ -378,60 +378,6 @@ class PickSequenceRunner:
 
         return True
 
-    def move_to_handoff_pose(self, travel_z, ori, logger):
-        target_x = self.state.home_xyz[0] + GRASP_ADVANCE_DISTANCE_M
-        target_y = self.state.home_xyz[1]
-        target_z = max(travel_z, self.state.home_xyz[2], SAFE_Z)
-        safe_x, safe_y, safe_z = clamp_to_safe_workspace(
-            target_x,
-            target_y,
-            target_z,
-            logger,
-        )
-        logger.info(
-            "7단계: 사용자 전달 위치 이동 "
-            f"Home 기준 전방 20cm x={self.state.home_xyz[0]:.3f}->{safe_x:.3f}, "
-            f"y={safe_y:.3f}, z={safe_z:.3f}"
-        )
-        ok = self.motion.plan_and_execute(
-            logger,
-            pose_goal=make_safe_pose(safe_x, safe_y, safe_z, ori, logger),
-        )
-        if not ok:
-            logger.error("사용자 전달 위치 이동 실패. Pick 시퀀스 중단")
-            self.state._publish_robot_status(
-                "failed",
-                message="사용자 전달 위치 이동에 실패했습니다.",
-                reason="handoff_pose_move_failed",
-                command=self.state.current_command,
-            )
-            return None, None, None
-
-        return safe_x, safe_y, safe_z
-
-    def move_home_after_handoff(self, travel_z, ori, logger):
-        ok = self.motion.plan_and_execute(
-            logger,
-            pose_goal=make_safe_pose(
-                self.state.home_xyz[0],
-                self.state.home_xyz[1],
-                max(travel_z, self.state.home_xyz[2], SAFE_Z),
-                ori,
-                logger,
-            ),
-        )
-        if not ok:
-            logger.error("전달 후 Home 복귀 실패")
-            self.state._publish_robot_status(
-                "failed",
-                message="공구 전달 후 Home 복귀에 실패했습니다.",
-                reason="home_after_handoff_failed",
-                command=self.state.current_command,
-            )
-            return False
-
-        return True
-
     def wait_for_human_grasp(self, logger):
         start_time = time.monotonic()
 
@@ -451,58 +397,18 @@ class PickSequenceRunner:
         return False
 
     def try_robot_grasp(self, logger):
-        for attempt in range(1, GRASP_RETRY_LIMIT + 1):
-            logger.info(f"그리퍼 grasp 시도 {attempt}/{GRASP_RETRY_LIMIT}")
+        def publish_attempt(attempt, retry_limit):
             self.state._publish_robot_status(
                 "grasping",
-                message=f"공구 grasp 시도 {attempt}/{GRASP_RETRY_LIMIT}",
+                message=f"공구 grasp 시도 {attempt}/{retry_limit}",
                 command=self.state.current_command,
             )
 
-            self.gripper.close_gripper()
-            if self.verify_robot_grasp(logger):
-                return True
-
-            logger.warn(f"공구 grasp 실패. 재시도 준비 {attempt}/{GRASP_RETRY_LIMIT}")
-            self.gripper.open_gripper()
-            self.cooperative_wait(0.5)
-
-        return False
-
-    def verify_robot_grasp(self, logger):
-        start_time = time.monotonic()
-        last_status = None
-        stable_count = 0
-
-        while time.monotonic() - start_time < GRASP_VERIFY_TIMEOUT_SEC:
-            try:
-                confirmed, busy, status, width_mm = read_grasp_confirmation(
-                    self.gripper,
-                    logger,
-                )
-            except Exception as exc:
-                logger.warn(f"그리퍼 상태 읽기 실패: {exc}")
-                return False
-
-            last_status = {
-                "status": status,
-                "width_mm": width_mm,
-            }
-
-            if confirmed:
-                stable_count += 1
-                if stable_count >= GRASP_VERIFY_STABLE_COUNT:
-                    return True
-            else:
-                stable_count = 0
-
-            if not busy and stable_count == 0:
-                break
-
-            self.cooperative_wait(GRASP_VERIFY_POLL_SEC)
-
-        logger.warn(f"그리퍼 grasp 확인 실패: status={last_status}")
-        return False
+        return self.grasp_verifier.try_grasp(
+            logger,
+            publish_attempt=publish_attempt,
+            failure_prefix="그리퍼 grasp",
+        )
 
     @staticmethod
     def cooperative_wait(duration_sec):

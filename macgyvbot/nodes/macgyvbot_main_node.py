@@ -43,7 +43,7 @@ from macgyvbot.util.macgyvbot_main.grasp_mechanism.grasp_point_selector import (
     normalize_grasp_point_mode,
 )
 from macgyvbot.util.macgyvbot_main.perception.yolo_detector import YoloDetector
-from macgyvbot.util.macgyvbot_main.task_pipeline.task_pipeline import (
+from macgyvbot.util.macgyvbot_main.task_pipeline.pick_sequence import (
     PickSequenceRunner,
 )
 from macgyvbot.util.macgyvbot_main.task_pipeline.return_sequence import (
