@@ -335,7 +335,8 @@ ros2 launch macgyvbot macgyvbot.launch.py use_stt:=false
 `return`이면 메인 노드는 hand grasp detection 결과로 사용자가 들고 있는 공구를
 확인하기 전에 Home 기준 전방 20cm 위치로 이동합니다. 해당 위치에서 반납 공구를
 감지한 뒤 그리퍼를 닫아 공구를 받고, Home의 z=0.30m 위치로 이동해 Z를 낮추다가
-Z 반대방향 힘이 임계값 이상 감지되면 하강을 멈추고 공구를 놓습니다. Pick 동작은 Home
+Z 반대방향 힘이 임계값 이상 감지되면 하강을 멈추고 공구를 놓은 뒤 Home으로
+복귀합니다. Pick 동작은 Home
 근처에서 공구를 인식해 grasp한 뒤, Home 기준 전방 20cm 사용자 전달 위치로
 이동하고 hand grasp detection 결과로 사용자 손 grasp를 확인합니다. 전달 후에는
 그리퍼를 열고 Home으로 복귀합니다.

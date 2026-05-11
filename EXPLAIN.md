@@ -170,7 +170,7 @@ hand_grasp_detection_node
   - `return` 명령에서 Home 기준 전방 20cm 위치로 이동한 뒤 사용자 handoff를 기다리고 공구를 받습니다.
   - hand grasp detection 결과나 명령의 공구명을 기준으로 공구를 식별합니다.
   - 반납 위치인 Home의 z=0.30m 위치로 이동한 뒤 Z를 낮추며 `force_torque_topic`의 Z 반대방향 힘이 임계값 이상인지 확인합니다.
-  - 힘이 감지되면 하강을 멈추고, 힘이 감지되지 않으면 안전 최소 Z까지 계속 하강한 뒤 gripper를 release합니다.
+  - 힘이 감지되면 하강을 멈추고, 힘이 감지되지 않으면 안전 최소 Z까지 계속 하강한 뒤 gripper를 release하고 Home으로 복귀합니다.
   - 반납 공구를 받은 뒤에도 같은 gripper 상태/폭 기준으로 grasp 성공 여부를 확인하고 최대 5회 재시도합니다.
 
 ## `macgyvbot/util/hand_grasp_detection/hand_grasp/`

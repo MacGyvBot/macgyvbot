@@ -282,6 +282,57 @@ class ReturnSequenceRunner:
         self.gripper.open_gripper()
         self._cooperative_wait(0.8)
 
+        return self._move_home_after_return(
+            target_x,
+            target_y,
+            approach_z,
+            ori,
+            tool_name,
+            command,
+            logger,
+        )
+
+    def _move_home_after_return(
+        self,
+        target_x,
+        target_y,
+        approach_z,
+        ori,
+        tool_name,
+        command,
+        logger,
+    ):
+        logger.info("반납 5단계: 공구를 놓은 뒤 Home 안전 높이로 복귀")
+        ok = self.motion.plan_and_execute(
+            logger,
+            pose_goal=make_safe_pose(target_x, target_y, approach_z, ori, logger),
+        )
+        if not ok:
+            self._fail(
+                tool_name,
+                "반납 공구를 놓은 뒤 Home 안전 높이 복귀에 실패했습니다.",
+                "return_home_retreat_failed",
+                command,
+                logger,
+            )
+            return False
+
+        final_x, final_y, final_z = self.state.home_xyz
+        final_z = max(final_z, approach_z)
+        ok = self.motion.plan_and_execute(
+            logger,
+            pose_goal=make_safe_pose(final_x, final_y, final_z, ori, logger),
+        )
+        if not ok:
+            self._fail(
+                tool_name,
+                "반납 공구를 놓은 뒤 Home 복귀에 실패했습니다.",
+                "return_home_after_release_failed",
+                command,
+                logger,
+            )
+            return False
+
         return True
 
     def _descend_until_z_reaction(
