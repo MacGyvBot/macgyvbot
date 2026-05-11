@@ -7,7 +7,10 @@ import rclpy
 from std_msgs.msg import String
 
 from macgyvbot.config.config import (
+    BASE_FRAME,
     GRASP_ADVANCE_DISTANCE_M,
+    HANDOVER_HAND_X_OFFSET_M,
+    HANDOVER_HAND_Z_OFFSET_M,
     HAND_GRASP_TIMEOUT_SEC,
     RETURN_HOME_DESCENT_START_Z,
     SAFE_Z,
@@ -287,6 +290,17 @@ class ReturnSequenceRunner:
         return "unknown"
 
     def _advance_for_return_detection(self, tool_name, command, logger):
+        search_client = getattr(self.state, "handover_search_client", None)
+        if search_client is None:
+            self._fail(
+                tool_name,
+                "반납 위치 검색 클라이언트가 없어 사용자 손/공구 위치를 찾을 수 없습니다.",
+                "return_search_client_missing",
+                command,
+                logger,
+            )
+            return False
+
         target_x = self.state.home_xyz[0] + GRASP_ADVANCE_DISTANCE_M
         target_y = self.state.home_xyz[1]
         target_z = max(self.state.home_xyz[2], SAFE_Z)
@@ -311,6 +325,69 @@ class ReturnSequenceRunner:
                 tool_name,
                 "반납 공구 감지 전 전방 전진에 실패했습니다.",
                 "return_detection_advance_failed",
+                command,
+                logger,
+            )
+            return False
+
+        found, hand_x, hand_y, hand_z, frame_id, source = search_client.request_search(
+            x,
+            y,
+            z,
+            self.state.home_ori,
+            logger,
+        )
+        if not found:
+            self._fail(
+                tool_name,
+                "반납받을 사용자 손/공구 위치를 찾지 못했습니다.",
+                "return_search_failed",
+                command,
+                logger,
+            )
+            return False
+
+        if frame_id not in ("world", BASE_FRAME):
+            self._fail(
+                tool_name,
+                f"반납 위치 frame이 planning frame이 아닙니다: {frame_id}",
+                "return_unsupported_frame",
+                command,
+                logger,
+            )
+            return False
+
+        receive_x = hand_x + HANDOVER_HAND_X_OFFSET_M
+        receive_y = hand_y
+        receive_z = hand_z + HANDOVER_HAND_Z_OFFSET_M
+        safe_x, safe_y, safe_z = clamp_to_safe_workspace(
+            receive_x,
+            receive_y,
+            receive_z,
+            logger,
+        )
+        logger.info(
+            "반납 손/공구 위치로 수령 이동: "
+            f"source={source}, frame={frame_id}, "
+            f"raw=({hand_x:.3f},{hand_y:.3f},{hand_z:.3f}), "
+            f"offset=({HANDOVER_HAND_X_OFFSET_M:.3f},0.000,{HANDOVER_HAND_Z_OFFSET_M:.3f}), "
+            f"safe=({safe_x:.3f},{safe_y:.3f},{safe_z:.3f})"
+        )
+        self._publish_status(
+            "moving_return_detected_pose",
+            tool_name,
+            "탐색된 사용자 손/공구 위치로 이동합니다.",
+            command,
+        )
+        ok = self.motion.plan_and_execute(
+            logger,
+            pose_goal=make_safe_pose(safe_x, safe_y, safe_z, self.state.home_ori, logger),
+        )
+        if not ok:
+            self._fail(
+                tool_name,
+                "탐색된 반납 위치로 이동하지 못했습니다.",
+                "return_detected_pose_move_failed",
                 command,
                 logger,
             )

@@ -19,6 +19,7 @@ from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import String
 
 from macgyvbot.config.config import (
+    BASE_FRAME,
     DEFAULT_GRASP_POINT_MODE,
     FORCE_TORQUE_TOPIC,
     GROUP_NAME,
@@ -41,7 +42,10 @@ from macgyvbot.util.macgyvbot_main.model_control.square_handover_search import (
     SquareHandoverSearchClient,
     SquareHandoverSearchServer,
 )
-from macgyvbot.util.macgyvbot_main.perception.depth_projection import DepthProjector
+from macgyvbot.util.macgyvbot_main.perception.depth_projection import (
+    DepthProjector,
+    pixel_to_camera_point,
+)
 from macgyvbot.util.macgyvbot_main.grasp_mechanism.grasp_point_selector import (
     GraspPointSelector,
     normalize_grasp_point_mode,
@@ -369,8 +373,45 @@ class MacGyvBotNode(Node):
             self.get_logger().warn(f"잡기 인식 결과 JSON 파싱 실패: {msg.data}")
             return
 
+        self._attach_base_position_to_grasp_result(result)
         self.last_grasp_result = result
         self.human_grasped_tool = bool(result.get("human_grasped_tool", False))
+
+    def _attach_base_position_to_grasp_result(self, result):
+        position = result.get("position")
+        if isinstance(position, dict) and all(k in position for k in ("x", "y", "z")):
+            return
+
+        hand_pixel = result.get("hand_pixel")
+        if not isinstance(hand_pixel, dict):
+            return
+        if self.depth_image is None or self.intrinsics is None:
+            return
+
+        try:
+            u = int(hand_pixel["u"])
+            v = int(hand_pixel["v"])
+        except (KeyError, TypeError, ValueError):
+            return
+
+        camera_point = pixel_to_camera_point(
+            u,
+            v,
+            self.depth_image,
+            self.intrinsics,
+            logger=self.get_logger(),
+            source="handover_hand_pixel",
+        )
+        if camera_point is None:
+            return
+
+        bx, by, bz = self.depth_projector.camera_to_base(camera_point)
+        result["position"] = {
+            "x": float(bx),
+            "y": float(by),
+            "z": float(bz),
+            "frame_id": BASE_FRAME,
+        }
 
     def _hand_grasp_image_cb(self, msg):
         try:

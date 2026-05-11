@@ -14,6 +14,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import String
 
+from macgyvbot.config.config import BASE_FRAME
 from macgyvbot.util.hand_grasp_detection.hand_grasp.grasp_detector import (
     GraspDetector,
 )
@@ -102,8 +103,8 @@ class HandGraspDetectionNode(Node):
             self.declare_parameter("publish_base_position", True).value
         )
         self.position_frame_id = str(
-            self.declare_parameter("position_frame_id", "world").value
-        ).strip() or "world"
+            self.declare_parameter("position_frame_id", BASE_FRAME).value
+        ).strip() or BASE_FRAME
 
         self.hand_detector = HandDetector(max_num_hands=max_hands)
         self.grasp_detector = GraspDetector()

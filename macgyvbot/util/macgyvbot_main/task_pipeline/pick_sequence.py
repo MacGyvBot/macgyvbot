@@ -14,6 +14,9 @@ from macgyvbot.config.config import (
     COLLISION_MARGIN,
     GRASP_ADVANCE_DISTANCE_M,
     GRASP_Z_OFFSET,
+    HANDOVER_HAND_X_OFFSET_M,
+    HANDOVER_HAND_Z_OFFSET_M,
+    HAND_GRASP_TIMEOUT_SEC,
     MAX_DESCENT_FROM_APPROACH,
     MIN_GRASP_CLEARANCE,
     MIN_PICK_Z,
@@ -281,6 +284,16 @@ class PickSequenceRunner:
                 )
                 return
 
+            if not self.wait_for_human_grasp(log):
+                log.error("Human grasp was not confirmed; keeping the gripper closed.")
+                self.state._publish_robot_status(
+                    "failed",
+                    message="사용자 grasp가 확인되지 않아 공구를 놓지 않습니다.",
+                    reason="handoff_human_grasp_timeout",
+                    command=self.state.current_command,
+                )
+                return
+
             log.info("9단계: 사용자 손 위치 이동 성공 후 그리퍼 오픈")
             self.gripper.open_gripper()
             self.cooperative_wait(0.8)
@@ -442,16 +455,20 @@ class PickSequenceRunner:
             )
             return None, None, None
 
+        handoff_x = hand_x + HANDOVER_HAND_X_OFFSET_M
+        handoff_y = hand_y
+        handoff_z = hand_z + HANDOVER_HAND_Z_OFFSET_M
         safe_hand_x, safe_hand_y, safe_hand_z = clamp_to_safe_workspace(
-            hand_x,
-            hand_y,
-            hand_z,
+            handoff_x,
+            handoff_y,
+            handoff_z,
             logger,
         )
         logger.info(
             "사용자 손 위치로 전달 이동: "
             f"source={source}, frame={frame_id}, "
             f"raw=({hand_x:.3f},{hand_y:.3f},{hand_z:.3f}), "
+            f"offset=({HANDOVER_HAND_X_OFFSET_M:.3f},0.000,{HANDOVER_HAND_Z_OFFSET_M:.3f}), "
             f"safe=({safe_hand_x:.3f},{safe_hand_y:.3f},{safe_hand_z:.3f})"
         )
         ok = self.motion.plan_and_execute(
@@ -470,6 +487,28 @@ class PickSequenceRunner:
 
         return safe_hand_x, safe_hand_y, safe_hand_z
 
+    def wait_for_human_grasp(self, logger):
+        start_time = time.monotonic()
+
+        while rclpy.ok():
+            result = self.state.last_grasp_result or {}
+            if self.state.human_grasped_tool:
+                logger.info(
+                    "사용자 grasp 확인: "
+                    f"state={result.get('state')}, "
+                    f"score={result.get('grasp_score')}, "
+                    f"tool={result.get('tool_label')}"
+                )
+                return True
+
+            if time.monotonic() - start_time >= HAND_GRASP_TIMEOUT_SEC:
+                logger.warn(
+                    f"{HAND_GRASP_TIMEOUT_SEC:.1f}초 동안 사용자 grasp가 "
+                    "확인되지 않아 handoff를 중단합니다."
+                )
+                return False
+
+            self.cooperative_wait(0.1)
 
     def move_home_after_handoff(self, travel_z, ori, logger):
         ok = self.motion.plan_and_execute(
