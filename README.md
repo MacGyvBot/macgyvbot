@@ -333,9 +333,11 @@ ros2 launch macgyvbot macgyvbot.launch.py use_stt:=false
 
 반납/정리 명령은 `/tool_command`에 JSON 문자열로 발행됩니다. `action`이
 `return`이면 메인 노드는 hand grasp detection 결과로 사용자가 들고 있는 공구를
-확인한 뒤 그리퍼를 닫아 공구를 받습니다. 이후 임시 위치로 이동해 공구명을
-확정하고, `macgyvbot/config/config.py`의 `TOOL_HOME_POSES`에 등록된
-공구별 원위치로 배치한 뒤 Home으로 복귀합니다.
+확인하기 전에 Home 기준 전방 30cm 위치로 이동합니다. 해당 위치에서 반납 공구를
+감지한 뒤 그리퍼를 닫아 공구를 받고, Home으로 이동해 Z를 낮추다가 Z 반대방향
+힘이 임계값 이상 감지되면 하강을 멈추고 공구를 놓습니다. Pick 동작은 Home
+근처에서 공구를 인식해 grasp한 뒤, Home 기준 전방 30cm 사용자 전달 위치로
+이동하고 hand grasp detection 결과로 사용자 손 grasp를 확인합니다.
 
 ```bash
 ros2 topic pub --once /tool_command std_msgs/msg/String \
@@ -343,12 +345,17 @@ ros2 topic pub --once /tool_command std_msgs/msg/String \
 ```
 
 반납 처리 상태는 `/robot_task_status`에 JSON 문자열로 발행됩니다.
+반납 Home 하강 중 Z 반력은 `force_torque_topic` launch parameter의
+`geometry_msgs/msg/WrenchStamped` 입력을 사용하며 기본값은
+`/force_torque_sensor_broadcaster/wrench`입니다.
 
 Pick/return 중 로봇 그리퍼가 공구를 실제로 잡았는지는 OnRobot RG 상태의
-`grip detected` 신호로 확인합니다. 성공하면 `status=grasp_success`가 발행되고,
-신호가 확인되지 않으면 `status=failed`, `reason=robot_grasp_failed` 또는
-`reason=return_grasp_failed`가 발행됩니다. grasp 실패 시에는 최대
-`GRASP_RETRY_LIMIT`회까지 gripper open/close 재시도를 수행합니다.
+`grip detected` 신호와 그리퍼 폭으로 확인합니다. 그리퍼가 완전히 닫힌 폭이면
+`grip detected`가 켜져도 성공으로 처리하지 않습니다. 성공하면
+`status=grasp_success`가 발행되고, 신호가 확인되지 않거나 완전 닫힘 상태이면
+`status=failed`, `reason=robot_grasp_failed` 또는 `reason=return_grasp_failed`가
+발행됩니다. grasp 실패 시에는 최대 `GRASP_RETRY_LIMIT`회까지 gripper open/close
+재시도를 수행합니다.
 
 실행컴에서 브랜치를 바꾼 뒤에는 반드시 다시 빌드하고 새 터미널에서 source 해야 합니다.
 
