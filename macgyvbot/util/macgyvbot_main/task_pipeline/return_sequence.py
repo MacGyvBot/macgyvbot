@@ -7,18 +7,23 @@ import rclpy
 from std_msgs.msg import String
 
 from macgyvbot.config.config import (
+    GRASP_ADVANCE_DISTANCE_M,
     HAND_GRASP_TIMEOUT_SEC,
+    RETURN_HOME_DESCENT_STEP_M,
+    RETURN_HOME_FORCE_THRESHOLD_N,
+    RETURN_HOME_FORCE_TIMEOUT_SEC,
     GRASP_VERIFY_POLL_SEC,
     GRASP_VERIFY_TIMEOUT_SEC,
     GRASP_RETRY_LIMIT,
-    RETURN_APPROACH_Z_OFFSET,
-    RETURN_STAGING_POSE,
     SAFE_Z,
     SEQUENCE_WAIT_POLL_SEC,
-    TOOL_HOME_POSES,
+)
+from macgyvbot.util.macgyvbot_main.model_control.gripper_grasp import (
+    read_grasp_confirmation,
 )
 from macgyvbot.util.macgyvbot_main.model_control.robot_pose import make_safe_pose
 from macgyvbot.util.macgyvbot_main.model_control.robot_safezone import (
+    SAFE_Z_MIN,
     clamp_to_safe_workspace,
 )
 
@@ -52,14 +57,18 @@ class ReturnSequenceRunner:
                 "그리퍼를 열고 사용자 hand-tool grasp 인식을 기다립니다."
             )
 
+            ori = self.state.home_ori
             self.gripper.open_gripper()
             self._cooperative_wait(0.5)
+
+            if not self._advance_for_return_detection(requested_tool, command, log):
+                return
 
             grasp_result = self._wait_for_user_held_tool(requested_tool, log)
             if grasp_result is None:
                 self._fail(
                     requested_tool,
-                    "사용자가 들고 있는 공구를 확인하지 못했습니다.",
+                    "전방 30cm 위치에서 사용자가 들고 있는 공구를 확인하지 못했습니다.",
                     "user_tool_not_detected",
                     command,
                     log,
@@ -87,38 +96,13 @@ class ReturnSequenceRunner:
                 command,
             )
 
-            ori = self.state.home_ori
-            if not self._move_to_staging_pose(ori, tool_name, command, log):
-                return
-
-            if tool_name == "unknown":
-                self._fail(
-                    tool_name,
-                    "반납 공구 종류를 확정하지 못해 임시 위치에서 중단했습니다.",
-                    "unknown_return_tool",
-                    command,
-                    log,
-                )
-                return
-
-            home_pose = TOOL_HOME_POSES.get(tool_name)
-            if home_pose is None:
-                self._fail(
-                    tool_name,
-                    f"{tool_name}의 원위치 pose가 설정되어 있지 않습니다.",
-                    "missing_tool_home_pose",
-                    command,
-                    log,
-                )
-                return
-
-            if not self._place_tool_at_home(tool_name, home_pose, ori, command, log):
+            if not self._place_tool_at_robot_home(tool_name, ori, command, log):
                 return
 
             self._publish_status(
                 "done",
                 tool_name,
-                f"{tool_name} 반납 공구를 원위치에 배치했습니다.",
+                f"{tool_name} 반납 공구를 Home에 배치했습니다.",
                 command,
             )
 
@@ -179,17 +163,20 @@ class ReturnSequenceRunner:
 
         while time.monotonic() - start_time < GRASP_VERIFY_TIMEOUT_SEC:
             try:
-                status = self.gripper.get_status()
+                confirmed, busy, status, width_mm = read_grasp_confirmation(
+                    self.gripper,
+                    logger,
+                )
             except Exception as exc:
                 logger.warn(f"그리퍼 상태 읽기 실패: {exc}")
                 return False
 
-            last_status = status
-            grip_detected = len(status) > 1 and bool(status[1])
-            busy = bool(status[0]) if status else False
+            last_status = {
+                "status": status,
+                "width_mm": width_mm,
+            }
 
-            if grip_detected:
-                logger.info("그리퍼 grip detected 신호로 grasp 성공을 확인했습니다.")
+            if confirmed:
                 return True
 
             if not busy:
@@ -218,29 +205,31 @@ class ReturnSequenceRunner:
 
         return "unknown"
 
-    def _move_to_staging_pose(self, ori, tool_name, command, logger):
-        staging = RETURN_STAGING_POSE
-        x, y, z = self._pose_xyz(staging)
-        _, _, z = clamp_to_safe_workspace(x, y, max(z, SAFE_Z), logger)
+    def _advance_for_return_detection(self, tool_name, command, logger):
+        target_x = self.state.home_xyz[0] + GRASP_ADVANCE_DISTANCE_M
+        target_y = self.state.home_xyz[1]
+        target_z = max(self.state.home_xyz[2], SAFE_Z)
+        x, y, z = clamp_to_safe_workspace(target_x, target_y, target_z, logger)
 
         self._publish_status(
-            "moving_staging",
+            "moving_return_grasp_pose",
             tool_name,
-            "공구 인식을 위해 임시 위치로 이동합니다.",
+            "반납 공구를 감지하기 위해 전방 30cm 위치로 이동합니다.",
             command,
         )
         logger.info(
-            f"반납 1단계: 임시 위치 이동 x={x:.3f}, y={y:.3f}, z={z:.3f}"
+            "반납 1단계: 공구 감지 전 전방 30cm 전진 "
+            f"x={self.state.home_xyz[0]:.3f}->{x:.3f}, y={y:.3f}, z={z:.3f}"
         )
         ok = self.motion.plan_and_execute(
             logger,
-            pose_goal=make_safe_pose(x, y, z, ori, logger),
+            pose_goal=make_safe_pose(x, y, z, self.state.home_ori, logger),
         )
         if not ok:
             self._fail(
                 tool_name,
-                "반납 공구 임시 위치 이동에 실패했습니다.",
-                "staging_move_failed",
+                "반납 공구 감지 전 전방 전진에 실패했습니다.",
+                "return_detection_advance_failed",
                 command,
                 logger,
             )
@@ -248,19 +237,19 @@ class ReturnSequenceRunner:
 
         return True
 
-    def _place_tool_at_home(self, tool_name, home_pose, ori, command, logger):
-        target_x, target_y, place_z = self._pose_xyz(home_pose)
-        approach_z = max(place_z + RETURN_APPROACH_Z_OFFSET, SAFE_Z)
+    def _place_tool_at_robot_home(self, tool_name, ori, command, logger):
+        target_x, target_y, target_z = self.state.home_xyz
+        approach_z = max(target_z, SAFE_Z)
 
         self._publish_status(
             "placing_return_tool",
             tool_name,
-            f"{tool_name} 원위치로 이동합니다.",
+            f"{tool_name} 반납 위치인 Home으로 이동합니다.",
             command,
         )
 
         logger.info(
-            f"반납 2단계: {tool_name} 원위치 상단 이동 "
+            f"반납 2단계: {tool_name} 반납 Home 위치 이동 "
             f"x={target_x:.3f}, y={target_y:.3f}, z={approach_z:.3f}"
         )
         ok = self.motion.plan_and_execute(
@@ -270,75 +259,108 @@ class ReturnSequenceRunner:
         if not ok:
             self._fail(
                 tool_name,
-                f"{tool_name} 원위치 상단 이동에 실패했습니다.",
-                "return_home_approach_failed",
+                f"{tool_name} 반납 Home 위치 이동에 실패했습니다.",
+                "return_home_move_failed",
                 command,
                 logger,
             )
             return False
 
-        logger.info(f"반납 3단계: {tool_name} 원위치로 하강")
-        ok = self.motion.plan_and_execute(
+        stop_z = self._descend_until_z_reaction(
+            target_x,
+            target_y,
+            approach_z,
+            ori,
+            tool_name,
+            command,
             logger,
-            pose_goal=make_safe_pose(target_x, target_y, place_z, ori, logger),
         )
-        if not ok:
-            self._fail(
-                tool_name,
-                f"{tool_name} 원위치 하강에 실패했습니다.",
-                "return_home_descent_failed",
-                command,
-                logger,
-            )
+        if stop_z is None:
             return False
 
-        logger.info(f"반납 4단계: {tool_name} 놓기")
+        logger.info(f"반납 4단계: {tool_name} Home 위치에 놓기")
         self.gripper.open_gripper()
         self._cooperative_wait(0.8)
 
-        logger.info("반납 5단계: 안전 높이로 후퇴")
-        ok = self.motion.plan_and_execute(
-            logger,
-            pose_goal=make_safe_pose(target_x, target_y, approach_z, ori, logger),
-        )
-        if not ok:
-            self._fail(
-                tool_name,
-                f"{tool_name} 배치 후 후퇴에 실패했습니다.",
-                "return_home_retreat_failed",
-                command,
-                logger,
-            )
-            return False
-
-        logger.info("반납 6단계: Home 위치로 복귀")
-        return self._move_home(approach_z, ori, tool_name, command, logger)
-
-    def _move_home(self, travel_z, ori, tool_name, command, logger):
-        ok = self.motion.plan_and_execute(
-            logger,
-            pose_goal=make_safe_pose(
-                self.state.home_xyz[0],
-                self.state.home_xyz[1],
-                travel_z,
-                ori,
-                logger,
-            ),
-        )
-        if not ok:
-            self._fail(
-                tool_name,
-                "반납 후 Home 복귀에 실패했습니다.",
-                "return_home_failed",
-                command,
-                logger,
-            )
-            return False
         return True
 
-    @staticmethod
-    def _pose_xyz(pose):
-        return float(pose["x"]), float(pose["y"]), float(pose["z"])
+    def _descend_until_z_reaction(
+        self,
+        target_x,
+        target_y,
+        start_z,
+        ori,
+        tool_name,
+        command,
+        logger,
+    ):
+        self.state.latest_wrench = None
+        current_z = float(start_z)
+        start_time = time.monotonic()
+
+        self._publish_status(
+            "lowering_return_tool",
+            tool_name,
+            "Home에서 Z를 낮추며 반력을 확인합니다.",
+            command,
+        )
+        logger.info(
+            "반납 3단계: Home에서 Z 하강 시작 "
+            f"threshold={RETURN_HOME_FORCE_THRESHOLD_N:.1f}N, "
+            f"min_z={SAFE_Z_MIN:.3f}"
+        )
+
+        while rclpy.ok():
+            force_z = self._latest_force_z()
+            if force_z is not None and force_z >= RETURN_HOME_FORCE_THRESHOLD_N:
+                logger.info(
+                    "Z 반대방향 힘 감지로 하강을 중단합니다: "
+                    f"force_z={force_z:.2f}N, z={current_z:.3f}"
+                )
+                return current_z
+
+            if current_z <= SAFE_Z_MIN:
+                logger.warn(
+                    "Z 반력이 임계값에 도달하지 않았지만 안전 최소 Z까지 하강했습니다: "
+                    f"last_force_z={force_z}"
+                )
+                return current_z
+
+            if time.monotonic() - start_time >= RETURN_HOME_FORCE_TIMEOUT_SEC:
+                logger.warn(
+                    "Z 반력 감지 제한 시간이 지나 현재 위치에서 하강을 중단합니다: "
+                    f"last_force_z={force_z}"
+                )
+                return current_z
+
+            next_z = max(SAFE_Z_MIN, current_z - RETURN_HOME_DESCENT_STEP_M)
+            ok = self.motion.plan_and_execute(
+                logger,
+                pose_goal=make_safe_pose(target_x, target_y, next_z, ori, logger),
+            )
+            if not ok:
+                self._fail(
+                    tool_name,
+                    "반납 Home Z 하강에 실패했습니다.",
+                    "return_home_descent_failed",
+                    command,
+                    logger,
+                )
+                return None
+
+            current_z = next_z
+            self._cooperative_wait(SEQUENCE_WAIT_POLL_SEC)
+
+        return None
+
+    def _latest_force_z(self):
+        wrench = getattr(self.state, "latest_wrench", None)
+        if wrench is None:
+            return None
+        try:
+            return float(wrench.force.z)
+        except (AttributeError, TypeError, ValueError):
+            return None
 
     def _fail(self, tool_name, message, reason, command, logger):
         logger.error(message)

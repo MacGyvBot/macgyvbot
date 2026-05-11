@@ -10,6 +10,7 @@ import numpy as np
 import rclpy
 from ament_index_python.packages import get_package_share_directory
 from cv_bridge import CvBridge
+from geometry_msgs.msg import WrenchStamped
 from moveit.core.robot_state import RobotState
 from moveit.planning import MoveItPy, PlanRequestParameters
 from rclpy.node import Node
@@ -19,6 +20,7 @@ from std_msgs.msg import String
 
 from macgyvbot.config.config import (
     DEFAULT_GRASP_POINT_MODE,
+    FORCE_TORQUE_TOPIC,
     GROUP_NAME,
     HAND_GRASP_IMAGE_TOPIC,
     HAND_GRASP_TOPIC,
@@ -64,6 +66,7 @@ class MacGyvBotNode(Node):
         self.human_grasped_tool = False
         self.last_grasp_result = None
         self.hand_grasp_image = None
+        self.latest_wrench = None
         self.home_xyz = None
         self.home_ori = None
         self.current_command = None
@@ -71,6 +74,7 @@ class MacGyvBotNode(Node):
 
         self.grasp_point_mode = self._read_grasp_point_mode()
         self.yolo_model = self._read_yolo_model()
+        self.force_torque_topic = self._read_force_torque_topic()
         self.detector = YoloDetector(self.yolo_model)
         self.grasp_point_selector = GraspPointSelector(
             self.grasp_point_mode,
@@ -140,6 +144,15 @@ class MacGyvBotNode(Node):
             .strip()
         ) or YOLO_MODEL_NAME
 
+    def _read_force_torque_topic(self):
+        self.declare_parameter("force_torque_topic", FORCE_TORQUE_TOPIC)
+        return (
+            self.get_parameter("force_torque_topic")
+            .get_parameter_value()
+            .string_value
+            .strip()
+        ) or FORCE_TORQUE_TOPIC
+
     def _create_subscriptions(self):
         self.create_subscription(
             CameraInfo,
@@ -183,6 +196,12 @@ class MacGyvBotNode(Node):
             self._hand_grasp_image_cb,
             10,
         )
+        self.create_subscription(
+            WrenchStamped,
+            self.force_torque_topic,
+            self._wrench_cb,
+            10,
+        )
 
     def _log_startup(self):
         self.get_logger().info("노드 초기화 완료")
@@ -196,6 +215,7 @@ class MacGyvBotNode(Node):
         self.get_logger().info(f"로봇 상태 토픽: {ROBOT_STATUS_TOPIC}")
         self.get_logger().info(f"잡기 인식 결과 토픽: {HAND_GRASP_TOPIC}")
         self.get_logger().info(f"잡기 인식 화면 토픽: {HAND_GRASP_IMAGE_TOPIC}")
+        self.get_logger().info(f"힘/토크 입력 토픽: {self.force_torque_topic}")
 
     def _target_label_cb(self, msg):
         val = msg.data.strip()
@@ -290,6 +310,9 @@ class MacGyvBotNode(Node):
             reason="unsupported_action",
             command=command,
         )
+
+    def _wrench_cb(self, msg):
+        self.latest_wrench = msg.wrench
 
     def _set_target_label(self, tool_name, source, command=None):
         val = (tool_name or "").strip()
