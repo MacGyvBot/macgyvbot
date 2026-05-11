@@ -11,6 +11,7 @@ import threading
 
 import rclpy
 from rclpy.node import Node
+from sensor_msgs.msg import Image
 from std_msgs.msg import String
 
 from macgyvbot.ui.voice_command_window import (
@@ -44,6 +45,13 @@ class CommandInputNode(Node):
         self.declare_parameter('tool_command_topic', '/tool_command')
         self.declare_parameter('command_feedback_topic', '/command_feedback')
         self.declare_parameter('robot_status_topic', '/robot_task_status')
+        self.declare_parameter('camera_status_topic', '/camera/camera/color/image_raw')
+        self.declare_parameter('connection_check_period_sec', 1.0)
+        self.declare_parameter('camera_timeout_sec', 3.0)
+        self.declare_parameter(
+            'robot_node_names',
+            'macgyvbot_main_node,macgyvbot',
+        )
         self.declare_parameter(
             'ollama_url',
             'http://localhost:11434/api/generate',
@@ -77,10 +85,21 @@ class CommandInputNode(Node):
         tool_command_topic = self.get_parameter('tool_command_topic').value
         command_feedback_topic = self.get_parameter('command_feedback_topic').value
         robot_status_topic = self.get_parameter('robot_status_topic').value
+        camera_status_topic = self.get_parameter('camera_status_topic').value
 
         self.window = None
         self._last_gui_text = ''
         self._last_target_label = ''
+        self._last_camera_stamp_ns = None
+        self._last_connection_text = ''
+        self._robot_node_names = {
+            name.strip()
+            for name in str(self.get_parameter('robot_node_names').value).split(',')
+            if name.strip()
+        }
+        self._camera_timeout_ns = int(
+            float(self.get_parameter('camera_timeout_sec').value) * 1_000_000_000
+        )
 
         self._stt_pub = self.create_publisher(String, stt_text_topic, 10)
         self._compat_pub = (
@@ -95,6 +114,11 @@ class CommandInputNode(Node):
         self.create_subscription(String, tool_command_topic, self._tool_command_cb, 10)
         self.create_subscription(String, command_feedback_topic, self._feedback_cb, 10)
         self.create_subscription(String, robot_status_topic, self._robot_status_cb, 10)
+        self.create_subscription(Image, camera_status_topic, self._camera_status_cb, 10)
+        self.create_timer(
+            float(self.get_parameter('connection_check_period_sec').value),
+            self._update_connection_status,
+        )
 
         self._parser = CommandLlmParser(
             ollama_url=self.get_parameter('ollama_url').value,
@@ -142,6 +166,7 @@ class CommandInputNode(Node):
 
     def attach_window(self, window):
         self.window = window
+        self._update_connection_status()
 
     def publish_user_text(self, text):
         text = (text or '').strip()
@@ -256,6 +281,10 @@ class CommandInputNode(Node):
         except (TypeError, ValueError):
             confidence_text = str(confidence)
 
+        if self.window is not None and hasattr(self.window, 'append_command_result'):
+            self.window.append_command_result(command)
+            return
+
         self._append_system(
             f'parsed: tool={tool_name}, action={action}, target={target_mode}, '
             f'method={method}, confidence={confidence_text}'
@@ -278,9 +307,13 @@ class CommandInputNode(Node):
             return
 
         if status == 'pending_confirmation':
-            self._append_bot(
+            confirmation_message = (
                 message or '제가 이해한 명령이 맞나요? 네 또는 아니오로 답해주세요.'
             )
+            if self.window is not None and hasattr(self.window, 'append_confirmation'):
+                self.window.append_confirmation(confirmation_message)
+            else:
+                self._append_bot(confirmation_message)
             self._set_status('확인 응답 대기')
             return
 
@@ -319,17 +352,58 @@ class CommandInputNode(Node):
             self._last_target_label = tool_name
             self._append_system(message or f'{tool_name}: {state}')
             self._set_status(message or state)
+            self._set_task_status(tool_name, message or state)
         elif state in ('done', 'completed', 'success'):
             self._append_bot(message or f'{tool_name} 전달 동작이 완료되었습니다.')
             self._set_status('완료')
+            self._set_task_status(tool_name, message or '완료')
         elif state in ('failed', 'error'):
             self._append_bot(message or f'{tool_name} 동작 중 문제가 발생했습니다.')
             self._set_status('실패')
+            self._set_task_status(tool_name, message or '실패')
         elif state in ('busy', 'cancelled', 'returned', 'rejected'):
             self._append_bot(message or f'{tool_name}: {state}')
             self._set_status(state)
+            self._set_task_status(tool_name, message or state)
         else:
             self._append_system(message or f'{tool_name}: {state}')
+            self._set_task_status(tool_name, message or state)
+
+    def _camera_status_cb(self, _msg):
+        self._last_camera_stamp_ns = self.get_clock().now().nanoseconds
+
+    def _update_connection_status(self):
+        if self.window is None:
+            return
+
+        robot_text = self._robot_connection_text()
+        camera_text = self._camera_connection_text()
+        connection_text = f'{robot_text}|{camera_text}|연결됨'
+
+        if connection_text == self._last_connection_text:
+            return
+
+        self._last_connection_text = connection_text
+        if hasattr(self.window, 'set_connection_status'):
+            self.window.set_connection_status(robot_text, camera_text)
+
+    def _robot_connection_text(self):
+        node_names = set(self.get_node_names())
+        robot_node_alive = bool(node_names & self._robot_node_names)
+        status_publishers = self.get_publishers_info_by_topic('/robot_task_status')
+
+        if robot_node_alive or status_publishers:
+            return '실행 중'
+        return '미확인'
+
+    def _camera_connection_text(self):
+        if self._last_camera_stamp_ns is None:
+            return '미확인'
+
+        elapsed_ns = self.get_clock().now().nanoseconds - self._last_camera_stamp_ns
+        if elapsed_ns <= self._camera_timeout_ns:
+            return '연결됨'
+        return '미수신'
 
     def _build_rejected_message(self, reason, message):
         if reason == 'llm_failed':
@@ -375,6 +449,10 @@ class CommandInputNode(Node):
     def _set_status(self, text):
         if self.window is not None:
             self.window.set_status(text)
+
+    def _set_task_status(self, target_text, stage_text):
+        if self.window is not None and hasattr(self.window, 'set_task_status'):
+            self.window.set_task_status(target_text, stage_text)
 
     def destroy_node(self):
         if self._stt_service is not None:
