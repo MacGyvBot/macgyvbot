@@ -65,6 +65,11 @@ def generate_launch_description():
                 default_value="center",
                 description="Grasp point selection mode: center or vlm",
             ),
+            DeclareLaunchArgument(
+                "force_torque_topic",
+                default_value="/force_torque_sensor_broadcaster/wrench",
+                description="반납 Home 하강 중 Z 반력 감지에 사용할 WrenchStamped topic",
+            ),
             Node(
                 package="macgyvbot",
                 executable="macgyvbot",
@@ -77,6 +82,9 @@ def generate_launch_description():
                         "yolo_model": LaunchConfiguration("yolo_model"),
                         "grasp_point_mode": LaunchConfiguration(
                             "grasp_point_mode"
+                        ),
+                        "force_torque_topic": LaunchConfiguration(
+                            "force_torque_topic"
                         ),
                     },
                 ],

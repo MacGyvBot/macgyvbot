@@ -8,19 +8,21 @@
 - 로봇 제어, 그리퍼, 서랍 개폐, 사용자 전달 동작은 안전 영향을 먼저 검토한다.
 - 실제 장비 실행이 필요한 변경은 dry-run, 시뮬레이션, 낮은 속도 제한을 우선 적용한다.
 - 대용량 모델 파일, 데이터셋, 영상, ROS bag 파일은 저장소에 추가하지 않는다.
-- `macgyvbot/macgyvbot.py`는 기존 호환용 wrapper로 유지하고, 새 로직을 추가하지 않는다.
 - 새 기능은 역할별 모듈에 배치하고, ROS node 파일은 wiring 중심으로 얇게 유지한다.
 
 ## 패키지 구조 기준
 
 - `macgyvbot/nodes/`: ROS node entrypoint, subscription/publisher, parameter, launch wiring
-- `macgyvbot/core/`: 공통 설정, 상태, pick/handoff 같은 시퀀스 orchestration
-- `macgyvbot/perception/`: YOLO/VLM 인식, grasp point 선택, depth projection, 좌표 변환
-- `macgyvbot/motion/`: MoveIt planning, pose helper, gripper/robot motion adapter
-- `macgyvbot/ui/`: OpenCV debug window 등 메인 pick pipeline UI helper
-- `macgyvbot/voice_command/`: STT/LLM command parser 같은 음성 명령 도메인 로직
+- `macgyvbot/config/`: topic, frame, offset, mode 같은 공통 설정
+- `macgyvbot/util/command_input/`: STT, GUI 입력, local parser, LLM fallback 같은 명령 입력 도메인 로직
+- `macgyvbot/util/hand_grasp_detection/`: 사용자 손과 공구 grasp 상태 판단 로직
+- `macgyvbot/util/macgyvbot_main/perception/`: YOLO 인식, depth projection, 좌표 변환
+- `macgyvbot/util/macgyvbot_main/grasp_mechanism/`: bbox center/VLM 기반 grasp point 선택
+- `macgyvbot/util/macgyvbot_main/model_control/`: MoveIt planning, pose helper, gripper/robot motion adapter, force/grasp state helper
+- `macgyvbot/util/macgyvbot_main/task_pipeline/`: pick, handoff, return 같은 시퀀스 orchestration
+- `macgyvbot/ui/`: PyQt command input GUI처럼 ROS node에서 분리 가능한 UI helper
 - 기존 standalone 노드가 있는 경우, 새 노드는 우선 `macgyvbot/nodes/`에 추가하고 `setup.py` console script만 연결한다.
-- 여러 노드가 공유하는 topic, frame, offset, mode 상수는 가능한 한 `core/config.py` 또는 도메인별 config 모듈로 모은다.
+- 여러 노드가 공유하는 topic, frame, offset, mode 상수는 가능한 한 `macgyvbot/config/config.py` 또는 도메인별 config 모듈로 모은다.
 - README의 패키지 구조 트리와 실제 파일 배치가 어긋나면 함께 수정한다.
 
 ## Python 스타일

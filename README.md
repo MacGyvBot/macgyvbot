@@ -17,25 +17,18 @@ macgyvbot/
 ├── config/
 │   └── config.py                        # topic, frame, safety offset, grasp mode
 ├── util/
-│   ├── model_control/
-│   │   ├── moveit_controller.py         # MoveIt planning 실행 및 J6 yaw 회전
-│   │   ├── robot_pose.py                # pose 생성, EE transform/orientation helper
-│   │   ├── onrobot_gripper.py           # OnRobot RG gripper 연결 및 제어
-│   │   └── robot_safezone.py            # robot workspace safe zone clamp
-│   ├── perception/
-│   │   └── yolo_detector.py             # YOLO 모델 경로 해석 및 추론 wrapper
-│   ├── hand_grasp/
-│   │   ├── hand_detector.py             # MediaPipe hand landmark 검출
-│   │   ├── tool_detector.py             # hand grasp용 YOLO tool ROI 검출
-│   │   ├── grasp_detector.py            # hand-tool grasp 상태 판정
-│   │   ├── calculations.py              # geometry/depth helper
-│   │   └── visualization.py             # hand grasp overlay drawing
-│   ├── grasp_mechanism/
-│   │   └── grasp_by_vlm.py              # VLM 기반 grasp point 선택
-│   ├── input_mapping/
-│   │   └── command_hard_parser.py       # LLM fallback 전 alias/fuzzy parser
-│   └── task_pipeline/
-│       └── task_pipeline.py             # pick, handoff, 원위치 반환 시퀀스
+│   ├── command_input/
+│   │   ├── input_mapping/               # local parser + LLM fallback
+│   │   └── stt/                         # microphone STT wrapper
+│   ├── hand_grasp_detection/
+│   │   └── hand_grasp/                  # hand/tool grasp 판정 유틸
+│   └── macgyvbot_main/
+│       ├── grasp_mechanism/             # center/VLM grasp point 선택
+│       ├── model_control/               # MoveIt, pose, gripper, force, safe zone
+│       ├── perception/                  # YOLO, depth projection
+│       └── task_pipeline/               # pick, handoff, return 시퀀스
+│           ├── pick_sequence.py         # 공구 pick 및 사용자 전달 흐름
+│           └── return_sequence.py       # 사용자 반납 수신 및 Home 배치 흐름
 ├── ui/
 │   └── voice_command_window.py          # PyQt command input window
 ```
@@ -122,7 +115,7 @@ flowchart TD
         pose["util/macgyvbot_main/model_control/robot_pose.py\npose/orientation helpers"]
         safe["util/macgyvbot_main/model_control/robot_safezone.py\nworkspace clamp"]
         grip["util/macgyvbot_main/model_control/onrobot_gripper.py\nRG gripper control"]
-        pipeline["util/macgyvbot_main/task_pipeline/task_pipeline.py\npick / handoff / return sequence"]
+        pipeline["util/macgyvbot_main/task_pipeline/\npick / handoff / return sequence"]
         yolo --> mainNode
         graspSel --> mainNode
         depthProj --> mainNode
@@ -339,6 +332,35 @@ command_input_node (GUI + STT input)
 ```bash
 ros2 launch macgyvbot macgyvbot.launch.py use_stt:=false
 ```
+
+반납/정리 명령은 `/tool_command`에 JSON 문자열로 발행됩니다. `action`이
+`return`이면 메인 노드는 hand grasp detection 결과로 사용자가 들고 있는 공구를
+확인하기 전에 Home 기준 전방 20cm 위치로 이동합니다. 해당 위치에서 반납 공구를
+감지한 뒤 그리퍼를 닫아 공구를 받고, Home의 z=0.30m 위치로 이동해 Z를 낮추다가
+Z 반대방향 힘이 임계값 이상 감지되면 하강을 멈추고 공구를 놓은 뒤 Home으로
+복귀합니다. Pick 동작은 Home
+근처에서 공구를 인식해 grasp한 뒤, Home 기준 전방 20cm 사용자 전달 위치로
+이동하고 hand grasp detection 결과로 사용자 손 grasp를 확인합니다. 전달 후에는
+그리퍼를 열고 Home으로 복귀합니다.
+
+```bash
+ros2 topic pub --once /tool_command std_msgs/msg/String \
+  "{data: '{\"tool_name\":\"screwdriver\",\"action\":\"return\",\"raw_text\":\"드라이버 반납해\",\"match_method\":\"manual\",\"match_score\":1.0,\"confidence\":1.0,\"status\":\"accepted\"}'}"
+```
+
+반납 처리 상태는 `/robot_task_status`에 JSON 문자열로 발행됩니다.
+반납 Home 하강 중 Z 반력은 `force_torque_topic` launch parameter의
+`geometry_msgs/msg/WrenchStamped` 입력을 사용하며 기본값은
+`/force_torque_sensor_broadcaster/wrench`입니다.
+
+Pick/return 중 로봇 그리퍼가 공구를 실제로 잡았는지는 OnRobot RG 상태의
+`grip detected` 신호와 그리퍼 폭으로 확인합니다. 그리퍼가 완전히 닫힌 폭이면
+`grip detected`가 켜져도 성공으로 처리하지 않습니다. 그리퍼 동작이 끝난 뒤
+조건이 연속으로 유지될 때만 성공으로 처리합니다. 성공하면
+`status=grasp_success`가 발행되고, 신호가 확인되지 않거나 완전 닫힘 상태이면
+`status=failed`, `reason=robot_grasp_failed` 또는 `reason=return_grasp_failed`가
+발행됩니다. grasp 실패 시에는 최대 `GRASP_RETRY_LIMIT`회까지 gripper open/close
+재시도를 수행합니다.
 
 실행컴에서 브랜치를 바꾼 뒤에는 반드시 다시 빌드하고 새 터미널에서 source 해야 합니다.
 
