@@ -131,5 +131,15 @@ def generate_launch_description():
                 ],
                 condition=IfCondition(use_voice_command),
             ),
+            Node( #추가됨 - collision monitor node
+                package="macgyvbot",
+                executable="collision_monitor_node",
+                name="collision_monitor_node",
+                output="screen",
+                parameters=[
+                    {
+                    }
+                ],
+            ),
         ]
     )
