@@ -13,6 +13,7 @@ from macgyvbot.config.config import (
     COLLISION_MARGIN,
     GRASP_ADVANCE_DISTANCE_M,
     GRASP_Z_OFFSET,
+    HAND_GRASP_MASK_LOCK_TIMEOUT_SEC,
     HAND_GRASP_TIMEOUT_SEC,
     MAX_DESCENT_FROM_APPROACH,
     MIN_GRASP_CLEARANCE,
@@ -42,6 +43,8 @@ class PickSequenceRunner:
     def run(self, bx, by, bz, z_m, vlm_yaw_deg=None):
         self.state.human_grasped_tool = False
         self.state.last_grasp_result = None
+        self.state.tool_mask_locked = False
+        self.state.last_tool_mask_lock_result = None
 
         log = self.state.logger()
         ori = self.state.home_ori
@@ -226,7 +229,18 @@ class PickSequenceRunner:
                 command=self.state.current_command,
             )
 
-            log.info("6단계: 안전 높이 복귀")
+            log.info("6단계: 공구 mask lock 완료 대기")
+            if not self.wait_for_tool_mask_lock(log):
+                log.error("공구 mask lock 실패. Lift 전에 pick 시퀀스를 중단합니다.")
+                self.state._publish_robot_status(
+                    "failed",
+                    message="공구 mask lock에 실패했습니다.",
+                    reason="tool_mask_lock_failed",
+                    command=self.state.current_command,
+                )
+                return
+
+            log.info("7단계: 안전 높이 복귀")
             ok = self.motion.plan_and_execute(
                 log,
                 pose_goal=make_safe_pose(
@@ -255,7 +269,7 @@ class PickSequenceRunner:
             if handoff_pose[0] is None:
                 return
 
-            log.info("8단계: 사용자 잡기 인식 대기")
+            log.info("9단계: 사용자 잡기 인식 대기")
             self.state._publish_robot_status(
                 "waiting_handoff",
                 message="사용자 잡기 인식을 기다립니다.",
@@ -284,7 +298,7 @@ class PickSequenceRunner:
                 )
                 return
 
-            log.info("9단계: 사용자 잡기 확인 후 그리퍼 오픈(놓기)")
+            log.info("10단계: 사용자 잡기 확인 후 그리퍼 오픈(놓기)")
             self.gripper.open_gripper()
             self.cooperative_wait(0.8)
 
@@ -440,6 +454,36 @@ class PickSequenceRunner:
             if time.monotonic() - start_time >= HAND_GRASP_TIMEOUT_SEC:
                 logger.warn(
                     f"{HAND_GRASP_TIMEOUT_SEC:.1f}초 동안 사용자 잡기 인식이 없어 대기 종료"
+                )
+                return False
+
+            self.cooperative_wait(0.1)
+
+        return False
+
+    def wait_for_tool_mask_lock(self, logger):
+        start_time = time.monotonic()
+
+        while rclpy.ok():
+            result = self.state.last_tool_mask_lock_result
+            if self.state.tool_mask_locked and result is not None:
+                logger.info(
+                    "공구 mask lock 확인: "
+                    f"source={result.get('mask_source')}, roi={result.get('tool_roi')}"
+                )
+                return True
+
+            if result is not None and result.get("locked") is False:
+                logger.warn(
+                    "공구 mask lock 실패 응답: "
+                    f"reason={result.get('reason', 'unknown')}"
+                )
+                return False
+
+            if time.monotonic() - start_time >= HAND_GRASP_MASK_LOCK_TIMEOUT_SEC:
+                logger.warn(
+                    f"{HAND_GRASP_MASK_LOCK_TIMEOUT_SEC:.1f}초 동안 "
+                    "공구 mask lock 응답이 없어 대기 종료"
                 )
                 return False
 
