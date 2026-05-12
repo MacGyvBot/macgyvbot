@@ -62,6 +62,10 @@ hand_grasp_detection_node
 - `macgyvbot/nodes/hand_grasp_detection_node.py`
   - 사람이 공구를 잡았는지 판단하는 별도 ROS 노드입니다.
   - color/depth image를 받아 hand landmark, tool ROI, depth contact를 계산합니다.
+  - `/robot_task_status`가 `accepted/searching/picking/grasping`인 구간에서만 최신 YOLO ROI와 선택적 SAM mask를 갱신합니다.
+  - `/robot_task_status`의 `grasp_success`를 lock trigger로 사용하고, 직전 mask/ROI를 고정한 뒤 `/hand_grasp_detection/tool_mask_lock`으로 응답합니다.
+  - main pick sequence는 이 lock 응답을 받은 뒤에만 lift와 handoff 이동을 시작합니다.
+  - handoff pose에서는 locked ROI 또는 SAM mask와 `.pkl` ML classifier를 함께 사용하고, raw/stable 모두 `grasp`일 때만 handoff 성공을 인정합니다.
   - 결과 JSON을 `/human_grasped_tool`로 발행하고, overlay 이미지를 `/hand_grasp_detection/annotated_image`로 발행합니다.
 
 ### `macgyvbot/ui/`
@@ -170,6 +174,7 @@ hand_grasp_detection_node
   - pick, lift, home 복귀, 사용자 handoff 대기, 실패 시 원위치 반환까지의 실행 시퀀스를 담당합니다.
   - `macgyvbot_main_node`에서 시작되지만, 실제 단계별 MoveIt/gripper 실행 흐름은 이 파일에 분리되어 있습니다.
   - 주요 성공/실패 상태를 `/robot_task_status`로 보고할 수 있도록 node state를 사용합니다.
+  - gripper grasp 성공 후에는 mask lock 응답을 기다리고, lock이 확인된 뒤에만 공구를 들어 올립니다.
   - Home 근처에서 공구를 먼저 grasp한 뒤 Home 기준 전방 20cm 사용자 전달 위치로 이동하고, 전달 후 Home으로 복귀합니다.
 
 - `macgyvbot/util/macgyvbot_main/task_pipeline/return_sequence.py`
