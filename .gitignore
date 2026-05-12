@@ -39,3 +39,4 @@ log/
 weights/*
 !weights/.gitkeep
 !weights/download_vlm_weights.py
+!weights/download_sam_weights.py
