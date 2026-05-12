@@ -65,7 +65,7 @@ hand_grasp_detection_node
   - `/robot_task_status`가 `accepted/searching/picking/grasping`인 구간에서만 최신 YOLO ROI와 선택적 SAM mask를 갱신합니다.
   - `/robot_task_status`의 `grasp_success`를 lock trigger로 사용하고, 직전 mask/ROI를 고정한 뒤 `/hand_grasp_detection/tool_mask_lock`으로 응답합니다.
   - main pick sequence는 이 lock 응답을 받은 뒤에만 lift와 handoff 이동을 시작합니다.
-  - handoff pose에서는 locked ROI 또는 SAM mask와 `.pkl` ML classifier를 함께 사용하고, raw/stable 모두 `grasp`일 때만 handoff 성공을 인정합니다.
+  - handoff pose에서는 locked ROI 또는 SAM mask, depth contact, `.pkl` ML classifier를 함께 사용하고, raw/stable 모두 `grasp`일 때만 handoff 성공을 인정합니다.
   - 결과 JSON을 `/human_grasped_tool`로 발행하고, overlay 이미지를 `/hand_grasp_detection/annotated_image`로 발행합니다.
 
 ### `macgyvbot/ui/`

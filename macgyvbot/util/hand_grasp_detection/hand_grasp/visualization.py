@@ -71,3 +71,9 @@ def draw_grasp_overlay(
         (20, 152),
         scale=0.6,
     )
+    draw_text(
+        frame,
+        f"depth_ok: {result.get('depth_grasp_ok', False)}",
+        (20, 182),
+        scale=0.6,
+    )

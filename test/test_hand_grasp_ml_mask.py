@@ -1,5 +1,8 @@
 import numpy as np
 
+from macgyvbot.util.hand_grasp_detection.hand_grasp.calculations import (
+    build_depth_grasp_info,
+)
 from macgyvbot.util.hand_grasp_detection.hand_grasp.ml_grasp_classifier import (
     FEATURE_COUNT,
     extract_ml_features,
@@ -46,3 +49,29 @@ def test_compute_mask_contact_confirms_landmark_inside_locked_mask():
     assert result.mask_contact_count == 1
     assert result.mask_contact_confirmed is True
     assert result.near_or_contact is True
+
+
+def test_build_depth_grasp_info_confirms_similar_hand_tool_depth():
+    depth_mm = np.full((20, 20), 500.0, dtype=np.float32)
+    depth_mm[6, 6] = 512.0
+    depth_mm[7, 7] = 515.0
+    hand_info = {
+        "landmarks": {
+            0: (6, 6),
+            1: (7, 7),
+            2: (18, 18),
+        }
+    }
+
+    result = build_depth_grasp_info(
+        hand_info=hand_info,
+        tool_roi=(5, 5, 10, 10),
+        depth_mm=depth_mm,
+        depth_diff_threshold_mm=35.0,
+        min_depth_contact_landmarks=2,
+        roi_margin=0,
+    )
+
+    assert result["depth_available"] is True
+    assert result["depth_contact_count"] == 2
+    assert result["depth_grasp_confirmed"] is True

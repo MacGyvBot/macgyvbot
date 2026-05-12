@@ -138,6 +138,7 @@ def generate_launch_description():
                         "allow_bbox_lock": True,
                         "require_ml_grasp": True,
                         "require_locked_tool": True,
+                        "require_depth_grasp": True,
                         "ml_min_confidence": 0.60,
                     }
                 ],

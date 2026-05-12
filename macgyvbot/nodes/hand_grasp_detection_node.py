@@ -17,6 +17,7 @@ from macgyvbot.config.config import (
     HAND_GRASP_MASK_LOCK_TOPIC,
     HAND_GRASP_ML_CONFIDENCE,
     HAND_GRASP_MODEL_NAME,
+    HAND_GRASP_REQUIRE_DEPTH,
     HAND_GRASP_REQUIRE_LOCKED_TOOL,
     HAND_GRASP_REQUIRE_ML,
     HAND_GRASP_SAM_CHECKPOINT_NAME,
@@ -113,6 +114,12 @@ class HandGraspDetectionNode(Node):
             self.declare_parameter(
                 "require_locked_tool",
                 HAND_GRASP_REQUIRE_LOCKED_TOOL,
+            ).value
+        )
+        self.require_depth_grasp = self._as_bool(
+            self.declare_parameter(
+                "require_depth_grasp",
+                HAND_GRASP_REQUIRE_DEPTH,
             ).value
         )
         self.ml_min_confidence = float(
@@ -538,17 +545,26 @@ class HandGraspDetectionNode(Node):
             if mask_available
             else (False if self.require_locked_tool else contact_result["human_grasped_tool"])
         )
+        depth_grasp_ok = (
+            bool(contact_result["depth_grasp_confirmed"])
+            if self.require_depth_grasp
+            else True
+        )
 
         if self.require_ml_grasp:
             human_grasped_tool = bool(
                 ml_result.is_grasp
                 and confidence_ok
                 and mask_near_or_contact
+                and depth_grasp_ok
             )
         else:
             human_grasped_tool = bool(
-                contact_result["human_grasped_tool"]
-                or (ml_result.is_grasp and confidence_ok and mask_near_or_contact)
+                (
+                    contact_result["human_grasped_tool"]
+                    or (ml_result.is_grasp and confidence_ok and mask_near_or_contact)
+                )
+                and depth_grasp_ok
             )
 
         result["human_grasped_tool"] = human_grasped_tool
@@ -558,6 +574,8 @@ class HandGraspDetectionNode(Node):
         result["ml_grasp_confirmed"] = ml_result.is_grasp
         result["ml_confidence_ok"] = confidence_ok
         result["ml_required"] = self.require_ml_grasp
+        result["depth_required"] = self.require_depth_grasp
+        result["depth_grasp_ok"] = depth_grasp_ok
         result["mask_source"] = self.locked_tool.source if self.locked_tool else "NONE"
         result["mask_locked"] = mask_available
         result["mask_contact_count"] = mask_result.mask_contact_count
@@ -583,6 +601,8 @@ class HandGraspDetectionNode(Node):
             result["state"] = "ML_GRASP_LOW_CONF"
         elif ml_result.is_grasp and not mask_near_or_contact:
             result["state"] = "ML_GRASP_NOT_NEAR_TOOL"
+        elif ml_result.is_grasp and not depth_grasp_ok:
+            result["state"] = "DEPTH_GRASP_NOT_CONFIRMED"
 
         return result
 
@@ -608,6 +628,8 @@ class HandGraspDetectionNode(Node):
             "ml_grasp_confirmed": result["ml_grasp_confirmed"],
             "ml_confidence_ok": result["ml_confidence_ok"],
             "ml_required": result["ml_required"],
+            "depth_required": result["depth_required"],
+            "depth_grasp_ok": result["depth_grasp_ok"],
             "mask_source": result["mask_source"],
             "mask_locked": result["mask_locked"],
             "mask_contact_count": result["mask_contact_count"],
