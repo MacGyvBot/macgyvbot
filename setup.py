@@ -53,6 +53,7 @@ setup(
                 'macgyvbot = macgyvbot.nodes.macgyvbot_main_node:main',
                 'hand_grasp_detection = macgyvbot.nodes.hand_grasp_detection_node:main',
                 'command_input_node = macgyvbot.nodes.command_input_node:main',
+                'collision_monitor_node = macgyvbot.nodes.collision_monitor_node:main', #추가됨 - 충돌 감지 노드 엔트리 포인트
             ],
     },
 )
