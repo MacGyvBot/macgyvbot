@@ -10,6 +10,10 @@ from macgyvbot.util.hand_grasp_detection.hand_grasp.tool_detector import (
     ToolDetection,
 )
 from macgyvbot.util.hand_grasp_detection.hand_grasp.calculations import draw_text
+from macgyvbot.util.hand_grasp_detection.hand_grasp.sam_tool_mask import (
+    LockedToolMask,
+    overlay_locked_mask,
+)
 
 
 def draw_grasp_overlay(
@@ -18,8 +22,11 @@ def draw_grasp_overlay(
     active_hand: Optional[dict],
     tool_detection: Optional[ToolDetection],
     result: dict,
+    locked_tool: Optional[LockedToolMask] = None,
 ) -> None:
     """Draw tool, hand, and grasp-state overlays on a camera frame."""
+    overlay_locked_mask(frame, locked_tool)
+
     if tool_detection is not None:
         x1, y1, x2, y2 = tool_detection.roi
         color = (0, 255, 0) if result["human_grasped_tool"] else (255, 120, 0)
@@ -50,5 +57,17 @@ def draw_grasp_overlay(
         frame,
         f"depth_contact: {result['depth_contact_count']}",
         (20, 92),
+        scale=0.6,
+    )
+    draw_text(
+        frame,
+        f"ml: {result.get('ml_stable_state', 'n/a')} raw={result.get('ml_raw_state', 'n/a')}",
+        (20, 122),
+        scale=0.6,
+    )
+    draw_text(
+        frame,
+        f"mask: {result.get('mask_source', 'NONE')} contact={result.get('mask_contact_count', 0)}",
+        (20, 152),
         scale=0.6,
     )
