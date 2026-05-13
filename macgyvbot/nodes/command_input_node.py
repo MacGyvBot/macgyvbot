@@ -14,6 +14,9 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
 
+# 로봇 정지를 위한 커스텀 서비스
+from macgyvbot_msgs.srv import RobotTaskControl
+
 from macgyvbot.ui.voice_command_window import (
     QApplication,
     QTimer,
@@ -109,6 +112,13 @@ class CommandInputNode(Node):
         )
         self._tool_command_pub = self.create_publisher(String, tool_command_topic, 10)
         self._feedback_pub = self.create_publisher(String, command_feedback_topic, 10)
+
+        # 로봇 정지를 위한 서비스 클라이언트
+        self._task_control_cli = self.create_client(RobotTaskControl, '/robot_task_control')
+        # 서비스 서버가 켜져 있는지 1초 동안 확인
+        if not self._task_control_cli.wait_for_service(timeout_sec=1.0):
+            self.get_logger().error('/robot_task_control 서비스가 연결되지 않았습니다.')
+            self._append_bot('로봇 제어(정지) 서비스에 연결할 수 없습니다.')
 
         self.create_subscription(String, stt_text_topic, self._text_cb, 10)
         self.create_subscription(String, tool_command_topic, self._tool_command_cb, 10)
@@ -248,7 +258,16 @@ class CommandInputNode(Node):
 
         command = result.get('command')
         if command is not None:
-            self._publish_command(command)
+            # 만약 action이 "stop"이면 서비스 리퀘스트를 보냄 => 정지 오버라이드
+            if command.get('action') == 'stop':
+                self._send_task_control_request(action='stop', reason=text)
+
+            # 만약 action이 "release"면 서비스 리퀘스트를 보냄 => 다시 가동 준비 상태로 변경
+            elif command.get('action') == 'release':
+                self._send_task_control_request(action='release', reason=text)
+
+            else:
+                self._publish_command(command)
 
         for payload in result.get('feedbacks', []):
             self._publish_feedback_payload(payload)
@@ -458,6 +477,46 @@ class CommandInputNode(Node):
         if self._stt_service is not None:
             self._stt_service.stop()
         super().destroy_node()
+
+    #----------------------------------------------------------------------------------------------------
+    # 로봇 정지 서비스를 위한 헬퍼
+    def _send_task_control_request(self, action, reason):
+
+        # 리퀘스트 메시지 생성
+        req = RobotTaskControl.Request()
+        if action == 'stop':
+            req.command = 1  # 정지 오버라이드
+        elif action == 'release':
+            req.command = 2  # 가동 준비 상태로 변경
+        
+        req.reason = reason
+
+        # 비동기로 서비스 호출 후 응답을 받을 콜백 지정
+        future = self._task_control_cli.call_async(req)
+        future.add_done_callback(self._task_control_response_cb)
+
+    def _task_control_response_cb(self, future):
+        try:
+            response = future.result()
+
+            if response.success:
+                if response.emergency_stopped:
+                    self.get_logger().info(f'정지 명령 성공: {response.message}')
+                    # GUI에 로봇의 응답 메시지 띄우기
+                    self._append_bot(response.message or "로봇이 정지되었습니다.")
+
+                else:
+                    self.get_logger().info(f'가동 재개 명령 성공: {response.message}')
+                    # GUI에 로봇의 응답 메시지 띄우기
+                    self._append_bot(response.message or "로봇 정지가 해제되었습니다.")
+
+            else:
+                self.get_logger().warn('정지 명령 실패')
+                self._append_bot('정지 명령 처리에 실패했습니다.')
+
+        except Exception as e:
+            self.get_logger().error(f'서비스 호출 중 예외 발생: {e}')
+    #----------------------------------------------------------------------------------------------------
 
 
 def main(args=None):
