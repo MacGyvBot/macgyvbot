@@ -234,15 +234,11 @@ class CommandInputNode(Node):
         msg = String()
         msg.data = text
 
-        self._mark_self_published(text)
         self._stt_pub.publish(msg)
         if self._compat_pub is not None:
             self._compat_pub.publish(msg)
 
         self.get_logger().info(f'STT 인식 결과: "{text}"')
-        self._append_user(text, source='voice')
-        self._set_status('음성 명령 수신')
-        self._handle_text(text)
 
     def _text_cb(self, msg):
         text = (msg.data or '').strip()
@@ -372,8 +368,7 @@ class CommandInputNode(Node):
         if state in ('accepted', 'searching', 'picking', 'waiting_handoff'):
             self._last_target_label = tool_name
             status_message = message or f'{tool_name}: {state}'
-            self._append_system(status_message)
-            self._speak_bot(status_message)
+            self._append_bot(status_message)
             self._set_status(status_message)
             self._set_task_status(tool_name, status_message)
         elif state in ('done', 'completed', 'success'):
@@ -390,8 +385,7 @@ class CommandInputNode(Node):
             self._set_task_status(tool_name, message or state)
         else:
             status_message = message or f'{tool_name}: {state}'
-            self._append_system(status_message)
-            self._speak_bot(status_message)
+            self._append_bot(status_message)
             self._set_task_status(tool_name, status_message)
 
     def _camera_status_cb(self, _msg):
