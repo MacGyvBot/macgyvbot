@@ -23,6 +23,7 @@ from macgyvbot.util.command_input.input_mapping.command_llm_parser import (
     CommandLlmParser,
 )
 from macgyvbot.util.command_input.stt.speech_to_text import SpeechToTextService
+from macgyvbot.util.command_input.tts import TtsService
 
 
 class CommandInputNode(Node):
@@ -61,6 +62,11 @@ class CommandInputNode(Node):
         self.declare_parameter('min_confidence', 0.55)
         self.declare_parameter('use_local_parser', True)
         self.declare_parameter('use_llm_fallback', True)
+        self.declare_parameter('enable_tts', False)
+        self.declare_parameter('tts_engine', 'auto')
+        self.declare_parameter('tts_voice', 'ko')
+        self.declare_parameter('tts_rate', 165)
+        self.declare_parameter('tts_timeout_sec', 8.0)
 
         self._use_gui = bool(self.get_parameter('use_gui').value)
         self._enable_microphone = bool(self.get_parameter('enable_microphone').value)
@@ -129,6 +135,15 @@ class CommandInputNode(Node):
             use_llm_fallback=bool(self.get_parameter('use_llm_fallback').value),
             logger=self._log_parser,
         )
+        self._tts_service = TtsService(
+            enabled=bool(self.get_parameter('enable_tts').value),
+            engine=self.get_parameter('tts_engine').value,
+            voice=self.get_parameter('tts_voice').value,
+            rate=int(self.get_parameter('tts_rate').value),
+            timeout_sec=float(self.get_parameter('tts_timeout_sec').value),
+            logger=self._log_tts,
+        )
+        self._tts_service.start()
 
         self._self_published = {}
         self._self_pub_lock = threading.Lock()
@@ -163,6 +178,8 @@ class CommandInputNode(Node):
             self.get_logger().info(f'수업 예제 호환 topic: {compat_topic}')
         if self._use_gui:
             self.get_logger().info('GUI 모드 활성화: command_input_node가 UI를 직접 연결합니다.')
+        if self._tts_service.enabled:
+            self.get_logger().info('TTS 모드 활성화: MacGyvBot 응답을 음성으로 출력합니다.')
 
     def attach_window(self, window):
         self.window = window
@@ -189,6 +206,9 @@ class CommandInputNode(Node):
         logger.info(message)
 
     def _log_parser(self, level, message):
+        self._log_stt(level, message)
+
+    def _log_tts(self, level, message):
         self._log_stt(level, message)
 
     def _mark_self_published(self, text):
@@ -312,6 +332,7 @@ class CommandInputNode(Node):
             )
             if self.window is not None and hasattr(self.window, 'append_confirmation'):
                 self.window.append_confirmation(confirmation_message)
+                self._speak_bot(confirmation_message)
             else:
                 self._append_bot(confirmation_message)
             self._set_status('확인 응답 대기')
@@ -350,9 +371,11 @@ class CommandInputNode(Node):
 
         if state in ('accepted', 'searching', 'picking', 'waiting_handoff'):
             self._last_target_label = tool_name
-            self._append_system(message or f'{tool_name}: {state}')
-            self._set_status(message or state)
-            self._set_task_status(tool_name, message or state)
+            status_message = message or f'{tool_name}: {state}'
+            self._append_system(status_message)
+            self._speak_bot(status_message)
+            self._set_status(status_message)
+            self._set_task_status(tool_name, status_message)
         elif state in ('done', 'completed', 'success'):
             self._append_bot(message or f'{tool_name} 전달 동작이 완료되었습니다.')
             self._set_status('완료')
@@ -366,8 +389,10 @@ class CommandInputNode(Node):
             self._set_status(state)
             self._set_task_status(tool_name, message or state)
         else:
-            self._append_system(message or f'{tool_name}: {state}')
-            self._set_task_status(tool_name, message or state)
+            status_message = message or f'{tool_name}: {state}'
+            self._append_system(status_message)
+            self._speak_bot(status_message)
+            self._set_task_status(tool_name, status_message)
 
     def _camera_status_cb(self, _msg):
         self._last_camera_stamp_ns = self.get_clock().now().nanoseconds
@@ -441,10 +466,15 @@ class CommandInputNode(Node):
     def _append_bot(self, text):
         if self.window is not None:
             self.window.append_bot(text)
+        self._speak_bot(text)
 
     def _append_system(self, text):
         if self.window is not None:
             self.window.append_system(text)
+
+    def _speak_bot(self, text):
+        if hasattr(self, '_tts_service') and self._tts_service is not None:
+            self._tts_service.speak(text)
 
     def _set_status(self, text):
         if self.window is not None:
@@ -457,6 +487,8 @@ class CommandInputNode(Node):
     def destroy_node(self):
         if self._stt_service is not None:
             self._stt_service.stop()
+        if self._tts_service is not None:
+            self._tts_service.stop()
         super().destroy_node()
 
 

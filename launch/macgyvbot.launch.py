@@ -10,6 +10,7 @@ from moveit_configs_utils import MoveItConfigsBuilder
 def generate_launch_description():
     use_voice_command = LaunchConfiguration("use_voice_command")
     use_stt = LaunchConfiguration("use_stt")
+    use_tts = LaunchConfiguration("use_tts")
     llm_model = LaunchConfiguration("llm_model")
     llm_timeout_sec = LaunchConfiguration("llm_timeout_sec")
 
@@ -49,6 +50,11 @@ def generate_launch_description():
                 "use_stt",
                 default_value="true",
                 description="마이크 STT 노드를 실행할지 여부",
+            ),
+            DeclareLaunchArgument(
+                "use_tts",
+                default_value="true",
+                description="MacGyvBot GUI 응답과 주요 상태 메시지를 TTS로 출력할지 여부",
             ),
             DeclareLaunchArgument(
                 "llm_model",
@@ -122,6 +128,7 @@ def generate_launch_description():
                     {
                         "use_gui": True,
                         "enable_microphone": use_stt,
+                        "enable_tts": use_tts,
                         "model": llm_model,
                         "use_local_parser": True,
                         "use_llm_fallback": True,
