@@ -85,15 +85,39 @@ class TtsService:
                 break
 
             try:
-                subprocess.run(
-                    self._build_command(text),
-                    check=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    timeout=self._timeout_sec,
-                )
+                self._run_tts_command(self._build_command(text))
             except (OSError, subprocess.SubprocessError) as exc:
+                if self._engine == 'espeak-ng' and self._voice:
+                    try:
+                        self._run_tts_command(
+                            self._build_command(text, include_voice=False)
+                        )
+                        self._warn(
+                            'espeak-ng voice 설정이 실패해 기본 voice로 TTS를 출력했습니다.'
+                        )
+                        continue
+                    except (OSError, subprocess.SubprocessError) as fallback_exc:
+                        self._warn_failure(fallback_exc)
+                        continue
+
                 self._warn_failure(exc)
+
+    def _run_tts_command(self, command):
+        completed = subprocess.run(
+            command,
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=self._timeout_sec,
+        )
+        if completed.returncode != 0:
+            detail = (completed.stderr or '').strip()
+            if detail:
+                raise subprocess.SubprocessError(detail)
+            raise subprocess.SubprocessError(
+                f'TTS command failed with code {completed.returncode}'
+            )
 
     def _resolve_engine(self):
         requested = self._engine_name.lower()
@@ -112,16 +136,13 @@ class TtsService:
 
         return None
 
-    def _build_command(self, text):
+    def _build_command(self, text, include_voice=True):
         if self._engine == 'espeak-ng':
-            return [
-                'espeak-ng',
-                '-v',
-                self._voice,
-                '-s',
-                str(self._rate),
-                text,
-            ]
+            command = ['espeak-ng', '-s', str(self._rate)]
+            if include_voice and self._voice:
+                command.extend(['-v', self._voice])
+            command.append(text)
+            return command
 
         if self._engine == 'say':
             return ['say', text]
@@ -146,6 +167,9 @@ class TtsService:
             return
         self._warned_failure = True
         self._log('warn', f'TTS 실행 실패. 음성 출력만 건너뜁니다: {exc}')
+
+    def _warn(self, message):
+        self._log('warn', message)
 
     def _log(self, level, message):
         if self._logger is not None:
