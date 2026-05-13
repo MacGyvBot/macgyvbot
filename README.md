@@ -334,7 +334,7 @@ ros2 launch macgyvbot macgyvbot.launch.py
 TTS 관련 파라미터:
 
 - `enable_tts`: TTS 사용 여부, 기본값 `false`
-- `tts_engine`: 사용할 엔진, 기본값 `auto` (`espeak-ng`, macOS `say` 자동 탐색)
+- `tts_engine`: 사용할 엔진, 기본값 `auto` (`espeak-ng` 자동 탐색)
 - `tts_voice`: `espeak-ng` voice, 기본값 `ko`
 - `tts_rate`: 읽기 속도, 기본값 `165`
 - `tts_timeout_sec`: 한 문장 TTS 실행 제한 시간, 기본값 `8.0`

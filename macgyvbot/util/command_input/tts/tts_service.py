@@ -124,8 +124,6 @@ class TtsService:
         if requested == 'auto':
             if shutil.which('espeak-ng'):
                 return 'espeak-ng'
-            if shutil.which('say'):
-                return 'say'
             return None
 
         if requested in ('none', 'off', 'disabled'):
@@ -144,9 +142,6 @@ class TtsService:
             command.append(text)
             return command
 
-        if self._engine == 'say':
-            return ['say', text]
-
         return [self._engine, text]
 
     @staticmethod
@@ -159,7 +154,7 @@ class TtsService:
         self._warned_missing = True
         self._log(
             'warn',
-            'TTS 엔진을 찾지 못했습니다. espeak-ng 또는 say가 없어서 음성 출력만 건너뜁니다.',
+            'TTS 엔진을 찾지 못했습니다. Ubuntu 실행컴에서 "sudo apt install espeak-ng" 후 다시 실행하세요. 음성 출력만 건너뜁니다.',
         )
 
     def _warn_failure(self, exc):
