@@ -39,6 +39,7 @@ GRASP_ADVANCE_DISTANCE_M = 0.20
 GRIPPER_CLOSED_WIDTH_THRESHOLD_MM = 5.0
 FORCE_TORQUE_TOPIC = "/force_torque_sensor_broadcaster/wrench"
 FORCE_THRES_2_PAUSE = 5.0 #추가됨 - 충돌 판정 임계 힘 크기
+PAUSE_SERVICE_NAME = '/motion/move_pause' #추가됨 - 직접 확인한 pause 서비스명
 RETURN_HOME_DESCENT_START_Z = 0.30
 RETURN_HOME_DESCENT_STEP_M = 0.01
 RETURN_HOME_FORCE_THRESHOLD_N = 8.0
