@@ -18,6 +18,10 @@ from scipy.spatial.transform import Rotation
 from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import String
 
+# 로봇 정지를 위한 서비스
+from macgyvbot_msgs.srv import RobotTaskControl
+from action_msgs.srv import CancelGoal
+
 from macgyvbot.config.config import (
     DEFAULT_GRASP_POINT_MODE,
     FORCE_TORQUE_TOPIC,
@@ -72,6 +76,9 @@ class MacGyvBotNode(Node):
         self.current_command = None
         self._last_search_status_target = None
 
+        # 정지 상태를 관리할 플래그 변수 추가
+        self.stop_requested = False 
+
         self.grasp_point_mode = self._read_grasp_point_mode()
         self.yolo_model = self._read_yolo_model()
         self.force_torque_topic = self._read_force_torque_topic()
@@ -119,6 +126,8 @@ class MacGyvBotNode(Node):
         )
 
         self._create_subscriptions()
+        self._create_service_servers()
+        self._create_service_clients()
         self._log_startup()
 
     def logger(self):
@@ -203,6 +212,21 @@ class MacGyvBotNode(Node):
             10,
         )
 
+    def _create_service_servers(self):
+        # 로봇 정지 서비스 서버 생성
+        self._task_control_srv = self.create_service(
+            RobotTaskControl,
+            '/robot_task_control',
+            self._task_control_cb
+        )
+
+    def _create_service_clients(self):
+        # MoveIt 액션 취소를 위한 클라이언트
+        self._cancel_goal_cli = self.create_client(
+            CancelGoal,
+            '/dsr_moveit_controller/follow_joint_trajectory/_action/cancel_goal'
+        )
+
     def _log_startup(self):
         self.get_logger().info("노드 초기화 완료")
         self.get_logger().info(f"YOLO model: {self.yolo_model}")
@@ -224,6 +248,66 @@ class MacGyvBotNode(Node):
             return
 
         self._set_target_label(val, source="/target_label")
+
+    def _task_control_cb(self, request, response):
+        """
+        /robot_task_control 서비스 요청이 들어왔을 때 처리하는 콜백 (정지 / 재개)
+        """
+
+        robot_readiness_status = "error"
+
+        # 팀원이 정의한 srv 파일 기준: STOP = 1, RELEASE = 2
+        if request.command == 1:
+            self.get_logger().warn(f"정지 명령 수신! (이유: {request.reason})")
+            
+            # 메인 노드의 상태를 정지 요청 상태로 변경
+            self.stop_requested = True
+            
+            # moveit action 캔슬 (이미 움직이는 도중인것)
+            cancel_req = CancelGoal.Request()
+            future = self._cancel_goal_cli.call_async(cancel_req)
+            future.add_done_callback(self._cancel_goal_response_cb)
+            self.get_logger().info("MoveIt 궤적 이동 강제 취소(CancelGoal)를 요청했습니다.")
+
+            # 그리퍼 동작 차단
+            # => pick_sequence.py와 연계된 로직 필요 (todo)
+
+            # 로봇 준비상태 변경 => stopped
+            robot_readiness_status = "stopped"
+            
+            response.success = True
+            response.message = "로봇 비상 정지가 요청되었습니다."
+            response.emergency_stopped = True
+            
+        elif request.command == 2:
+            self.get_logger().info(f"동작 재개 명령 수신! (이유: {request.reason})")
+
+            # 정지 요청 상태 릴리즈
+            self.stop_requested = False
+
+            # 로봇 준비상태 변경 => ready
+            robot_readiness_status = "ready"
+            
+            response.success = True
+            response.message = "로봇 정지가 해제되었습니다."
+            response.emergency_stopped = False
+
+        # robot status publish
+        self._publish_robot_status(
+            robot_readiness_status,
+        )
+
+        # 처리된 response 객체를 반환 (이 응답이 command_input_node로 날아감)
+        return response
+    
+    def _cancel_goal_response_cb(self, future):
+        try:
+            res = future.result()
+            # res.return_code가 0(NONE), 1(REJECTED), 2(UNKNOWN_GOAL), 3(CANCELING) 중 하나로 옵니다.
+            self.get_logger().info(f"moveit 액션 취소 서버 응답 코드: {res.return_code}")
+
+        except Exception as e:
+            self.get_logger().error(f"moveit 액션 취소 서비스 호출 중 오류 발생: {e}")
 
     def _tool_command_cb(self, msg):
         try:
@@ -274,6 +358,7 @@ class MacGyvBotNode(Node):
             )
             return
 
+        '''
         if action == "stop":
             self.get_logger().warn("stop 명령 수신")
             if self.picking:
@@ -300,6 +385,7 @@ class MacGyvBotNode(Node):
                 command=command,
             )
             return
+        '''
 
         self.get_logger().warn(f"지원하지 않는 action: {action}")
         self._publish_robot_status(
