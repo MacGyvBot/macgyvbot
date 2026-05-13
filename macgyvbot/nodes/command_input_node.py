@@ -66,7 +66,9 @@ class CommandInputNode(Node):
         self.declare_parameter('tts_engine', 'auto')
         self.declare_parameter('tts_voice', 'ko')
         self.declare_parameter('tts_rate', 165)
-        self.declare_parameter('tts_timeout_sec', 8.0)
+        self.declare_parameter('tts_edge_rate', '+10%')
+        self.declare_parameter('tts_pitch', '+8Hz')
+        self.declare_parameter('tts_timeout_sec', 20.0)
 
         self._use_gui = bool(self.get_parameter('use_gui').value)
         self._enable_microphone = bool(self.get_parameter('enable_microphone').value)
@@ -140,6 +142,8 @@ class CommandInputNode(Node):
             engine=self.get_parameter('tts_engine').value,
             voice=self.get_parameter('tts_voice').value,
             rate=int(self.get_parameter('tts_rate').value),
+            edge_rate=self.get_parameter('tts_edge_rate').value,
+            pitch=self.get_parameter('tts_pitch').value,
             timeout_sec=float(self.get_parameter('tts_timeout_sec').value),
             logger=self._log_tts,
         )
