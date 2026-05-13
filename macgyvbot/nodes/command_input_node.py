@@ -64,10 +64,10 @@ class CommandInputNode(Node):
         self.declare_parameter('use_llm_fallback', True)
         self.declare_parameter('enable_tts', True)
         self.declare_parameter('tts_engine', 'auto')
-        self.declare_parameter('tts_voice', 'ko')
+        self.declare_parameter('tts_voice', 'ko-KR-SunHiNeural')
         self.declare_parameter('tts_rate', 165)
-        self.declare_parameter('tts_edge_rate', '+10%')
-        self.declare_parameter('tts_pitch', '+8Hz')
+        self.declare_parameter('tts_edge_rate', '+25%')
+        self.declare_parameter('tts_pitch', '+35Hz')
         self.declare_parameter('tts_timeout_sec', 20.0)
 
         self._use_gui = bool(self.get_parameter('use_gui').value)

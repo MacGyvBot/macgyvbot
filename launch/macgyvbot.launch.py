@@ -73,12 +73,12 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "tts_edge_rate",
-                default_value="+10%",
+                default_value="+25%",
                 description="edge-tts speech rate. 예: +10%, +0%, -10%",
             ),
             DeclareLaunchArgument(
                 "tts_pitch",
-                default_value="+8Hz",
+                default_value="+35Hz",
                 description="edge-tts pitch. 예: +8Hz, +0Hz, -5Hz",
             ),
             DeclareLaunchArgument(
