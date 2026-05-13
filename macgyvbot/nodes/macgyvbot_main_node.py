@@ -38,10 +38,6 @@ from macgyvbot.util.macgyvbot_main.model_control.moveit_controller import (
 )
 from macgyvbot.util.macgyvbot_main.model_control.onrobot_gripper import RG
 from macgyvbot.util.macgyvbot_main.model_control.robot_pose import get_ee_matrix
-from macgyvbot.util.macgyvbot_main.model_control.square_handover_search import (
-    SquareHandoverSearchClient,
-    SquareHandoverSearchServer,
-)
 from macgyvbot.util.macgyvbot_main.perception.depth_projection import (
     DepthProjector,
     pixel_to_camera_point,
@@ -108,12 +104,6 @@ class MacGyvBotNode(Node):
         self.pilz_params.max_velocity_scaling_factor = 0.2
 
         self.motion = MoveItController(self.robot, self.arm, self.pilz_params)
-        self.handover_search_server = SquareHandoverSearchServer(
-            self,
-            self.motion,
-            self,
-        )
-        self.handover_search_client = SquareHandoverSearchClient(self)
         self.pick_runner = PickSequenceRunner(
             self.robot,
             self.motion,
@@ -393,6 +383,17 @@ class MacGyvBotNode(Node):
             v = int(hand_pixel["v"])
         except (KeyError, TypeError, ValueError):
             return
+
+        height, width = self.depth_image.shape[:2]
+        clamped_u = min(max(u, 0), max(width - 1, 0))
+        clamped_v = min(max(v, 0), max(height - 1, 0))
+        if clamped_u != u or clamped_v != v:
+            self.get_logger().warn(
+                "handover_hand_pixel 경계 클램프 적용: "
+                f"raw=({u}, {v}), clamped=({clamped_u}, {clamped_v}), "
+                f"size=({width}, {height})"
+            )
+        u, v = clamped_u, clamped_v
 
         camera_point = pixel_to_camera_point(
             u,

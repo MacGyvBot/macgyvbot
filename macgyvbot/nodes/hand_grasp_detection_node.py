@@ -2,24 +2,23 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Optional
 
 import cv2
-import numpy as np
 import rclpy
-from ament_index_python.packages import get_package_share_directory
 from cv_bridge import CvBridge
 from rclpy.node import Node
-from sensor_msgs.msg import CameraInfo, Image
+from sensor_msgs.msg import Image
 from std_msgs.msg import String
 
-from macgyvbot.config.config import BASE_FRAME
 from macgyvbot.util.hand_grasp_detection.hand_grasp.grasp_detector import (
     GraspDetector,
 )
 from macgyvbot.util.hand_grasp_detection.hand_grasp.hand_detector import (
     HandDetector,
+)
+from macgyvbot.util.hand_grasp_detection.hand_grasp.hand_center import (
+    extract_hand_center_pixel,
 )
 from macgyvbot.util.hand_grasp_detection.hand_grasp.tool_detector import (
     DEFAULT_MODEL_PATH,
@@ -35,10 +34,6 @@ from macgyvbot.util.hand_grasp_detection.hand_grasp.calculations import (
 from macgyvbot.util.hand_grasp_detection.hand_grasp.visualization import (
     draw_grasp_overlay,
 )
-from macgyvbot.util.macgyvbot_main.perception.depth_projection import (
-    pixel_to_camera_point,
-    transform_point_to_base,
-)
 
 
 class HandGraspDetectionNode(Node):
@@ -49,19 +44,11 @@ class HandGraspDetectionNode(Node):
 
         self.bridge = CvBridge()
         self.latest_depth_mm = None
-        self.intrinsics = None
-        self.camera_frame_id = ""
         self.last_state = None
-        self.robot = None
-        self.gripper_to_camera = None
 
         self.color_topic = self.declare_parameter(
             "color_topic",
             "/camera/camera/color/image_raw",
-        ).value
-        self.camera_info_topic = self.declare_parameter(
-            "camera_info_topic",
-            "/camera/camera/color/camera_info",
         ).value
         self.depth_topic = self.declare_parameter(
             "depth_topic",
@@ -99,12 +86,6 @@ class HandGraspDetectionNode(Node):
         self.depth_min_contact_landmarks = int(
             self.declare_parameter("depth_min_contact_landmarks", 2).value
         )
-        self.publish_base_position = bool(
-            self.declare_parameter("publish_base_position", True).value
-        )
-        self.position_frame_id = str(
-            self.declare_parameter("position_frame_id", BASE_FRAME).value
-        ).strip() or BASE_FRAME
 
         self.hand_detector = HandDetector(max_num_hands=max_hands)
         self.grasp_detector = GraspDetector()
@@ -114,7 +95,6 @@ class HandGraspDetectionNode(Node):
             confidence_threshold=yolo_conf,
             image_size=yolo_imgsz,
         )
-        self._init_base_projection()
 
         self.result_pub = self.create_publisher(String, self.result_topic, 10)
         self.annotated_pub = (
@@ -125,14 +105,7 @@ class HandGraspDetectionNode(Node):
 
         if self.use_depth:
             self.create_subscription(Image, self.depth_topic, self._depth_cb, 10)
-            self.create_subscription(
-                CameraInfo,
-                self.camera_info_topic,
-                self._cam_info_cb,
-                10,
-            )
             self.get_logger().info(f"Depth recognition enabled: {self.depth_topic}")
-            self.get_logger().info(f"CameraInfo topic: {self.camera_info_topic}")
         else:
             self.get_logger().warn("Depth recognition disabled by parameter.")
 
@@ -169,38 +142,6 @@ class HandGraspDetectionNode(Node):
         )
         return detector
 
-    def _init_base_projection(self) -> None:
-        if not self.publish_base_position:
-            return
-
-        try:
-            from moveit.planning import MoveItPy
-
-            calib_file = (
-                Path(get_package_share_directory("macgyvbot"))
-                / "calibration"
-                / "T_gripper2camera.npy"
-            )
-            self.gripper_to_camera = np.load(str(calib_file)).astype(float)
-            self.gripper_to_camera[:3, 3] /= 1000.0
-            self.robot = MoveItPy(node_name="hand_grasp_detection_moveit_py")
-        except Exception as exc:
-            self.robot = None
-            self.gripper_to_camera = None
-            self.get_logger().warn(
-                "Base-frame hand position disabled; "
-                f"MoveIt/calibration init failed: {exc}"
-            )
-
-    def _cam_info_cb(self, msg: CameraInfo) -> None:
-        self.intrinsics = {
-            "fx": msg.k[0],
-            "fy": msg.k[4],
-            "ppx": msg.k[2],
-            "ppy": msg.k[5],
-        }
-        self.camera_frame_id = msg.header.frame_id
-
     def _depth_cb(self, msg: Image) -> None:
         try:
             depth_image = self.bridge.imgmsg_to_cv2(msg, "passthrough")
@@ -231,7 +172,7 @@ class HandGraspDetectionNode(Node):
         depth_info = self._build_depth_info(hand_for_state, tool_roi)
         result = self.grasp_detector.update(hand_for_state, tool_roi, depth_info)
 
-        self._publish_result(result, tool_detection, active_hand)
+        self._publish_result(result, tool_detection, active_hand, hand_infos)
 
         if self.publish_annotated or self.display:
             annotated = frame.copy()
@@ -278,8 +219,9 @@ class HandGraspDetectionNode(Node):
         result: dict,
         tool_detection: Optional[ToolDetection],
         active_hand: Optional[dict],
+        hand_infos: list[dict],
     ) -> None:
-        hand_pixel, position = self._project_hand_position(active_hand)
+        hand_pixel = extract_hand_center_pixel(active_hand, hand_infos)
         payload = {
             "state": result["state"],
             "human_grasped_tool": result["human_grasped_tool"],
@@ -296,52 +238,8 @@ class HandGraspDetectionNode(Node):
             "tool_confidence": tool_detection.confidence if tool_detection else None,
             "tool_roi": tool_detection.roi if tool_detection else None,
             "hand_pixel": hand_pixel,
-            "position": position,
         }
         self.result_pub.publish(String(data=json.dumps(payload, ensure_ascii=False)))
-
-    def _project_hand_position(self, active_hand: Optional[dict]):
-        if active_hand is None:
-            return None, None
-
-        u, v = active_hand["palm_center"]
-        hand_pixel = {
-            "u": int(u),
-            "v": int(v),
-            "source": "palm_center",
-        }
-
-        if self.latest_depth_mm is None or self.intrinsics is None:
-            return hand_pixel, None
-
-        camera_point = pixel_to_camera_point(
-            int(u),
-            int(v),
-            self.latest_depth_mm,
-            self.intrinsics,
-            logger=self.get_logger(),
-            source="hand_pixel",
-        )
-        if camera_point is None:
-            return hand_pixel, None
-
-        if self.robot is not None and self.gripper_to_camera is not None:
-            try:
-                bx, by, bz = transform_point_to_base(
-                    camera_point,
-                    self.robot,
-                    self.gripper_to_camera,
-                )
-                return hand_pixel, {
-                    "x": float(bx),
-                    "y": float(by),
-                    "z": float(bz),
-                    "frame_id": self.position_frame_id,
-                }
-            except Exception as exc:
-                self.get_logger().warn(f"Hand position base transform failed: {exc}")
-
-        return hand_pixel, None
 
     def destroy_node(self) -> bool:
         self.hand_detector.close()

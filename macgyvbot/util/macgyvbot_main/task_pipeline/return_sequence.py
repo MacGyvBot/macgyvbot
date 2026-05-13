@@ -8,10 +8,10 @@ from std_msgs.msg import String
 
 from macgyvbot.config.config import (
     BASE_FRAME,
-    GRASP_ADVANCE_DISTANCE_M,
     HANDOVER_HAND_X_OFFSET_M,
     HANDOVER_HAND_Z_OFFSET_M,
     HAND_GRASP_TIMEOUT_SEC,
+    OBSERVATION_TIMEOUT_SEC,
     RETURN_HOME_DESCENT_START_Z,
     SAFE_Z,
     SEQUENCE_WAIT_POLL_SEC,
@@ -21,6 +21,11 @@ from macgyvbot.util.macgyvbot_main.model_control.force_detection import (
 )
 from macgyvbot.util.macgyvbot_main.model_control.grasp_verifier import (
     GraspVerifier,
+)
+from macgyvbot.util.macgyvbot_main.model_control.handover_targeting import (
+    move_to_observation_pose,
+    move_to_candidate_with_offset,
+    start_async_observation_search,
 )
 from macgyvbot.util.macgyvbot_main.model_control.robot_pose import make_safe_pose
 from macgyvbot.util.macgyvbot_main.model_control.robot_safezone import (
@@ -73,11 +78,12 @@ class ReturnSequenceRunner:
 
             grasp_result = self._wait_for_user_held_tool(requested_tool, log)
             if grasp_result is None:
-                self._fail(
+                self._fail_and_recover(
                     requested_tool,
                     "전방 20cm 위치에서 사용자가 들고 있는 공구를 확인하지 못했습니다.",
                     "user_tool_not_detected",
                     command,
+                    ori,
                     log,
                 )
                 return
@@ -290,88 +296,71 @@ class ReturnSequenceRunner:
         return "unknown"
 
     def _advance_for_return_detection(self, tool_name, command, logger):
-        search_client = getattr(self.state, "handover_search_client", None)
-        if search_client is None:
-            self._fail(
-                tool_name,
-                "반납 위치 검색 클라이언트가 없어 사용자 손/공구 위치를 찾을 수 없습니다.",
-                "return_search_client_missing",
-                command,
-                logger,
-            )
-            return False
-
-        target_x = self.state.home_xyz[0] + GRASP_ADVANCE_DISTANCE_M
-        target_y = self.state.home_xyz[1]
-        target_z = max(self.state.home_xyz[2], SAFE_Z)
-        x, y, z = clamp_to_safe_workspace(target_x, target_y, target_z, logger)
+        ok, start_pose = move_to_observation_pose(self.motion, self.robot, logger)
 
         self._publish_status(
             "moving_return_grasp_pose",
             tool_name,
-            "반납 공구를 감지하기 위해 전방 20cm 위치로 이동합니다.",
+            "반납 공구를 감지하기 위해 관찰 자세로 이동합니다.",
             command,
         )
         logger.info(
-            "반납 1단계: 공구 감지 전 전방 20cm 전진 "
-            f"x={self.state.home_xyz[0]:.3f}->{x:.3f}, y={y:.3f}, z={z:.3f}"
-        )
-        ok = self.motion.plan_and_execute(
-            logger,
-            pose_goal=make_safe_pose(x, y, z, self.state.home_ori, logger),
+            "반납 1단계: 공구 감지 전 관찰 자세 이동 "
+            f"pose=({start_pose.x:.3f},{start_pose.y:.3f},{start_pose.z:.3f})"
         )
         if not ok:
-            self._fail(
+            self._fail_and_recover(
                 tool_name,
                 "반납 공구 감지 전 전방 전진에 실패했습니다.",
                 "return_detection_advance_failed",
                 command,
+                self.state.home_ori,
                 logger,
             )
             return False
 
-        found, hand_x, hand_y, hand_z, frame_id, source = search_client.request_search(
-            x,
-            y,
-            z,
-            self.state.home_ori,
+        future = start_async_observation_search(
+            self.state,
             logger,
+            timeout_sec=OBSERVATION_TIMEOUT_SEC,
         )
-        if not found:
-            self._fail(
+        candidate = future.result()
+        if not candidate.found:
+            self._fail_and_recover(
                 tool_name,
                 "반납받을 사용자 손/공구 위치를 찾지 못했습니다.",
                 "return_search_failed",
                 command,
+                self.state.home_ori,
                 logger,
             )
             return False
 
-        if frame_id not in ("world", BASE_FRAME):
-            self._fail(
+        if candidate.frame_id not in ("world", BASE_FRAME):
+            self._fail_and_recover(
                 tool_name,
-                f"반납 위치 frame이 planning frame이 아닙니다: {frame_id}",
+                f"반납 위치 frame이 planning frame이 아닙니다: {candidate.frame_id}",
                 "return_unsupported_frame",
                 command,
+                self.state.home_ori,
                 logger,
             )
             return False
 
-        receive_x = hand_x + HANDOVER_HAND_X_OFFSET_M
-        receive_y = hand_y
-        receive_z = hand_z + HANDOVER_HAND_Z_OFFSET_M
-        safe_x, safe_y, safe_z = clamp_to_safe_workspace(
-            receive_x,
-            receive_y,
-            receive_z,
+        ok, final_pose, reason = move_to_candidate_with_offset(
+            self.motion,
+            candidate,
+            self.state.home_ori,
             logger,
+            x_offset_m=HANDOVER_HAND_X_OFFSET_M,
+            z_offset_m=HANDOVER_HAND_Z_OFFSET_M,
         )
         logger.info(
             "반납 손/공구 위치로 수령 이동: "
-            f"source={source}, frame={frame_id}, "
-            f"raw=({hand_x:.3f},{hand_y:.3f},{hand_z:.3f}), "
+            f"source={candidate.source}, frame={candidate.frame_id}, "
+            f"raw=({candidate.x:.3f},{candidate.y:.3f},{candidate.z:.3f}), "
             f"offset=({HANDOVER_HAND_X_OFFSET_M:.3f},0.000,{HANDOVER_HAND_Z_OFFSET_M:.3f}), "
-            f"safe=({safe_x:.3f},{safe_y:.3f},{safe_z:.3f})"
+            f"safe=({final_pose.x:.3f},{final_pose.y:.3f},{final_pose.z:.3f})"
         )
         self._publish_status(
             "moving_return_detected_pose",
@@ -379,21 +368,55 @@ class ReturnSequenceRunner:
             "탐색된 사용자 손/공구 위치로 이동합니다.",
             command,
         )
-        ok = self.motion.plan_and_execute(
-            logger,
-            pose_goal=make_safe_pose(safe_x, safe_y, safe_z, self.state.home_ori, logger),
-        )
         if not ok:
-            self._fail(
+            self._fail_and_recover(
                 tool_name,
                 "탐색된 반납 위치로 이동하지 못했습니다.",
-                "return_detected_pose_move_failed",
+                "return_detected_pose_move_failed" if reason == "target_move_failed" else reason,
                 command,
+                self.state.home_ori,
                 logger,
             )
             return False
 
         return True
+
+    def _recover_to_home(self, tool_name, command, ori, logger, reason):
+        self._publish_status(
+            "recovering",
+            tool_name,
+            "실패 후 Home 복귀를 시도합니다.",
+            command,
+            reason=reason,
+        )
+        x, y, z = self.state.home_xyz
+        safe_z = max(z, SAFE_Z)
+        ok = self.motion.plan_and_execute(
+            logger,
+            pose_goal=make_safe_pose(x, y, safe_z, ori, logger),
+        )
+        if ok:
+            self._publish_status(
+                "returned",
+                tool_name,
+                "실패 후 Home으로 복귀했습니다.",
+                command,
+                reason=reason,
+            )
+            return True
+
+        self._publish_status(
+            "failed",
+            tool_name,
+            "실패 후 Home 복귀에도 실패했습니다.",
+            command,
+            reason=f"{reason}_recovery_failed",
+        )
+        return False
+
+    def _fail_and_recover(self, tool_name, message, reason, command, ori, logger):
+        self._fail(tool_name, message, reason, command, logger)
+        self._recover_to_home(tool_name, command, ori, logger, reason=reason)
 
     def _fail(self, tool_name, message, reason, command, logger):
         logger.error(message)

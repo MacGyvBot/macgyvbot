@@ -242,6 +242,16 @@ class SquareHandoverSearchServer:
             return header["frame_id"]
         return ""
 
+    @staticmethod
+    def _has_hand_observation(result):
+        if isinstance(result.get("hand_pixel"), dict):
+            return True
+        if result.get("active_hand_index") is not None:
+            return True
+        if isinstance(result.get("position"), dict):
+            return True
+        return False
+
     def _extract_hand_pose(self, fallback_x, fallback_y, fallback_z, logger):
         result = self.state.last_grasp_result or {}
         logger.info(f"last_grasp_result 원본={result}")
@@ -344,109 +354,55 @@ class SquareHandoverSearchServer:
 
                 all_moves_failed = False
                 visited_count += 1
-                candidate_streak = 0
                 check_start = time.monotonic()
                 while time.monotonic() - check_start < VERTEX_DWELL_SEC:
-                    if self.state.human_grasped_tool:
-                        pose_wait_start = time.monotonic()
-                        while (
-                            rclpy.ok()
-                            and time.monotonic() - pose_wait_start < HAND_POSE_WAIT_AFTER_DETECTION_SEC
-                        ):
-                            (
-                                ok_pose,
-                                hx,
-                                hy,
-                                hz,
-                                hframe,
-                                source,
-                                pose_reason,
-                            ) = self._extract_hand_pose(clamped_x, clamped_y, search_z, logger)
-                            if ok_pose:
-                                logger.info(
-                                    "search vertex 대비 hand pose 차이: "
-                                    f"vertex=({clamped_x:.3f},{clamped_y:.3f},{search_z:.3f}), "
-                                    f"hand=({hx:.3f},{hy:.3f},{hz:.3f}), "
-                                    f"delta=({hx - clamped_x:.3f},{hy - clamped_y:.3f},{hz - search_z:.3f})"
-                                )
-                                elapsed = time.monotonic() - start_time
-                                return (
-                                    True,
-                                    hx,
-                                    hy,
-                                    hz,
-                                    hframe,
-                                    visited_count,
-                                    elapsed,
-                                    "",
-                                    source,
-                                    clamped_x,
-                                    clamped_y,
-                                    search_z,
-                                    True,
-                                )
-                            last_hand_pose_reason = pose_reason
-                            hand_pose_missing_after_detection = True
-                            time.sleep(min(SEQUENCE_WAIT_POLL_SEC, 0.1))
-                        logger.warn(
-                            "손 감지는 되었지만 grace period 내 실제 손 3D 좌표를 확보하지 못했습니다."
+                    last = self.state.last_grasp_result or {}
+                    if not self._has_hand_observation(last):
+                        time.sleep(min(SEQUENCE_WAIT_POLL_SEC, 0.1))
+                        continue
+
+                    (
+                        ok_pose,
+                        hx,
+                        hy,
+                        hz,
+                        hframe,
+                        source,
+                        pose_reason,
+                    ) = self._extract_hand_pose(clamped_x, clamped_y, search_z, logger)
+                    if ok_pose:
+                        logger.info(
+                            "search vertex 대비 hand pose 차이: "
+                            f"vertex=({clamped_x:.3f},{clamped_y:.3f},{search_z:.3f}), "
+                            f"hand=({hx:.3f},{hy:.3f},{hz:.3f}), "
+                            f"delta=({hx - clamped_x:.3f},{hy - clamped_y:.3f},{hz - search_z:.3f})"
+                        )
+                        elapsed = time.monotonic() - start_time
+                        return (
+                            True,
+                            hx,
+                            hy,
+                            hz,
+                            hframe,
+                            visited_count,
+                            elapsed,
+                            "",
+                            source,
+                            clamped_x,
+                            clamped_y,
+                            search_z,
+                            True,
                         )
 
-                    last = self.state.last_grasp_result or {}
-                    if last.get("state") == "GRASP_CANDIDATE":
-                        candidate_streak += 1
-                        now = time.monotonic()
-                        if now - last_candidate_log_time >= 0.7:
-                            logger.info(
-                                "사각형 탐색 후보 감지: "
-                                f"candidate_streak={candidate_streak}, "
-                                f"last_state={last.get('state')}"
-                            )
-                            last_candidate_log_time = now
-                        if candidate_streak >= CANDIDATE_SUCCESS_STREAK:
-                            pose_wait_start = time.monotonic()
-                            while (
-                                rclpy.ok()
-                                and time.monotonic() - pose_wait_start < HAND_POSE_WAIT_AFTER_DETECTION_SEC
-                            ):
-                                (
-                                    ok_pose,
-                                    hx,
-                                    hy,
-                                    hz,
-                                    hframe,
-                                    source,
-                                    pose_reason,
-                                ) = self._extract_hand_pose(clamped_x, clamped_y, search_z, logger)
-                                if ok_pose:
-                                    logger.info(
-                                        "search vertex 대비 hand pose 차이: "
-                                        f"vertex=({clamped_x:.3f},{clamped_y:.3f},{search_z:.3f}), "
-                                        f"hand=({hx:.3f},{hy:.3f},{hz:.3f}), "
-                                        f"delta=({hx - clamped_x:.3f},{hy - clamped_y:.3f},{hz - search_z:.3f})"
-                                    )
-                                    elapsed = time.monotonic() - start_time
-                                    return (
-                                        True,
-                                        hx,
-                                        hy,
-                                        hz,
-                                        hframe,
-                                        visited_count,
-                                        elapsed,
-                                        "",
-                                        source,
-                                        clamped_x,
-                                        clamped_y,
-                                        search_z,
-                                        True,
-                                    )
-                                last_hand_pose_reason = pose_reason
-                                hand_pose_missing_after_detection = True
-                                time.sleep(min(SEQUENCE_WAIT_POLL_SEC, 0.1))
-                            logger.warn(
-                                "GRASP_CANDIDATE 연속 감지는 되었지만 grace period 내 실제 손 3D 좌표를 확보하지 못했습니다."
-                            )
+                    last_hand_pose_reason = pose_reason
+                    hand_pose_missing_after_detection = True
+                    now = time.monotonic()
+                    if now - last_candidate_log_time >= 0.7:
+                        logger.info(
+                            "손 중심 관측은 되었지만 3D 좌표 보강 실패: "
+                            f"reason={pose_reason}"
+                        )
+                        last_candidate_log_time = now
                     time.sleep(min(SEQUENCE_WAIT_POLL_SEC, 0.1))
 
             if attempted_count > 0 and all_moves_failed:

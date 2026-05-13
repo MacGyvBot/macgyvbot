@@ -32,15 +32,24 @@ HAND_GRASP_TOPIC = "/human_grasped_tool"
 HAND_GRASP_IMAGE_TOPIC = "/hand_grasp_detection/annotated_image"
 HAND_GRASP_TIMEOUT_SEC = 20.0
 HANDOVER_SEARCH_TIMEOUT_SEC = 45.0
+OBSERVATION_TIMEOUT_SEC = 20.0
 HAND_POSE_WAIT_AFTER_DETECTION_SEC = 1.5
 ALLOW_SEARCH_VERTEX_FALLBACK_FOR_HANDOVER = False
-HANDOVER_HAND_X_OFFSET_M = -0.05
+HANDOVER_HAND_X_OFFSET_M = -0.00
 HANDOVER_HAND_Z_OFFSET_M = 0.08
 GRASP_VERIFY_TIMEOUT_SEC = 3.0
 GRASP_VERIFY_POLL_SEC = 0.2
 GRASP_VERIFY_STABLE_COUNT = 3
 GRASP_RETRY_LIMIT = 5
 GRASP_ADVANCE_DISTANCE_M = 0.20
+OBSERVATION_JOINTS = {
+    "joint_1": math.radians(0.0),
+    "joint_2": math.radians(-40.0),
+    "joint_3": math.radians(55.0),
+    "joint_4": math.radians(0.0),
+    "joint_5": math.radians(120.0),
+    "joint_6": math.radians(90.0),
+}
 GRIPPER_CLOSED_WIDTH_THRESHOLD_MM = 5.0
 FORCE_TORQUE_TOPIC = "/force_torque_sensor_broadcaster/wrench"
 RETURN_HOME_DESCENT_START_Z = 0.30
