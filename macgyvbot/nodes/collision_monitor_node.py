@@ -11,6 +11,7 @@ import math
 from macgyvbot.config.config import (
     FORCE_TORQUE_TOPIC,
     FORCE_THRES_2_PAUSE,
+    PAUSE_SERVICE_NAME, # 추가됨 - 제대로 된 서비스 명 임포트
 )
 
 class CollisionMonitorNode(Node):
@@ -21,7 +22,7 @@ class CollisionMonitorNode(Node):
         self.declare_parameter('force_torque_topic', FORCE_TORQUE_TOPIC)
 
         # 서비스 이름 기본값 추가
-        self.declare_parameter('pause_service', '/dsr01/motion/move_pause') 
+        self.declare_parameter('pause_service', PAUSE_SERVICE_NAME) 
         self.declare_parameter('pause_force_threshold', FORCE_THRES_2_PAUSE) # N 단위 임계치
         
         force_torque_topic = self.get_parameter('force_torque_topic').value
@@ -89,7 +90,7 @@ class CollisionMonitorNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = CollisionMonitorNode()
-    
+
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
