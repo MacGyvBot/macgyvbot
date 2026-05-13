@@ -62,7 +62,7 @@ class CommandInputNode(Node):
         self.declare_parameter('min_confidence', 0.55)
         self.declare_parameter('use_local_parser', True)
         self.declare_parameter('use_llm_fallback', True)
-        self.declare_parameter('enable_tts', False)
+        self.declare_parameter('enable_tts', True)
         self.declare_parameter('tts_engine', 'auto')
         self.declare_parameter('tts_voice', 'ko')
         self.declare_parameter('tts_rate', 165)

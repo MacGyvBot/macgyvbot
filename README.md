@@ -295,7 +295,7 @@ ollama serve
 
 ### Terminal 5: 음성 명령 통합 노드 실행
 
-로봇/카메라 없이 GUI와 명령 해석만 확인할 때는 통합 노드를 단독 실행합니다. 단독 실행 기본값은 GUI 입력 테스트에 맞춰 `enable_microphone=false`, `use_llm_fallback=true`, `model=gemma3:1b`입니다. 단, `ros2 run`은 launch 설정을 거치지 않으므로 TTS까지 확인하려면 `enable_tts:=true`를 명시합니다.
+로봇/카메라 없이 GUI와 명령 해석만 확인할 때는 통합 노드를 단독 실행합니다. 단독 실행 기본값은 GUI 입력 테스트에 맞춰 `enable_microphone=false`, `use_llm_fallback=true`, `model=gemma3:1b`, `enable_tts=true`입니다. 따라서 아래 명령만 실행해도 GUI와 TTS가 함께 켜집니다.
 
 ```bash
 source /opt/ros/humble/setup.bash
@@ -304,17 +304,18 @@ source ~/ros2_ws/install/setup.bash
 ros2 run macgyvbot command_input_node
 ```
 
-명시적으로 같은 설정을 줄 수도 있습니다.
+TTS를 임시로 끄고 싶을 때만 명시적으로 파라미터를 줍니다.
 
 ```bash
 ros2 run macgyvbot command_input_node --ros-args \
   -p use_gui:=true \
   -p enable_microphone:=false \
   -p use_llm_fallback:=true \
-  -p model:=gemma3:1b
+  -p model:=gemma3:1b \
+  -p enable_tts:=false
 ```
 
-MacGyvBot 답변과 확인 질문, 주요 작업 상태를 음성으로도 듣고 싶다면 TTS를 켭니다. 단독 실행에서는 `enable_tts:=true`, 전체 launch에서는 `use_tts:=true`를 사용합니다.
+MacGyvBot 답변과 확인 질문, 주요 작업 상태를 자연스러운 edge-tts 음성으로 듣고 싶다면 실행컴에 edge-tts와 재생 도구를 설치합니다. 설치되어 있지 않으면 `espeak-ng`를 fallback으로 사용합니다.
 
 ```bash
 python3 -m pip install edge-tts
@@ -325,8 +326,7 @@ ros2 run macgyvbot command_input_node --ros-args \
   -p use_gui:=true \
   -p enable_microphone:=false \
   -p use_llm_fallback:=true \
-  -p model:=gemma3:1b \
-  -p enable_tts:=true
+  -p model:=gemma3:1b
 ```
 
 edge-tts 음성을 명시적으로 사용할 경우:
@@ -334,7 +334,6 @@ edge-tts 음성을 명시적으로 사용할 경우:
 ```bash
 ros2 run macgyvbot command_input_node --ros-args \
   -p use_gui:=true \
-  -p enable_tts:=true \
   -p tts_engine:=edge \
   -p tts_voice:=ko-KR-SunHiNeural \
   -p tts_edge_rate:="+10%" \
@@ -359,7 +358,7 @@ ros2 launch macgyvbot macgyvbot.launch.py
 
 TTS 관련 파라미터:
 
-- `enable_tts`: TTS 사용 여부, 기본값 `false`
+- `enable_tts`: TTS 사용 여부, 기본값 `true`
 - `tts_engine`: 사용할 엔진, 기본값 `auto` (`edge-tts` 우선, 실패 시 `espeak-ng` fallback)
 - `tts_voice`: TTS voice, 기본값 `ko-KR-SunHiNeural`
 - `tts_rate`: `espeak-ng` 읽기 속도, 기본값 `165`
