@@ -80,6 +80,7 @@ NO_WORDS = {
 }
 
 LOCAL_FUZZY_ACCEPT_THRESHOLD = 0.85
+CONFIRMATION_CONFIDENCE_THRESHOLD = 0.70
 
 
 class CommandLlmParser:
@@ -117,13 +118,15 @@ class CommandLlmParser:
         if pending_result is not None:
             return pending_result
 
-        llm_primary_rejected = None
+        llm_rejected_result = None
         if self._parser_mode == 'llm_primary' and self._use_llm_fallback:
             llm_result = self._interpret_with_llm(text, request_label='LLM primary 요청')
             if llm_result is not None:
-                if self._is_final_llm_result(llm_result):
+                if not self._is_rejected_result(llm_result):
                     return llm_result
-                llm_primary_rejected = llm_result
+                llm_rejected_result = llm_result
+
+            self._info('LLM primary가 확정하지 못해 local parser 보조를 시도합니다.')
 
         if self._use_local_parser:
             command = self._parse_locally(text)
@@ -144,8 +147,8 @@ class CommandLlmParser:
                 ],
             }
 
-        if llm_primary_rejected is not None:
-            return llm_primary_rejected
+        if self._parser_mode == 'llm_primary' and llm_rejected_result is not None:
+            return llm_rejected_result
 
         llm_result = self._interpret_with_llm(text, request_label='LLM fallback 요청')
         if llm_result is not None:
@@ -173,16 +176,16 @@ class CommandLlmParser:
             return 'hybrid'
         return parser_mode
 
-    def _is_final_llm_result(self, result):
+    def _is_rejected_result(self, result):
         if result.get('command') is not None:
-            return True
+            return False
 
         feedbacks = result.get('feedbacks', [])
         if not feedbacks:
-            return False
+            return True
 
-        return any(
-            feedback.get('status') != 'rejected'
+        return all(
+            feedback.get('status') == 'rejected'
             for feedback in feedbacks
         )
 
@@ -280,6 +283,28 @@ class CommandLlmParser:
             }
             self._info('local parser가 정지 명령으로 확정했습니다.')
             return command
+
+        previous_tool = self._context.resolve_previous_tool()
+        if action == 'return' and self._has_previous_reference(text):
+            if previous_tool:
+                command = {
+                    'tool_name': previous_tool,
+                    'action': 'return',
+                    'target_mode': 'named',
+                    'raw_text': text,
+                    'match_method': 'local_context',
+                    'match_score': 1.0,
+                    'confidence': 1.0,
+                    'context_used': 'previous_tool',
+                }
+                self._info(
+                    f'local parser가 이전 context 기반 return 명령으로 확정했습니다: '
+                    f'tool={previous_tool}'
+                )
+                return command
+
+            self._info('이전 공구 참조가 있지만 context에 공구가 없어 LLM으로 넘깁니다.')
+            return None
 
         if not tool_name:
             if action == 'return' and self._has_deictic_target(text):
@@ -667,7 +692,17 @@ class CommandLlmParser:
         if context_used != 'none':
             candidate_command['context_used'] = context_used
 
-        if confidence < self._min_confidence or needs_confirmation:
+        requires_confirmation = confidence < self._min_confidence or (
+            needs_confirmation
+            and not self._is_confident_named_command(
+                action,
+                tool_name,
+                target_mode,
+                confidence,
+            )
+        )
+
+        if requires_confirmation:
             self._warn(
                 f'확인이 필요한 LLM 명령입니다: confidence={confidence:.2f}, '
                 f'needs_confirmation={needs_confirmation}'
@@ -801,6 +836,20 @@ class CommandLlmParser:
         )
         if any(token in normalized for token in return_tokens):
             return 'return'
+
+        bring_tokens = (
+            '가져다줘',
+            '가져와',
+            '가져',
+            '갖다줘',
+            '달라',
+            '줘',
+            '주세요',
+            '집어줘',
+        )
+        if any(token in normalized for token in bring_tokens):
+            return 'bring'
+
         return action
 
     @staticmethod
@@ -848,6 +897,15 @@ class CommandLlmParser:
                 '치수',
                 '측정',
             )
+        )
+
+    @staticmethod
+    def _is_confident_named_command(action, tool_name, target_mode, confidence):
+        return (
+            action in ('bring', 'return')
+            and tool_name != 'unknown'
+            and target_mode == 'named'
+            and confidence >= CONFIRMATION_CONFIDENCE_THRESHOLD
         )
 
     @staticmethod

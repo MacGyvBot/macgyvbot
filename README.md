@@ -333,7 +333,7 @@ command_input_node (GUI + STT input)
 명령 해석 모드는 두 가지입니다.
 
 - `parser_mode:=hybrid`: 기본값. 빠른 local parser를 먼저 쓰고 실패하면 LLM fallback을 사용합니다.
-- `parser_mode:=llm_primary`: LLM으로 먼저 의도와 context를 해석하고, 실패하면 local parser로 보조합니다.
+- `parser_mode:=llm_primary`: LLM으로 먼저 의도와 context를 해석하고, LLM이 확정하지 못한 경우에만 local parser가 보조합니다.
 
 최종 데모 전 LLM 중심 해석을 확인하려면 아래처럼 실행합니다.
 
