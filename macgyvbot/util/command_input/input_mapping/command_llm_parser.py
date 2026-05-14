@@ -118,6 +118,19 @@ class CommandLlmParser:
         if pending_result is not None:
             return pending_result
 
+        if self._has_stop_intent(text):
+            return self._accepted_result(
+                {
+                    'tool_name': 'unknown',
+                    'action': 'stop',
+                    'target_mode': 'unknown',
+                    'raw_text': text,
+                    'match_method': 'stop_keyword',
+                    'match_score': 1.0,
+                    'confidence': 1.0,
+                }
+            )
+
         llm_rejected_result = None
         if self._parser_mode == 'llm_primary' and self._use_llm_fallback:
             llm_result = self._interpret_with_llm(text, request_label='LLM primary 요청')
@@ -127,6 +140,10 @@ class CommandLlmParser:
                 llm_rejected_result = llm_result
 
             self._info('LLM primary가 확정하지 못해 local parser 보조를 시도합니다.')
+
+        local_conversation_result = self._parse_local_conversation(text)
+        if local_conversation_result is not None:
+            return local_conversation_result
 
         if self._use_local_parser:
             command = self._parse_locally(text)
@@ -268,8 +285,9 @@ class CommandLlmParser:
         return command
 
     def _parse_locally(self, text):
-        tool_name, match_method, match_score, matched_keyword = find_tool(text)
-        action = find_action(text)
+        effective_text = self._effective_command_text(text)
+        tool_name, match_method, match_score, matched_keyword = find_tool(effective_text)
+        action = find_action(effective_text)
 
         if action == 'stop':
             command = {
@@ -285,6 +303,21 @@ class CommandLlmParser:
             return command
 
         previous_tool = self._context.resolve_previous_tool()
+        previous_command = self._context.resolve_previous_command()
+        if action == 'unknown' and self._has_repeat_reference(text) and previous_command:
+            command = {
+                'tool_name': previous_command.get('tool_name', 'unknown'),
+                'action': previous_command.get('action', 'unknown'),
+                'target_mode': previous_command.get('target_mode', 'unknown'),
+                'raw_text': text,
+                'match_method': 'local_context',
+                'match_score': 1.0,
+                'confidence': 1.0,
+                'context_used': 'previous_command',
+            }
+            self._info('local parser가 이전 명령 반복으로 확정했습니다.')
+            return command
+
         if action == 'return' and self._has_previous_reference(text):
             if previous_tool:
                 command = {
@@ -305,6 +338,23 @@ class CommandLlmParser:
 
             self._info('이전 공구 참조가 있지만 context에 공구가 없어 LLM으로 넘깁니다.')
             return None
+
+        if action == 'bring' and self._has_previous_reference(text) and previous_tool:
+            command = {
+                'tool_name': previous_tool,
+                'action': 'bring',
+                'target_mode': 'named',
+                'raw_text': text,
+                'match_method': 'local_context',
+                'match_score': 1.0,
+                'confidence': 1.0,
+                'context_used': 'previous_tool',
+            }
+            self._info(
+                f'local parser가 이전 context 기반 bring 명령으로 확정했습니다: '
+                f'tool={previous_tool}'
+            )
+            return command
 
         if not tool_name:
             if action == 'return' and self._has_deictic_target(text):
@@ -619,8 +669,9 @@ class CommandLlmParser:
 
     def _validate_command(self, parsed, raw_text):
         tool_name = str(parsed.get('tool_name', 'unknown')).strip()
+        effective_text = self._effective_command_text(raw_text)
         action = self._adjust_action(
-            raw_text,
+            effective_text,
             str(parsed.get('action', 'unknown')).strip(),
         )
         target_mode = str(parsed.get('target_mode', 'unknown')).strip()
@@ -650,6 +701,31 @@ class CommandLlmParser:
             context_used = 'none'
 
         previous_tool = self._context.resolve_previous_tool()
+        previous_command = self._context.resolve_previous_command()
+
+        if action == 'unknown' and self._has_repeat_reference(raw_text) and previous_command:
+            tool_name = previous_command.get('tool_name', tool_name)
+            action = previous_command.get('action', action)
+            target_mode = previous_command.get('target_mode', 'named')
+            context_used = 'previous_command'
+            confidence = max(confidence, self._min_confidence + 0.10)
+
+        if (
+            self._has_previous_reference(raw_text)
+            and previous_tool
+            and action in ('bring', 'return')
+        ):
+            tool_name = previous_tool
+            target_mode = 'named'
+            context_used = 'previous_tool'
+            confidence = max(confidence, self._min_confidence + 0.10)
+
+        deterministic_tool = self._resolve_deterministic_tool(effective_text)
+        if deterministic_tool:
+            tool_name = deterministic_tool
+            target_mode = 'named'
+            confidence = max(confidence, self._min_confidence + 0.10)
+
         if (
             action == 'return'
             and self._has_previous_reference(raw_text)
@@ -660,6 +736,15 @@ class CommandLlmParser:
             target_mode = 'unknown'
             context_used = 'none'
             confidence = min(confidence, self._min_confidence - 0.05)
+
+        if (
+            self._has_deictic_target(effective_text)
+            and not self._has_explicit_tool_clue(effective_text)
+            and not self._has_previous_reference(raw_text)
+        ):
+            tool_name = 'unknown'
+            target_mode = 'deictic'
+            confidence = max(confidence, self._min_confidence + 0.05)
 
         if (
             action == 'return'
@@ -674,7 +759,7 @@ class CommandLlmParser:
 
         confidence = max(0.0, min(1.0, confidence))
         tool_name, target_mode, confidence = self._adjust_ambiguous_command(
-            raw_text,
+            effective_text,
             tool_name,
             target_mode,
             confidence,
@@ -692,11 +777,47 @@ class CommandLlmParser:
         if context_used != 'none':
             candidate_command['context_used'] = context_used
 
+        if self._contains_unsupported_tool(effective_text):
+            return {
+                'command': None,
+                'feedback': self._feedback(
+                    status='rejected',
+                    raw_text=raw_text,
+                    reason='unsupported_tool',
+                    message=(
+                        '현재 사용할 수 있는 공구는 드라이버, 플라이어, 망치, 줄자입니다. '
+                        '그중 하나로 다시 말해주세요.'
+                    ),
+                    command=candidate_command,
+                ),
+            }
+
+        if action == 'bring' and target_mode == 'deictic':
+            self._warn('deictic bring 명령은 지원하지 않아 재입력을 요청합니다.')
+            return {
+                'command': None,
+                'feedback': self._feedback(
+                    status='rejected',
+                    raw_text=raw_text,
+                    reason='deictic_bring_not_supported',
+                    message=(
+                        '가져오기 명령은 공구 이름이 필요합니다. '
+                        '어떤 공구를 가져올지 말해주세요.'
+                    ),
+                    command=candidate_command,
+                ),
+            }
+
         requires_confirmation = confidence < self._min_confidence or (
             needs_confirmation
             and not self._is_confident_named_command(
                 action,
                 tool_name,
+                target_mode,
+                confidence,
+            )
+            and not self._is_safe_deictic_return(
+                action,
                 target_mode,
                 confidence,
             )
@@ -766,22 +887,6 @@ class CommandLlmParser:
                 ),
             }
 
-        if action == 'bring' and target_mode == 'deictic':
-            self._warn('deictic bring 명령은 지원하지 않아 재입력을 요청합니다.')
-            return {
-                'command': None,
-                'feedback': self._feedback(
-                    status='rejected',
-                    raw_text=raw_text,
-                    reason='deictic_bring_not_supported',
-                    message=(
-                        '가져오기 명령은 공구 이름이 필요합니다. '
-                        '어떤 공구를 가져올지 말해주세요.'
-                    ),
-                    command=candidate_command,
-                ),
-            }
-
         if (
             action in ('bring', 'return')
             and tool_name == 'unknown'
@@ -803,6 +908,43 @@ class CommandLlmParser:
             }
 
         return {'command': candidate_command, 'feedback': None}
+
+    def _parse_local_conversation(self, text):
+        normalized = self._normalize_answer(text)
+
+        if any(
+            token in normalized
+            for token in ('지금뭐', '뭐하는중', '어디까지', '현재상태', '상태알려')
+        ):
+            return {
+                'command': None,
+                'feedbacks': [
+                    self._feedback(
+                        status='assistant_response',
+                        raw_text=text,
+                        reason='status_query',
+                        message=self._context.robot_status_message(),
+                    )
+                ],
+            }
+
+        if any(
+            token in normalized
+            for token in ('고마워', '고맙', '고생했어', '수고했어', '안녕', '알겠어')
+        ):
+            return {
+                'command': None,
+                'feedbacks': [
+                    self._feedback(
+                        status='assistant_response',
+                        raw_text=text,
+                        reason='smalltalk',
+                        message='네, 필요한 공구가 있으면 언제든 말해주세요.',
+                    )
+                ],
+            }
+
+        return None
 
     def _adjust_action(self, raw_text, action):
         normalized = self._normalize_answer(raw_text)
@@ -864,14 +1006,28 @@ class CommandLlmParser:
             for token in (
                 '아까',
                 '방금',
+                '좀전',
                 '전에',
                 '이전에',
+                '같은거',
                 '가져온거',
                 '가져왔던거',
                 '준거',
                 '줬던거',
             )
         )
+
+    def _has_repeat_reference(self, raw_text):
+        normalized = self._normalize_answer(raw_text)
+        has_previous = any(
+            token in normalized
+            for token in ('아까', '방금', '좀전', '전에', '이전', '같은거')
+        )
+        has_repeat = any(
+            token in normalized
+            for token in ('다시해', '다시', '또', '한번더', '하나더', '반복')
+        )
+        return has_previous and has_repeat
 
     def _has_explicit_tool_clue(self, raw_text):
         normalized = self._normalize_answer(raw_text)
@@ -909,6 +1065,14 @@ class CommandLlmParser:
         )
 
     @staticmethod
+    def _is_safe_deictic_return(action, target_mode, confidence):
+        return (
+            action == 'return'
+            and target_mode == 'deictic'
+            and confidence >= CONFIRMATION_CONFIDENCE_THRESHOLD
+        )
+
+    @staticmethod
     def _as_bool(value):
         if isinstance(value, bool):
             return value
@@ -932,7 +1096,7 @@ class CommandLlmParser:
         )
         has_impact_expression = any(
             word in normalized
-            for word in ('박', '두드리', '치', '때리', '망치')
+            for word in ('박', '두드리', '치는거', '쳐', '때리', '망치')
         )
         has_measure_expression = any(
             word in normalized
@@ -1017,6 +1181,27 @@ class CommandLlmParser:
         if has_turn_expression:
             return 'screwdriver'
         return None
+
+    def _effective_command_text(self, raw_text):
+        normalized = raw_text or ''
+        if '말고' in normalized:
+            return normalized.rsplit('말고', 1)[-1].strip()
+        return normalized
+
+    def _contains_unsupported_tool(self, raw_text):
+        normalized = self._normalize_answer(raw_text)
+        return any(
+            token in normalized
+            for token in ('드릴', '렌치', '스패너', '스페너')
+        )
+
+    def _resolve_deterministic_tool(self, raw_text):
+        tool_name, match_method, match_score, _ = find_tool(raw_text)
+        if match_method == 'alias':
+            return tool_name
+        if match_method == 'fuzzy' and match_score >= LOCAL_FUZZY_ACCEPT_THRESHOLD:
+            return tool_name
+        return ''
 
     def _info(self, message):
         if self._logger is not None:

@@ -63,7 +63,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "parser_mode",
-                default_value="hybrid",
+                default_value="llm_primary",
                 description="Command parser mode: hybrid or llm_primary",
             ),
             DeclareLaunchArgument(

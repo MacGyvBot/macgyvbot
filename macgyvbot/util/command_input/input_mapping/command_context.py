@@ -66,6 +66,11 @@ class CommandContext:
     def resolve_previous_tool(self):
         return self.last_successful_tool or self.last_tool or ''
 
+    def resolve_previous_command(self):
+        if self._recent_commands:
+            return dict(self._recent_commands[-1])
+        return {}
+
     def robot_status_message(self):
         if self.current_robot_message:
             return self.current_robot_message

@@ -1,7 +1,7 @@
 """Unified command-input node for macgyvbot.
 
 - 마이크 STT와 GUI 입력을 하나의 채팅 흐름으로 수집한다.
-- 입력 텍스트를 local parser -> LLM fallback 순서로 해석한다.
+- 입력 텍스트를 LLM 중심으로 해석하고 local parser는 최후 보조로 사용한다.
 - 결과를 `/tool_command`, `/command_feedback`로 발행한다.
 """
 
@@ -61,7 +61,7 @@ class CommandInputNode(Node):
         self.declare_parameter('min_confidence', 0.55)
         self.declare_parameter('use_local_parser', True)
         self.declare_parameter('use_llm_fallback', True)
-        self.declare_parameter('parser_mode', 'hybrid')
+        self.declare_parameter('parser_mode', 'llm_primary')
 
         self._use_gui = bool(self.get_parameter('use_gui').value)
         self._enable_microphone = bool(self.get_parameter('enable_microphone').value)
