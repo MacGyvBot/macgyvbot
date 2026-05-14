@@ -275,7 +275,7 @@ ollama serve
 
 ### Terminal 5: 음성 명령 통합 노드 실행
 
-로봇/카메라 없이 GUI와 명령 해석만 확인할 때는 통합 노드를 단독 실행합니다. 단독 실행 기본값은 GUI 입력 테스트에 맞춰 `enable_microphone=false`, `use_llm_fallback=true`, `model=gemma3:1b`입니다.
+로봇/카메라 없이 GUI와 명령 해석만 확인할 때는 통합 노드를 단독 실행합니다. 단독 실행 기본값은 GUI 입력 테스트에 맞춰 `enable_microphone=false`, `use_llm_fallback=true`, `model=gemma3:1b`, `parser_mode=hybrid`입니다.
 
 ```bash
 source /opt/ros/humble/setup.bash
@@ -291,7 +291,8 @@ ros2 run macgyvbot command_input_node --ros-args \
   -p use_gui:=true \
   -p enable_microphone:=false \
   -p use_llm_fallback:=true \
-  -p model:=gemma3:1b
+  -p model:=gemma3:1b \
+  -p parser_mode:=hybrid
 ```
 
 마이크 STT까지 단독으로 확인하려면 `enable_microphone:=true`로 실행합니다.
@@ -300,7 +301,7 @@ ros2 run macgyvbot command_input_node --ros-args \
 ros2 run macgyvbot command_input_node --ros-args -p enable_microphone:=true
 ```
 
-통합 노드는 GUI 채팅 입력과 선택적 마이크 STT를 처리하며, `/tool_command`, `/command_feedback`을 발행합니다. 로봇 실행 상태는 `/robot_task_status`로 GUI에 돌아옵니다.
+통합 노드는 GUI 채팅 입력과 선택적 마이크 STT를 처리하며, `/tool_command`, `/command_feedback`을 발행합니다. 로봇 실행 상태는 `/robot_task_status`로 GUI에 돌아옵니다. 명령 해석기는 최근 입력과 최근 성공 작업을 메모리에 짧게 보관해서 “아까 가져온 거 정리해”, “지금 뭐 하는 중이야?” 같은 문장을 처리합니다. 이 context는 파일로 저장하지 않으며 노드 재시작 시 초기화됩니다.
 
 GUI 실행에 PyQt5가 필요합니다.
 
@@ -314,6 +315,8 @@ sudo apt install python3-pyqt5
 You > 드라이버 가져다줘
 You > 그 조이는 거 가져와
 You > 망치 줘
+You > 아까 가져온 거 정리해
+You > 지금 뭐 하는 중이야?
 ```
 
 흐름:
@@ -325,6 +328,18 @@ command_input_node (GUI + STT input)
   -> /tool_command
   -> macgyvbot
   -> /robot_task_status
+```
+
+명령 해석 모드는 두 가지입니다.
+
+- `parser_mode:=hybrid`: 기본값. 빠른 local parser를 먼저 쓰고 실패하면 LLM fallback을 사용합니다.
+- `parser_mode:=llm_primary`: LLM으로 먼저 의도와 context를 해석하고, 실패하면 local parser로 보조합니다.
+
+최종 데모 전 LLM 중심 해석을 확인하려면 아래처럼 실행합니다.
+
+```bash
+ros2 run macgyvbot command_input_node --ros-args \
+  -p parser_mode:=llm_primary
 ```
 
 전체 로봇 launch에서 마이크 STT 없이 키보드 입력만 테스트하려면 `use_stt:=false`로 실행합니다.
@@ -378,9 +393,10 @@ source install/setup.bash
 ```bash
 ros2 param get /command_input_node use_llm_fallback
 ros2 param get /command_input_node model
+ros2 param get /command_input_node parser_mode
 ```
 
-기대값은 `True`, `gemma3:1b`입니다.
+기대값은 `True`, `gemma3:1b`, `hybrid`입니다.
 
 ## 수동 대상 공구 요청
 
@@ -390,7 +406,7 @@ ros2 param get /command_input_node model
 ros2 topic pub --once /target_label std_msgs/msg/String "{data: screwdriver}"
 ```
 
-사용 가능한 공구 label은 학습한 YOLO 모델의 class 이름과 같아야 합니다. 현재 명령 파서는 `drill`, `hammer`, `pliers`, `screwdriver`, `tape_measure`, `wrench`를 기준으로 합니다.
+사용 가능한 공구 label은 학습한 YOLO 모델의 class 이름과 같아야 합니다. 현재 명령 파서는 수업 데모 범위에 맞춰 `hammer`, `pliers`, `screwdriver`, `tape_measure` 네 가지 공구를 기준으로 합니다.
 
 ## 음성 명령 입력만 테스트
 

@@ -61,6 +61,7 @@ class CommandInputNode(Node):
         self.declare_parameter('min_confidence', 0.55)
         self.declare_parameter('use_local_parser', True)
         self.declare_parameter('use_llm_fallback', True)
+        self.declare_parameter('parser_mode', 'hybrid')
 
         self._use_gui = bool(self.get_parameter('use_gui').value)
         self._enable_microphone = bool(self.get_parameter('enable_microphone').value)
@@ -127,6 +128,7 @@ class CommandInputNode(Node):
             min_confidence=float(self.get_parameter('min_confidence').value),
             use_local_parser=bool(self.get_parameter('use_local_parser').value),
             use_llm_fallback=bool(self.get_parameter('use_llm_fallback').value),
+            parser_mode=self.get_parameter('parser_mode').value,
             logger=self._log_parser,
         )
 
@@ -322,6 +324,11 @@ class CommandInputNode(Node):
             self._set_status('명령 취소')
             return
 
+        if status == 'assistant_response':
+            self._append_bot(message or '네, 필요한 공구가 있으면 말해주세요.')
+            self._set_status('대화 응답')
+            return
+
         if status == 'rejected':
             self._append_bot(self._build_rejected_message(reason, message))
             self._set_status('재입력 필요')
@@ -340,6 +347,9 @@ class CommandInputNode(Node):
         except json.JSONDecodeError:
             self._append_system(f'robot: {status_text}')
             return
+
+        if hasattr(self._parser, 'update_robot_status'):
+            self._parser.update_robot_status(status)
 
         state = status.get('status', status.get('state', 'unknown'))
         tool_name = status.get(
@@ -409,13 +419,13 @@ class CommandInputNode(Node):
         if reason == 'llm_failed':
             return (
                 '문장을 끝까지 이해하지 못했습니다. '
-                '드라이버, 드릴, 플라이어, 망치, 렌치, 줄자 중 어떤 공구인지 '
+                '드라이버, 플라이어, 망치, 줄자 중 어떤 공구인지 '
                 '조금 더 구체적으로 말해주세요.'
             )
         if reason == 'unknown_tool':
             return (
                 '어떤 공구인지 확실하지 않습니다. '
-                '드라이버, 드릴, 플라이어, 망치, 렌치, 줄자 중에서 다시 말해주세요.'
+                '드라이버, 플라이어, 망치, 줄자 중에서 다시 말해주세요.'
             )
         if reason == 'unknown_action':
             return (

@@ -5,19 +5,27 @@ import re
 from urllib import error, request
 
 from macgyvbot.util.command_input.input_mapping.command_hard_parser import (
+    STOP_KEYWORDS,
     find_action,
     find_tool,
+    normalize_text,
 )
+from macgyvbot.util.command_input.input_mapping.command_context import CommandContext
 
 
 ALLOWED_TOOLS = {
     'screwdriver': '드라이버. 나사를 조이거나 푸는 공구.',
-    'drill': '드릴. 구멍을 뚫거나 전동으로 나사를 조이는 공구.',
     'pliers': '플라이어 또는 펜치. 물체를 집거나 잡는 공구.',
     'hammer': '망치. 못을 박거나 두드리는 공구.',
-    'wrench': '렌치 또는 스패너. 볼트와 너트를 조이거나 푸는 공구.',
     'tape_measure': '줄자. 길이나 치수를 재는 공구.',
     'unknown': '공구를 확정할 수 없음.',
+}
+
+ALLOWED_INTENTS = {
+    'command': '로봇에게 공구 작업을 요청함.',
+    'status_query': '현재 로봇 작업 상태를 물어봄.',
+    'smalltalk': '감사, 인사 등 로봇 작업이 아닌 짧은 대화.',
+    'unknown': '의도를 확정할 수 없음.',
 }
 
 ALLOWED_ACTIONS = {
@@ -83,6 +91,8 @@ class CommandLlmParser:
         min_confidence,
         use_local_parser,
         use_llm_fallback,
+        parser_mode='hybrid',
+        context=None,
         logger=None,
     ):
         self._ollama_url = ollama_url
@@ -93,33 +103,32 @@ class CommandLlmParser:
         self._use_llm_fallback = bool(use_llm_fallback)
         self._pending_command = None
         self._logger = logger
+        self._parser_mode = self._normalize_parser_mode(parser_mode)
+        self._context = context if context is not None else CommandContext()
 
     def interpret(self, text):
         text = (text or '').strip()
         if not text:
             return {'command': None, 'feedbacks': []}
 
-        feedbacks = []
+        self._context.record_user_input(text)
 
         pending_result = self._handle_pending_confirmation(text)
         if pending_result is not None:
             return pending_result
 
+        llm_primary_rejected = None
+        if self._parser_mode == 'llm_primary' and self._use_llm_fallback:
+            llm_result = self._interpret_with_llm(text, request_label='LLM primary 요청')
+            if llm_result is not None:
+                if self._is_final_llm_result(llm_result):
+                    return llm_result
+                llm_primary_rejected = llm_result
+
         if self._use_local_parser:
             command = self._parse_locally(text)
             if command is not None:
-                return {
-                    'command': self._mark_accepted(command),
-                    'feedbacks': [
-                        self._feedback(
-                            status='accepted',
-                            raw_text=command.get('raw_text', ''),
-                            reason='command_accepted',
-                            message=self._build_accepted_message(command),
-                            command=command,
-                        )
-                    ],
-                }
+                return self._accepted_result(command)
 
         if not self._use_llm_fallback:
             self._warn('local parser 실패, LLM fallback이 꺼져 있어 무시합니다.')
@@ -135,25 +144,54 @@ class CommandLlmParser:
                 ],
             }
 
-        self._info(f'LLM fallback 요청: "{text}"')
-        parsed = self._parse_with_llm(text)
-        if parsed is None:
-            return {
-                'command': None,
-                'feedbacks': [
-                    self._feedback(
-                        status='rejected',
-                        raw_text=text,
-                        reason='llm_failed',
-                        message='자연어 해석에 실패했습니다. 다시 말해주세요.',
-                    )
-                ],
-            }
+        if llm_primary_rejected is not None:
+            return llm_primary_rejected
 
-        validation = self._validate_command(parsed, text)
-        if validation['command'] is not None:
-            accepted_command = self._mark_accepted(validation['command'])
-            feedbacks.append(
+        llm_result = self._interpret_with_llm(text, request_label='LLM fallback 요청')
+        if llm_result is not None:
+            return llm_result
+
+        return {
+            'command': None,
+            'feedbacks': [
+                self._feedback(
+                    status='rejected',
+                    raw_text=text,
+                    reason='llm_failed',
+                    message='자연어 해석에 실패했습니다. 다시 말해주세요.',
+                )
+            ],
+        }
+
+    def update_robot_status(self, status):
+        self._context.update_robot_status(status)
+
+    def _normalize_parser_mode(self, parser_mode):
+        parser_mode = str(parser_mode or 'hybrid').strip().lower()
+        if parser_mode not in ('hybrid', 'llm_primary'):
+            self._warn(f'알 수 없는 parser_mode={parser_mode}, hybrid로 실행합니다.')
+            return 'hybrid'
+        return parser_mode
+
+    def _is_final_llm_result(self, result):
+        if result.get('command') is not None:
+            return True
+
+        feedbacks = result.get('feedbacks', [])
+        if not feedbacks:
+            return False
+
+        return any(
+            feedback.get('status') != 'rejected'
+            for feedback in feedbacks
+        )
+
+    def _accepted_result(self, command):
+        accepted_command = self._mark_accepted(command)
+        self._context.record_accepted_command(accepted_command)
+        return {
+            'command': accepted_command,
+            'feedbacks': [
                 self._feedback(
                     status='accepted',
                     raw_text=accepted_command.get('raw_text', ''),
@@ -161,13 +199,66 @@ class CommandLlmParser:
                     message=self._build_accepted_message(accepted_command),
                     command=accepted_command,
                 )
-            )
-            return {'command': accepted_command, 'feedbacks': feedbacks}
+            ],
+        }
 
+    def _interpret_with_llm(self, text, request_label):
+        self._info(f'{request_label}: "{text}"')
+        parsed = self._parse_with_llm(text)
+        if parsed is None:
+            return None
+
+        conversation_result = self._handle_conversation_intent(parsed, text)
+        if conversation_result is not None:
+            return conversation_result
+
+        validation = self._validate_command(parsed, text)
+        if validation['command'] is not None:
+            return self._accepted_result(validation['command'])
+
+        feedbacks = []
         if validation.get('feedback') is not None:
             feedbacks.append(validation['feedback'])
 
         return {'command': None, 'feedbacks': feedbacks}
+
+    def _handle_conversation_intent(self, parsed, raw_text):
+        intent = str(parsed.get('intent', 'command')).strip()
+        if intent not in ALLOWED_INTENTS:
+            intent = 'command'
+
+        if intent == 'command':
+            return None
+
+        if intent == 'status_query':
+            message = self._context.robot_status_message()
+            return {
+                'command': None,
+                'feedbacks': [
+                    self._feedback(
+                        status='assistant_response',
+                        raw_text=raw_text,
+                        reason='status_query',
+                        message=message,
+                    )
+                ],
+            }
+
+        if intent == 'smalltalk':
+            message = parsed.get('assistant_message') or '네, 필요한 공구가 있으면 바로 말해주세요.'
+            return {
+                'command': None,
+                'feedbacks': [
+                    self._feedback(
+                        status='assistant_response',
+                        raw_text=raw_text,
+                        reason='smalltalk',
+                        message=message,
+                    )
+                ],
+            }
+
+        return None
 
     def _mark_accepted(self, command):
         command['status'] = 'accepted'
@@ -176,6 +267,19 @@ class CommandLlmParser:
     def _parse_locally(self, text):
         tool_name, match_method, match_score, matched_keyword = find_tool(text)
         action = find_action(text)
+
+        if action == 'stop':
+            command = {
+                'tool_name': 'unknown',
+                'action': 'stop',
+                'target_mode': 'unknown',
+                'raw_text': text,
+                'match_method': 'stop_keyword',
+                'match_score': 1.0,
+                'confidence': 1.0,
+            }
+            self._info('local parser가 정지 명령으로 확정했습니다.')
+            return command
 
         if not tool_name:
             if action == 'return' and self._has_deictic_target(text):
@@ -202,6 +306,10 @@ class CommandLlmParser:
                 f'local fuzzy parser 결과가 낮아 LLM fallback으로 넘깁니다: '
                 f'tool={tool_name}, keyword={matched_keyword}, score={match_score:.2f}'
             )
+            return None
+
+        if action == 'unknown':
+            self._info('local parser가 행동을 확정하지 못해 LLM으로 넘깁니다.')
             return None
 
         command = {
@@ -236,19 +344,7 @@ class CommandLlmParser:
             command['raw_text'] = command.get('raw_text', '')
             command['confirmed_by'] = text
             self._pending_command = None
-            accepted_command = self._mark_accepted(command)
-            return {
-                'command': accepted_command,
-                'feedbacks': [
-                    self._feedback(
-                        status='accepted',
-                        raw_text=accepted_command.get('raw_text', ''),
-                        reason='command_accepted',
-                        message=self._build_accepted_message(accepted_command),
-                        command=accepted_command,
-                    )
-                ],
-            }
+            return self._accepted_result(command)
 
         if self._is_no(text):
             command = self._pending_command
@@ -375,16 +471,25 @@ class CommandLlmParser:
         return self._extract_json(response_text)
 
     def _build_prompt(self, text):
+        context_summary = self._context.prompt_summary()
         return f"""
 너는 ROS2 로봇팔 프로젝트 macgyvbot의 자연어 명령 해석기다.
-사용자 문장을 허용된 JSON 명령 하나로만 변환한다.
+사용자 문장을 허용된 JSON 하나로만 변환한다.
+로봇 작업 명령이 아닌 짧은 대화와 상태 질문은 명령으로 바꾸지 않는다.
+
+현재 대화/작업 맥락:
+{context_summary}
+
+허용 intent:
+- command: {ALLOWED_INTENTS['command']}
+- status_query: {ALLOWED_INTENTS['status_query']}
+- smalltalk: {ALLOWED_INTENTS['smalltalk']}
+- unknown: {ALLOWED_INTENTS['unknown']}
 
 허용 tool_name:
 - screwdriver: {ALLOWED_TOOLS['screwdriver']}
-- drill: {ALLOWED_TOOLS['drill']}
 - pliers: {ALLOWED_TOOLS['pliers']}
 - hammer: {ALLOWED_TOOLS['hammer']}
-- wrench: {ALLOWED_TOOLS['wrench']}
 - tape_measure: {ALLOWED_TOOLS['tape_measure']}
 - unknown: {ALLOWED_TOOLS['unknown']}
 
@@ -403,51 +508,68 @@ class CommandLlmParser:
 규칙:
 - 반드시 JSON만 출력한다.
 - 다른 설명 문장을 출력하지 않는다.
+- intent는 command, status_query, smalltalk, unknown 중 하나다.
 - tool_name은 허용 목록 중 하나만 사용한다.
 - action은 허용 목록 중 하나만 사용한다.
 - target_mode는 허용 목록 중 하나만 사용한다.
 - confidence는 0.0부터 1.0 사이 숫자다.
+- needs_confirmation은 true 또는 false다.
+- context_used는 none, previous_tool, robot_status 중 하나다.
 - "드라이버", "나사 돌리는 거", "나사 조이는 거", "돌려서 쓰는 거"는 screwdriver에 가깝다.
-- "구멍 뚫는 거", "전동 드릴", "드릴"은 drill에 가깝다.
 - "못 박는 거", "두드리는 거", "치는 거", "때리는 거"는 hammer에 가깝다.
-- "볼트 조이는 거", "너트 푸는 거", "스패너 같은 거"는 wrench에 가깝다.
 - "길이 재는 거", "치수 재는 거"는 tape_measure에 가깝다.
 - "집는 거", "잡는 거", "펜치 같은 거"는 pliers에 가깝다.
+- 드릴, 렌치, 스패너는 현재 프로젝트 대상 공구가 아니므로 tool_name unknown으로 둔다.
 - "나사 돌리는 거", "못 두드리는 거"처럼 기능 표현이 있으면 target_mode는 named다.
 - "이거", "그거", "저거"처럼 공구명이나 기능 표현이 없는 지시어는 target_mode를 deictic으로 둔다.
 - deictic은 return action에서만 허용한다. deictic bring은 tool_name을 추측하지 말고 unknown으로 둔다.
+- "아까 가져온 거", "방금 가져온 거", "전에 준 거"처럼 이전 공구를 가리키면 현재 맥락의 최근 참조 가능한 공구를 tool_name으로 쓰고 context_used를 previous_tool로 둔다.
+- 최근 참조 가능한 공구가 없으면 이전 공구를 추측하지 말고 tool_name unknown으로 둔다.
 - "정리해", "가져다놔", "가져가", "제자리에 둬", "서랍에 넣어", "반납해"는 return action이다.
+- "지금 뭐해", "어디까지 했어", "현재 상태 알려줘"는 status_query intent다.
+- "고마워", "안녕", "알겠어" 같은 대화는 smalltalk intent다.
+- status_query와 smalltalk는 tool_name unknown, action unknown, target_mode unknown으로 둔다.
+- status_query와 smalltalk는 assistant_message에 사용자가 볼 짧은 한국어 응답을 넣는다.
+- "멈춰", "정지", "중지", "중단", "스탑", "stop", "pause"처럼 명확한 정지 표현만 stop action이다.
+- 이해하지 못한 문장을 stop으로 추측하지 말고 action unknown으로 둔다.
 
 예시:
 입력: 드라이버 가져다줘
-출력: {{"tool_name":"screwdriver","action":"bring","target_mode":"named","confidence":0.95}}
+출력: {{"intent":"command","tool_name":"screwdriver","action":"bring","target_mode":"named","confidence":0.95,"needs_confirmation":false,"context_used":"none"}}
 
 입력: 그 조이는 거 가져와
-출력: {{"tool_name":"screwdriver","action":"bring","target_mode":"named","confidence":0.80}}
+출력: {{"intent":"command","tool_name":"screwdriver","action":"bring","target_mode":"named","confidence":0.80,"needs_confirmation":false,"context_used":"none"}}
 
 입력: 그거 가져와
-출력: {{"tool_name":"unknown","action":"bring","target_mode":"deictic","confidence":0.70}}
+출력: {{"intent":"command","tool_name":"unknown","action":"bring","target_mode":"deictic","confidence":0.70,"needs_confirmation":true,"context_used":"none"}}
 
 입력: 이거 정리해
-출력: {{"tool_name":"unknown","action":"return","target_mode":"deictic","confidence":0.88}}
+출력: {{"intent":"command","tool_name":"unknown","action":"return","target_mode":"deictic","confidence":0.88,"needs_confirmation":false,"context_used":"none"}}
+
+입력: 아까 가져온 거 정리해
+조건: 현재 맥락의 최근 참조 가능한 공구가 screwdriver인 경우
+출력: {{"intent":"command","tool_name":"screwdriver","action":"return","target_mode":"named","confidence":0.86,"needs_confirmation":false,"context_used":"previous_tool"}}
 
 입력: 나사 돌리는 거 정리해
-출력: {{"tool_name":"screwdriver","action":"return","target_mode":"named","confidence":0.88}}
+출력: {{"intent":"command","tool_name":"screwdriver","action":"return","target_mode":"named","confidence":0.88,"needs_confirmation":false,"context_used":"none"}}
 
 입력: 못 두드리는 거 정리해
-출력: {{"tool_name":"hammer","action":"return","target_mode":"named","confidence":0.88}}
+출력: {{"intent":"command","tool_name":"hammer","action":"return","target_mode":"named","confidence":0.88,"needs_confirmation":false,"context_used":"none"}}
 
 입력: 드라이버 가져다놔
-출력: {{"tool_name":"screwdriver","action":"return","target_mode":"named","confidence":0.92}}
+출력: {{"intent":"command","tool_name":"screwdriver","action":"return","target_mode":"named","confidence":0.92,"needs_confirmation":false,"context_used":"none"}}
 
 입력: 길이 재는 거 줘
-출력: {{"tool_name":"tape_measure","action":"bring","target_mode":"named","confidence":0.82}}
-
-입력: 볼트 조이는 거 가져와
-출력: {{"tool_name":"wrench","action":"bring","target_mode":"named","confidence":0.83}}
+출력: {{"intent":"command","tool_name":"tape_measure","action":"bring","target_mode":"named","confidence":0.82,"needs_confirmation":false,"context_used":"none"}}
 
 입력: 멈춰
-출력: {{"tool_name":"unknown","action":"stop","target_mode":"unknown","confidence":0.90}}
+출력: {{"intent":"command","tool_name":"unknown","action":"stop","target_mode":"unknown","confidence":0.90,"needs_confirmation":false,"context_used":"none"}}
+
+입력: 지금 뭐 하는 중이야?
+출력: {{"intent":"status_query","tool_name":"unknown","action":"unknown","target_mode":"unknown","confidence":0.90,"needs_confirmation":false,"context_used":"robot_status","assistant_message":"현재 로봇 상태를 확인해드릴게요."}}
+
+입력: 고마워
+출력: {{"intent":"smalltalk","tool_name":"unknown","action":"unknown","target_mode":"unknown","confidence":0.90,"needs_confirmation":false,"context_used":"none","assistant_message":"네, 필요한 공구가 있으면 언제든 말해주세요."}}
 
 입력: {text}
 출력:
@@ -477,6 +599,10 @@ class CommandLlmParser:
             str(parsed.get('action', 'unknown')).strip(),
         )
         target_mode = str(parsed.get('target_mode', 'unknown')).strip()
+        context_used = str(parsed.get('context_used', 'none')).strip()
+        needs_confirmation = self._as_bool(
+            parsed.get('needs_confirmation', False)
+        )
 
         try:
             confidence = float(parsed.get('confidence', 0.0))
@@ -495,6 +621,32 @@ class CommandLlmParser:
             self._warn(f'허용되지 않은 target_mode: {target_mode}')
             target_mode = 'unknown'
 
+        if context_used not in ('none', 'previous_tool', 'robot_status'):
+            context_used = 'none'
+
+        previous_tool = self._context.resolve_previous_tool()
+        if (
+            action == 'return'
+            and self._has_previous_reference(raw_text)
+            and not previous_tool
+            and not self._has_explicit_tool_clue(raw_text)
+        ):
+            tool_name = 'unknown'
+            target_mode = 'unknown'
+            context_used = 'none'
+            confidence = min(confidence, self._min_confidence - 0.05)
+
+        if (
+            action == 'return'
+            and tool_name == 'unknown'
+            and previous_tool
+            and (context_used == 'previous_tool' or self._has_previous_reference(raw_text))
+        ):
+            tool_name = previous_tool
+            target_mode = 'named'
+            context_used = 'previous_tool'
+            confidence = max(confidence, self._min_confidence + 0.05)
+
         confidence = max(0.0, min(1.0, confidence))
         tool_name, target_mode, confidence = self._adjust_ambiguous_command(
             raw_text,
@@ -512,11 +664,13 @@ class CommandLlmParser:
             'match_score': confidence,
             'confidence': confidence,
         }
+        if context_used != 'none':
+            candidate_command['context_used'] = context_used
 
-        if confidence < self._min_confidence:
+        if confidence < self._min_confidence or needs_confirmation:
             self._warn(
-                f'LLM confidence가 낮아 명령을 무시합니다: '
-                f'{confidence:.2f} < {self._min_confidence:.2f}'
+                f'확인이 필요한 LLM 명령입니다: confidence={confidence:.2f}, '
+                f'needs_confirmation={needs_confirmation}'
             )
             if action != 'unknown' and (
                 tool_name != 'unknown' or target_mode == 'deictic'
@@ -527,7 +681,9 @@ class CommandLlmParser:
                     'feedback': self._feedback(
                         status='pending_confirmation',
                         raw_text=raw_text,
-                        reason='low_confidence',
+                        reason='needs_confirmation'
+                        if needs_confirmation
+                        else 'low_confidence',
                         message=self._build_confirmation_question(
                             candidate_command
                         ),
@@ -605,7 +761,7 @@ class CommandLlmParser:
                     reason='unknown_tool',
                     message=(
                         '어떤 공구인지 확실하지 않습니다. '
-                        '드라이버, 드릴, 플라이어, 망치, 렌치, 줄자 중에서 다시 말해주세요.'
+                        '드라이버, 플라이어, 망치, 줄자 중에서 다시 말해주세요.'
                     ),
                     command=candidate_command,
                 ),
@@ -615,6 +771,10 @@ class CommandLlmParser:
 
     def _adjust_action(self, raw_text, action):
         normalized = self._normalize_answer(raw_text)
+        if self._has_stop_intent(raw_text):
+            return 'stop'
+        if action == 'stop':
+            return 'unknown'
         return_tokens = (
             '가져다가놔',
             '가져다가놓',
@@ -643,6 +803,61 @@ class CommandLlmParser:
             return 'return'
         return action
 
+    @staticmethod
+    def _has_stop_intent(raw_text):
+        normalized = normalize_text(raw_text)
+        return any(normalize_text(keyword) in normalized for keyword in STOP_KEYWORDS)
+
+    def _has_previous_reference(self, raw_text):
+        normalized = self._normalize_answer(raw_text)
+        return any(
+            token in normalized
+            for token in (
+                '아까',
+                '방금',
+                '전에',
+                '이전에',
+                '가져온거',
+                '가져왔던거',
+                '준거',
+                '줬던거',
+            )
+        )
+
+    def _has_explicit_tool_clue(self, raw_text):
+        normalized = self._normalize_answer(raw_text)
+        return any(
+            token in normalized
+            for token in (
+                '드라이버',
+                '드라이바',
+                '나사',
+                '돌리',
+                '조이',
+                '플라이어',
+                '펜치',
+                '뺀치',
+                '집',
+                '잡',
+                '망치',
+                '해머',
+                '두드리',
+                '못',
+                '줄자',
+                '길이',
+                '치수',
+                '측정',
+            )
+        )
+
+    @staticmethod
+    def _as_bool(value):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in ('true', '1', 'yes', 'y')
+        return bool(value)
+
     def _adjust_ambiguous_command(
         self,
         raw_text,
@@ -669,14 +884,6 @@ class CommandLlmParser:
             word in normalized
             for word in ('집', '잡', '찝', '펜치', '플라이어', '니퍼')
         )
-        has_drill_expression = any(
-            word in normalized
-            for word in ('드릴', '뚫')
-        )
-        has_wrench_expression = any(
-            word in normalized
-            for word in ('렌치', '스패너', '볼트', '너트')
-        )
         has_named_tool = any(
             word in normalized
             for word in (
@@ -690,9 +897,6 @@ class CommandLlmParser:
                 '뺀치',
                 '줄자',
                 '테이프',
-                '드릴',
-                '렌치',
-                '스패너',
             )
         )
         has_tool_clue = any(
@@ -701,13 +905,11 @@ class CommandLlmParser:
                 has_impact_expression,
                 has_measure_expression,
                 has_grip_expression,
-                has_drill_expression,
-                has_wrench_expression,
                 has_named_tool,
             )
         )
 
-        if has_deictic_target and not has_tool_clue:
+        if has_deictic_target and not has_tool_clue and tool_name == 'unknown':
             return 'unknown', 'deictic', confidence
 
         inferred_tool = self._infer_tool_from_function_words(
@@ -715,8 +917,6 @@ class CommandLlmParser:
             has_impact_expression=has_impact_expression,
             has_measure_expression=has_measure_expression,
             has_grip_expression=has_grip_expression,
-            has_drill_expression=has_drill_expression,
-            has_wrench_expression=has_wrench_expression,
         )
         if inferred_tool is not None:
             if tool_name != inferred_tool:
@@ -749,13 +949,7 @@ class CommandLlmParser:
         has_impact_expression,
         has_measure_expression,
         has_grip_expression,
-        has_drill_expression,
-        has_wrench_expression,
     ):
-        if has_drill_expression:
-            return 'drill'
-        if has_wrench_expression:
-            return 'wrench'
         if has_impact_expression:
             return 'hammer'
         if has_measure_expression:
