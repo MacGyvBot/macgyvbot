@@ -21,6 +21,7 @@ from std_msgs.msg import String
 from macgyvbot.config.config import (
     DEFAULT_GRASP_POINT_MODE,
     DRAWER_LABEL,
+    DRAWER_YOLO_MODEL_NAME,
     FORCE_TORQUE_TOPIC,
     GROUP_NAME,
     HAND_GRASP_IMAGE_TOPIC,
@@ -75,8 +76,10 @@ class MacGyvBotNode(Node):
 
         self.grasp_point_mode = self._read_grasp_point_mode()
         self.yolo_model = self._read_yolo_model()
+        self.drawer_yolo_model = self._read_drawer_yolo_model()
         self.force_torque_topic = self._read_force_torque_topic()
         self.detector = YoloDetector(self.yolo_model)
+        self.drawer_detector = YoloDetector(self.drawer_yolo_model)
         self.grasp_point_selector = GraspPointSelector(
             self.grasp_point_mode,
             self.get_logger(),
@@ -145,6 +148,15 @@ class MacGyvBotNode(Node):
             .strip()
         ) or YOLO_MODEL_NAME
 
+    def _read_drawer_yolo_model(self):
+        self.declare_parameter("drawer_yolo_model", DRAWER_YOLO_MODEL_NAME)
+        return (
+            self.get_parameter("drawer_yolo_model")
+            .get_parameter_value()
+            .string_value
+            .strip()
+        ) or DRAWER_YOLO_MODEL_NAME
+
     def _read_force_torque_topic(self):
         self.declare_parameter("force_torque_topic", FORCE_TORQUE_TOPIC)
         return (
@@ -206,7 +218,8 @@ class MacGyvBotNode(Node):
 
     def _log_startup(self):
         self.get_logger().info("노드 초기화 완료")
-        self.get_logger().info(f"YOLO model: {self.yolo_model}")
+        self.get_logger().info(f"Tool YOLO model: {self.yolo_model}")
+        self.get_logger().info(f"Drawer YOLO model: {self.drawer_yolo_model}")
         self.get_logger().info(f"grasp point mode: {self.grasp_point_mode}")
         self.get_logger().info(
             "객체 입력 예시: ros2 topic pub --once /target_label "
@@ -495,7 +508,8 @@ class MacGyvBotNode(Node):
                     break
                 continue
 
-            results = self.detector.detect(self.color_image)
+            detector = self.drawer_detector if self.target_label else self.detector
+            results = detector.detect(self.color_image)
             annotated_frame = results[0].plot()
 
             if self.target_label:
@@ -524,7 +538,7 @@ class MacGyvBotNode(Node):
         search_label = DRAWER_LABEL
 
         for box in boxes:
-            label = self.detector.names[int(box.cls)]
+            label = self.drawer_detector.names[int(box.cls)]
             if label != search_label:
                 continue
 

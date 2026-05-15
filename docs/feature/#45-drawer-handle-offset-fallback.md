@@ -83,7 +83,12 @@ drawer 탐지
 
 ## 나중에 drawer_handle YOLO를 붙이는 방법
 
-1. YOLO weight에 아래 class가 포함되어 있는지 확인한다.
+현재 YOLO 모델은 공구용과 서랍용을 분리해서 사용한다.
+
+- `yolo_model`: 기존 공구 탐지 모델
+- `drawer_yolo_model`: 서랍/손잡이 탐지 모델
+
+1. drawer YOLO weight에 아래 class가 포함되어 있는지 확인한다.
 
 ```text
 drawer
@@ -101,7 +106,8 @@ DRAWER_HANDLE_LABEL = "drawer_handle"
 
 ```bash
 ros2 launch macgyvbot macgyvbot.launch.py \
-  yolo_model:=/path/to/finetuned_drawer_model.pt
+  yolo_model:=/path/to/tool_model.pt \
+  drawer_yolo_model:=/path/to/drawer_model.pt
 ```
 
 4. `macgyvbot/config/config.py`에서 fallback을 끈다.

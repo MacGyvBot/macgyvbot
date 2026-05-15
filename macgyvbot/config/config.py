@@ -26,6 +26,7 @@ MIN_PICK_Z = 0.30
 MAX_DESCENT_FROM_APPROACH = 0.08
 
 YOLO_MODEL_NAME = "yolov11_best.pt"
+DRAWER_YOLO_MODEL_NAME = "yolov11n_drawer.pt"
 DRAWER_LABEL = "drawer"
 DRAWER_HANDLE_LABEL = "drawer_handle"
 TOOL_COMMAND_TOPIC = "/tool_command"

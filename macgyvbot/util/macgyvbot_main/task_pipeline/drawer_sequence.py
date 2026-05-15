@@ -10,6 +10,7 @@ import rclpy
 from macgyvbot.config.config import (
     DRAWER_APPROACH_Z_OFFSET,
     DRAWER_DETECTION_TIMEOUT_SEC,
+    DRAWER_LABEL,
     DRAWER_HANDLE_APPROACH_Z_OFFSET,
     DRAWER_HANDLE_GRASP_Z_OFFSET,
     DRAWER_HANDLE_LABEL,
@@ -101,8 +102,9 @@ class DrawerInteraction:
             logger.warn("카메라 상태가 준비되지 않아 YOLO 탐지를 수행할 수 없습니다.")
             return None
 
-        results = self.state.detector.detect(self.state.color_image)
-        best_box = self._best_box_for_label(results[0].boxes, label)
+        detector = self._detector_for_label(label)
+        results = detector.detect(self.state.color_image)
+        best_box = self._best_box_for_label(results[0].boxes, label, detector.names)
         if best_box is None:
             return None
 
@@ -391,12 +393,17 @@ class DrawerInteraction:
             and self.state.intrinsics is not None
         )
 
-    def _best_box_for_label(self, boxes, label):
+    def _detector_for_label(self, label):
+        if label in (DRAWER_LABEL, DRAWER_HANDLE_LABEL):
+            return getattr(self.state, "drawer_detector", self.state.detector)
+        return self.state.detector
+
+    def _best_box_for_label(self, boxes, label, names):
         best_box = None
         best_conf = -1.0
 
         for box in boxes:
-            detected_label = self.state.detector.names[int(box.cls)]
+            detected_label = names[int(box.cls)]
             if detected_label != label:
                 continue
 

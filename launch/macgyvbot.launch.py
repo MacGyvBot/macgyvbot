@@ -18,6 +18,7 @@ def generate_launch_description():
     tts_timeout_sec = LaunchConfiguration("tts_timeout_sec")
     llm_model = LaunchConfiguration("llm_model")
     llm_timeout_sec = LaunchConfiguration("llm_timeout_sec")
+    drawer_yolo_model = LaunchConfiguration("drawer_yolo_model")
 
     # Doosan M0609 MoveIt 기본 설정 (URDF, SRDF, kinematics, controllers 등)
     moveit_config = (
@@ -45,6 +46,12 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "yolo_model",
                 default_value="yolov11_best.pt",
+                description="공구 탐지용 YOLO 모델 경로 또는 weights/ 내 파일명",
+            ),
+            DeclareLaunchArgument(
+                "drawer_yolo_model",
+                default_value="yolov11n_drawer.pt",
+                description="서랍 탐지용 YOLO 모델 경로 또는 weights/ 내 파일명",
             ),
             DeclareLaunchArgument(
                 "use_voice_command",
@@ -116,6 +123,7 @@ def generate_launch_description():
                     moveit_py_params,
                     {
                         "yolo_model": LaunchConfiguration("yolo_model"),
+                        "drawer_yolo_model": drawer_yolo_model,
                         "grasp_point_mode": LaunchConfiguration(
                             "grasp_point_mode"
                         ),

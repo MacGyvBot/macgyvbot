@@ -18,6 +18,7 @@ def resolve_model_path(model_name):
     package_root = Path(__file__).resolve().parents[3]
     project_root = Path(__file__).resolve().parents[4]
     cwd = Path.cwd()
+    ros_ws_source = Path.home() / "ros2_ws" / "src" / "doosan-robot2" / "macgyvbot"
     try:
         package_share = Path(get_package_share_directory("macgyvbot"))
     except PackageNotFoundError:
@@ -29,6 +30,7 @@ def resolve_model_path(model_name):
         cwd / path,
         project_root / "weights" / path,
         package_root / "weights" / path,
+        ros_ws_source / "weights" / path,
         package_root / path,
     ]
 
