@@ -356,10 +356,11 @@ class MacGyvBotNode(Node):
             )
             return
 
-        self.target_label = val
-        self.current_command = command
         self._last_search_status_target = None
-        self.get_logger().info(f"타겟 객체 설정: {self.target_label} ({source})")
+        self.get_logger().info(
+            f"공구 요청 수신: {val} ({source}). "
+            "관찰 자세 이동 후 서랍 탐지를 시작합니다."
+        )
         self._publish_robot_status(
             "searching_drawer",
             tool_name=val,
@@ -573,15 +574,8 @@ class MacGyvBotNode(Node):
                     break
                 continue
 
-            detector = self.drawer_detector if self.target_label else self.detector
-            results = detector.detect(self.color_image)
+            results = self.detector.detect(self.color_image)
             annotated_frame = results[0].plot()
-
-            if self.target_label:
-                self._handle_target_detection(
-                    results[0].boxes,
-                    annotated_frame,
-                )
 
             self._show_robot_window(annotated_frame)
             self._show_hand_grasp_window()
