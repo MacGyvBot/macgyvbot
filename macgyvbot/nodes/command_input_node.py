@@ -475,7 +475,7 @@ class CommandInputNode(Node):
 
     def _send_task_control_request(self, action, reason):
         msg = Int8()
-        
+
         if action == 'stop':
             msg.data = 1
             self._task_control_pub.publish(msg)
