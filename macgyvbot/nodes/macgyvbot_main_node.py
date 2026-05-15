@@ -278,12 +278,6 @@ class MacGyvBotNode(Node):
             cancel_req = CancelGoal.Request()
             self._cancel_goal_cli.call_async(cancel_req)
             
-            # 2. 그리퍼 오픈
-            try:
-                self.gripper.open_gripper()
-            except Exception:
-                pass
-            
             # ✨ 현재 돌고 있는 시퀀스 스레드의 머리 위에 폭탄 투하!
             if self.picking:
                 if self.pending_pick_thread and self.pending_pick_thread.is_alive():
