@@ -12,6 +12,7 @@ from macgyvbot.config.config import (
     RETURN_HOME_DESCENT_START_Z,
     SAFE_Z,
     SEQUENCE_WAIT_POLL_SEC,
+    EmergencyStopException,
 )
 from macgyvbot.util.macgyvbot_main.model_control.force_detection import (
     ForceReactionDetector,
@@ -112,6 +113,15 @@ class ReturnSequenceRunner:
                 "done",
                 tool_name,
                 f"{tool_name} 반납 공구를 Home에 배치했습니다.",
+                command,
+            )
+
+        except EmergencyStopException:
+            log.warn("💥 [ReturnSequence] 비상 정지 예외 감지! 반납 시퀀스를 즉시 파괴합니다.")
+            self._publish_status(
+                "cancelled",
+                requested_tool,
+                "비상 정지 명령으로 인해 반납 작업이 강제 종료되었습니다.",
                 command,
             )
 
