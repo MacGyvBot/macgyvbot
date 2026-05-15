@@ -14,6 +14,7 @@ from macgyvbot.config.config import (
     GRASP_Z_OFFSET,
     HANDOVER_HAND_X_OFFSET_M,
     HANDOVER_HAND_Z_OFFSET_M,
+    OBJECT_Z_HEIGHT_BIAS_M,
     OBSERVATION_TIMEOUT_SEC,
     HAND_GRASP_TIMEOUT_SEC,
     SAFE_Z,
@@ -49,8 +50,9 @@ class PickSequenceRunner:
         log = self.state.logger()
         ori = self.state.home_ori
 
-        approach_z = bz + APPROACH_Z_OFFSET
-        grasp_z = bz - GRASP_Z_OFFSET
+        corrected_bz = bz - OBJECT_Z_HEIGHT_BIAS_M
+        approach_z = corrected_bz + APPROACH_Z_OFFSET
+        grasp_z = corrected_bz - GRASP_Z_OFFSET
 
         current_pose = get_ee_matrix(self.robot)
         current_x = current_pose[0, 3]
@@ -88,7 +90,8 @@ class PickSequenceRunner:
         try:
             log.info(
                 f"시퀀스 시작: Target({target_x:.3f}, {target_y:.3f}), "
-                f"depth={z_m:.3f}, travel_z={travel_z:.3f}, "
+                f"depth={z_m:.3f}, raw_bz={bz:.3f}, "
+                f"corrected_bz={corrected_bz:.3f}, travel_z={travel_z:.3f}, "
                 f"approach_z={approach_z:.3f}, grasp_z={grasp_z:.3f}"
             )
 
