@@ -1,0 +1,7 @@
+"""VLM grasp point selection constants."""
+
+GRASP_POINT_MODE_CENTER = "center"
+GRASP_POINT_MODE_VLM = "vlm"
+DEFAULT_GRASP_POINT_MODE = GRASP_POINT_MODE_CENTER
+
+VLM_GRASP_GRID_SIZES = ((3, 3), (4, 4))

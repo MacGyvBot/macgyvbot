@@ -15,20 +15,44 @@ macgyvbot/
 │   ├── hand_grasp_detection_node.py     # hand grasp detection ROS wiring
 │   └── command_input_node.py            # STT + GUI + 명령 해석 통합 노드
 ├── config/
-│   └── config.py                        # topic, frame, safety offset, grasp mode
-├── util/
-│   ├── command_input/
-│   │   ├── input_mapping/               # local parser + LLM fallback
-│   │   └── stt/                         # microphone STT wrapper
-│   ├── hand_grasp_detection/
-│   │   └── hand_grasp/                  # hand/tool grasp 판정 유틸
-│   └── macgyvbot_main/
-│       ├── grasp_mechanism/             # center/VLM grasp point 선택
-│       ├── model_control/               # MoveIt, pose, gripper, force, safe zone
-│       ├── perception/                  # YOLO, depth projection
-│       └── task_pipeline/               # pick, handoff, return 시퀀스
-│           ├── pick_sequence.py         # 공구 pick 및 사용자 전달 흐름
-│           └── return_sequence.py       # 사용자 반납 수신 및 Home 배치 흐름
+│   ├── config.py                        # backward-compatible config facade
+│   ├── robot.py                         # frames, links, joint poses
+│   ├── topics.py                        # ROS topic names
+│   ├── models.py                        # model/weight filenames
+│   ├── pick.py                          # pick planning offsets
+│   ├── grasp.py                         # gripper grasp verification
+│   ├── hand_grasp.py                    # human grasp thresholds/timeouts
+│   ├── handoff.py                       # handoff search/replan settings
+│   ├── return_flow.py                   # return force-descent settings
+│   ├── timing.py                        # shared polling intervals
+│   ├── ui.py                            # OpenCV window names
+│   └── vlm.py                           # VLM grasp-point settings
+├── domain/                              # workflow 간 공유되는 순수 데이터 타입
+├── application/
+│   ├── tool_command_controller.py       # parsed tool command routing
+│   ├── robot_status_publisher.py        # robot status payload builder
+│   ├── robot_home_initializer.py        # Home move + pose capture
+│   ├── pick_frame_processor.py          # YOLO frame processing + pick target handling
+│   ├── pick_target_planner.py           # perceived target -> safe pick waypoints
+│   ├── pick_grasp_flow.py               # pick grasp verification flow
+│   ├── pick_handoff_flow.py             # pick handoff motion/wait/fallback return
+│   ├── return_handoff_flow.py           # user-held return tool receive flow
+│   ├── return_home_placement_flow.py    # force-guided Home placement flow
+│   ├── return_status_reporter.py        # return status payload builder
+│   ├── pick_sequence.py                 # 공구 pick 및 사용자 전달 흐름
+│   └── return_sequence.py               # 사용자 반납 수신 및 Home 배치 흐름
+├── perception/
+│   ├── yolo_detector.py                 # object detection
+│   ├── pick_target_resolver.py          # YOLO box -> pick target 생성
+│   ├── depth_projection.py              # pixel+depth projection
+│   ├── grasp_mechanism/                 # center/VLM grasp point 선택
+│   └── hand_grasp/                      # hand/tool grasp 판정 유틸
+├── control/                             # MoveIt, pose, gripper, force, safe zone
+├── recovery/                            # future recovery extension point
+├── command_input/
+│   ├── input_mapping/                   # local parser + LLM fallback
+│   ├── stt/                             # microphone STT wrapper
+│   └── tts/                             # TTS service
 ├── ui/
 │   └── voice_command_window.py          # PyQt command input window
 ```
@@ -79,51 +103,61 @@ flowchart TD
     subgraph command["command_input_node"]
         cmdnode["nodes/command_input_node.py\nGUI + STT + topic wiring"]
         ui["ui/voice_command_window.py\nPyQt GUI"]
-        sttmod["util/command_input/stt/speech_to_text.py\nmicrophone STT wrapper"]
-        parser["util/command_input/input_mapping/command_llm_parser.py\nlocal parser + LLM fallback"]
-        hard["util/command_input/input_mapping/command_hard_parser.py\nalias / fuzzy command parsing"]
+        sttmod["command_input/stt/speech_to_text.py\nmicrophone STT wrapper"]
+        parser["command_input/input_mapping/command_llm_parser.py\nlocal parser + LLM fallback"]
+        vocab["command_input/input_mapping/command_vocabulary.py\nparser vocabulary + schema"]
+        hard["command_input/input_mapping/command_hard_parser.py\nalias / fuzzy command parsing"]
         ui --> cmdnode
         sttmod --> cmdnode
         parser --> cmdnode
+        vocab --> parser
+        vocab --> hard
         hard --> parser
     end
 
     subgraph handgrasp["hand_grasp_detection_node"]
         hgNode["nodes/hand_grasp_detection_node.py\ncamera subscriptions + result publishing"]
-        handDet["hand_grasp/hand_detector.py\nMediaPipe hand landmarks"]
-        toolDet["hand_grasp/tool_detector.py\nYOLO tool ROI detection"]
-        calc["hand_grasp/calculations.py\ngeometry / depth / hand selection helpers"]
-        graspDet["hand_grasp/grasp_detector.py\nhand-tool grasp state scoring"]
-        viz["hand_grasp/visualization.py\noverlay rendering"]
+        handDet["perception/hand_grasp/hand_detector.py\nMediaPipe hand landmarks"]
+        toolDet["perception/hand_grasp/tool_detector.py\nYOLO tool ROI detection"]
+        calc["perception/hand_grasp/calculations.py\ngeometry / depth / hand selection helpers"]
+        mlGrasp["perception/hand_grasp/ml_grasp_classifier.py\nML hand grasp classifier"]
+        mask["perception/hand_grasp/sam_tool_mask.py\noptional tool mask diagnostics"]
+        viz["perception/hand_grasp/visualization.py\noverlay rendering"]
         handDet --> hgNode
         toolDet --> hgNode
         calc --> hgNode
         calc --> handDet
-        calc --> graspDet
+        handDet --> mlGrasp
+        mlGrasp --> hgNode
+        mask --> hgNode
         calc --> viz
-        graspDet --> hgNode
         viz --> hgNode
     end
 
     subgraph mainbot["macgyvbot_main_node"]
         mainNode["nodes/macgyvbot_main_node.py\nmain ROS wiring + frame loop + command handling"]
-        yolo["util/macgyvbot_main/perception/yolo_detector.py\nobject detection"]
-        graspSel["util/macgyvbot_main/grasp_mechanism/grasp_point_selector.py\ncenter/VLM grasp-point routing"]
-        vlm["util/macgyvbot_main/grasp_mechanism/grasp_by_vlm.py\nVLM grasp pixel inference"]
-        depthProj["util/macgyvbot_main/perception/depth_projection.py\npixel+depth to base pose"]
-        motion["util/macgyvbot_main/model_control/moveit_controller.py\nMoveIt planning / execution"]
-        pose["util/macgyvbot_main/model_control/robot_pose.py\npose/orientation helpers"]
-        safe["util/macgyvbot_main/model_control/robot_safezone.py\nworkspace clamp"]
-        grip["util/macgyvbot_main/model_control/onrobot_gripper.py\nRG gripper control"]
-        pipeline["util/macgyvbot_main/task_pipeline/\npick / handoff / return sequence"]
+        taskCtl["application/tool_command_controller.py\ncommand routing"]
+        statusPub["application/robot_status_publisher.py\nstatus payload builder"]
+        yolo["perception/yolo_detector.py\nobject detection"]
+        targetResolver["perception/pick_target_resolver.py\nYOLO box to pick target"]
+        graspSel["perception/grasp_mechanism/grasp_point_selector.py\ncenter/VLM grasp-point routing"]
+        vlm["perception/grasp_mechanism/grasp_by_vlm.py\nVLM grasp pixel inference"]
+        depthProj["perception/depth_projection.py\npixel+depth to base pose"]
+        motion["control/moveit_controller.py\nMoveIt planning / execution"]
+        pose["control/robot_pose.py\npose/orientation helpers"]
+        safe["control/robot_safezone.py\nworkspace clamp"]
+        grip["control/onrobot_gripper.py\nRG gripper control"]
+        pipeline["application/\npick / handoff / return sequence"]
+        taskCtl --> mainNode
+        statusPub --> mainNode
         yolo --> mainNode
+        targetResolver --> mainNode
         graspSel --> mainNode
         depthProj --> mainNode
         motion --> mainNode
         grip --> mainNode
         pipeline --> mainNode
         vlm --> graspSel
-        pose --> depthProj
         pose --> motion
         pose --> pipeline
         safe --> motion
@@ -142,7 +176,7 @@ flowchart TD
 - RealSense color/depth 이미지 구독
 - YOLO 기반 공구 및 대상 객체 인식
 - hand landmark와 tool ROI 기반 잡기 상태 판단
-- depth 기반 손-공구 접촉 신호 기본 사용
+- ML classifier, depth contact, locked mask contact를 함께 사용하는 사용자 grasp 판정
 - MoveItPy 기반 Doosan M0609 경로 계획 및 실행
 - OnRobot RG2 그리퍼 open/close 제어
 - 안전 작업 영역 클램프 기반 pick sequence 제한

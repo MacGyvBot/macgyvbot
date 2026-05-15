@@ -14,42 +14,51 @@ from cv_bridge import CvBridge
 from geometry_msgs.msg import WrenchStamped
 from moveit.planning import MoveItPy, PlanRequestParameters
 from rclpy.node import Node
-from scipy.spatial.transform import Rotation
 from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import String
 
-from macgyvbot.config.config import (
+from macgyvbot.config.models import YOLO_MODEL_NAME
+from macgyvbot.config.robot import (
     BASE_FRAME,
-    DEFAULT_GRASP_POINT_MODE,
-    FORCE_TORQUE_TOPIC,
     GROUP_NAME,
+)
+from macgyvbot.config.topics import (
+    FORCE_TORQUE_TOPIC,
     HAND_GRASP_IMAGE_TOPIC,
     HAND_GRASP_MASK_LOCK_TOPIC,
     HAND_GRASP_TOPIC,
-    HAND_GRASP_WINDOW_NAME,
-    ROBOT_WINDOW_NAME,
     ROBOT_STATUS_TOPIC,
     TOOL_COMMAND_TOPIC,
-    YOLO_MODEL_NAME,
 )
-from macgyvbot.util.macgyvbot_main.model_control.moveit_controller import (
+from macgyvbot.config.ui import HAND_GRASP_WINDOW_NAME, ROBOT_WINDOW_NAME
+from macgyvbot.config.vlm import DEFAULT_GRASP_POINT_MODE
+from macgyvbot.control.moveit_controller import (
     MoveItController,
 )
-from macgyvbot.util.macgyvbot_main.model_control.onrobot_gripper import RG
-from macgyvbot.util.macgyvbot_main.model_control.robot_pose import get_ee_matrix
-from macgyvbot.util.macgyvbot_main.perception.depth_projection import (
+from macgyvbot.control.onrobot_gripper import RG
+from macgyvbot.control.robot_pose import get_ee_matrix
+from macgyvbot.perception.depth_projection import (
     DepthProjector,
     pixel_to_camera_point,
 )
-from macgyvbot.util.macgyvbot_main.grasp_mechanism.grasp_point_selector import (
+from macgyvbot.perception.grasp_mechanism.grasp_point_selector import (
     GraspPointSelector,
     normalize_grasp_point_mode,
 )
-from macgyvbot.util.macgyvbot_main.perception.yolo_detector import YoloDetector
-from macgyvbot.util.macgyvbot_main.task_pipeline.pick_sequence import (
+from macgyvbot.perception.yolo_detector import YoloDetector
+from macgyvbot.perception.pick_target_resolver import (
+    PickTargetResolver,
+)
+from macgyvbot.application import (
+    RobotStatusPublisher,
+    ToolCommandController,
+)
+from macgyvbot.application.robot_home_initializer import RobotHomeInitializer
+from macgyvbot.application.pick_frame_processor import PickFrameProcessor
+from macgyvbot.application.pick_sequence import (
     PickSequenceRunner,
 )
-from macgyvbot.util.macgyvbot_main.task_pipeline.return_sequence import (
+from macgyvbot.application.return_sequence import (
     ReturnSequenceRunner,
 )
 
@@ -97,7 +106,13 @@ class MacGyvBotNode(Node):
         self.gripper = RG("rg2", "192.168.1.1", 502)
         self.robot = MoveItPy(node_name="yolo_pick_moveit_py")
         self.arm = self.robot.get_planning_component(GROUP_NAME)
-        self.depth_projector = DepthProjector(self.robot, self.gripper2cam)
+        self.depth_projector = DepthProjector(self._base_to_camera_matrix)
+        self.pick_target_resolver = PickTargetResolver(
+            self.detector,
+            self.grasp_point_selector,
+            self.depth_projector,
+            self.get_logger(),
+        )
 
         self.pilz_params = PlanRequestParameters(self.robot)
         self.pilz_params.planning_pipeline = "pilz_industrial_motion_planner"
@@ -105,6 +120,38 @@ class MacGyvBotNode(Node):
         self.pilz_params.max_velocity_scaling_factor = 0.2
 
         self.motion = MoveItController(self.robot, self.arm, self.pilz_params)
+        self.home_initializer = RobotHomeInitializer(
+            self.robot,
+            self.motion,
+            self,
+        )
+        self.robot_status_pub = self.create_publisher(
+            String,
+            ROBOT_STATUS_TOPIC,
+            10,
+        )
+        self.status_publisher = RobotStatusPublisher(
+            self._publish_status_payload,
+            target_label_provider=lambda: self.target_label,
+        )
+        self.task_controller = ToolCommandController(
+            self.get_logger(),
+            self.status_publisher,
+            is_busy=lambda: self.picking,
+            set_target=self._set_active_target,
+            clear_target=self._clear_pending_target,
+            reset_search_status=self._reset_search_status,
+            start_return=self.start_return_sequence,
+            release_gripper=self.gripper.open_gripper,
+        )
+        self.frame_processor = PickFrameProcessor(
+            self,
+            self.detector,
+            self.pick_target_resolver,
+            self.start_pick_sequence,
+            self._publish_robot_status,
+            self.get_logger(),
+        )
         self.pick_runner = PickSequenceRunner(
             self.robot,
             self.motion,
@@ -117,17 +164,15 @@ class MacGyvBotNode(Node):
             self.gripper,
             self,
         )
-        self.robot_status_pub = self.create_publisher(
-            String,
-            ROBOT_STATUS_TOPIC,
-            10,
-        )
 
         self._create_subscriptions()
         self._log_startup()
 
     def logger(self):
         return self.get_logger()
+
+    def _base_to_camera_matrix(self):
+        return get_ee_matrix(self.robot) @ self.gripper2cam
 
     def _read_grasp_point_mode(self):
         self.declare_parameter("grasp_point_mode", DEFAULT_GRASP_POINT_MODE)
@@ -235,7 +280,7 @@ class MacGyvBotNode(Node):
         if not val:
             return
 
-        self._set_target_label(val, source="/target_label")
+        self.task_controller.handle_target_label(val, source="/target_label")
 
     def _tool_command_cb(self, msg):
         try:
@@ -249,120 +294,21 @@ class MacGyvBotNode(Node):
             )
             return
 
-        action = command.get("action", "unknown")
-        tool_name = command.get("tool_name", "unknown")
-
-        if action == "bring":
-            self._set_target_label(tool_name, source="/tool_command", command=command)
-            return
-
-        if action == "return":
-            self.start_return_sequence(command)
-            return
-
-        if action == "release":
-            if self.picking:
-                self.get_logger().warn("pick 동작 중 release 명령은 수동 실행하지 않습니다.")
-                self._publish_robot_status(
-                    "busy",
-                    tool_name=tool_name,
-                    action=action,
-                    message=(
-                        "pick 동작 중에는 자동 핸드오프 절차가 그리퍼를 제어합니다."
-                    ),
-                    reason="handoff_controls_release",
-                    command=command,
-                )
-                return
-
-            self.get_logger().info("release 명령 수신: 그리퍼를 엽니다.")
-            self.gripper.open_gripper()
-            self._publish_robot_status(
-                "done",
-                tool_name=tool_name,
-                action=action,
-                message="그리퍼를 열었습니다.",
-                command=command,
-            )
-            return
-
-        if action == "stop":
-            self.get_logger().warn("stop 명령 수신")
-            if self.picking:
-                self._publish_robot_status(
-                    "busy",
-                    tool_name=tool_name,
-                    action=action,
-                    message=(
-                        "이미 실행 중인 MoveIt 동작은 안전 중단을 지원하지 않아 "
-                        "완료를 기다립니다."
-                    ),
-                    reason="active_motion_not_interruptible",
-                    command=command,
-                )
-                return
-
-            self.target_label = None
-            self.current_command = None
-            self._publish_robot_status(
-                "cancelled",
-                tool_name=tool_name,
-                action=action,
-                message="대기 중인 pick 요청을 취소했습니다.",
-                command=command,
-            )
-            return
-
-        self.get_logger().warn(f"지원하지 않는 action: {action}")
-        self._publish_robot_status(
-            "rejected",
-            tool_name=tool_name,
-            action=action,
-            message="지원하지 않는 명령입니다.",
-            reason="unsupported_action",
-            command=command,
-        )
+        self.task_controller.handle_command(command)
 
     def _wrench_cb(self, msg):
         self.latest_wrench = msg.wrench
 
-    def _set_target_label(self, tool_name, source, command=None):
-        val = (tool_name or "").strip()
-
-        if not val or val == "unknown":
-            self._publish_robot_status(
-                "rejected",
-                tool_name=val or "unknown",
-                message="대상 공구가 비어 있거나 unknown입니다.",
-                reason="unknown_tool",
-                command=command,
-            )
-            return
-
-        if self.picking:
-            self.get_logger().warn(
-                f"현재 pick 동작 중이라 새 타겟 '{val}' 입력은 무시합니다."
-            )
-            self._publish_robot_status(
-                "busy",
-                tool_name=val,
-                message=f"현재 pick 동작 중이라 새 타겟 '{val}' 입력은 무시합니다.",
-                reason="already_picking",
-                command=command,
-            )
-            return
-
-        self.target_label = val
+    def _set_active_target(self, tool_name, command=None):
+        self.target_label = tool_name
         self.current_command = command
+
+    def _clear_pending_target(self):
+        self.target_label = None
+        self.current_command = None
+
+    def _reset_search_status(self):
         self._last_search_status_target = None
-        self.get_logger().info(f"타겟 객체 설정: {self.target_label} ({source})")
-        self._publish_robot_status(
-            "accepted",
-            tool_name=val,
-            action="bring",
-            message=f"{val} 탐색을 시작합니다.",
-            command=command,
-        )
 
     def _hand_grasp_cb(self, msg):
         try:
@@ -508,36 +454,8 @@ class MacGyvBotNode(Node):
         self.pending_return_thread.start()
 
     def run(self):
-        self._move_home_and_capture_pose()
+        self.home_initializer.initialize()
         self._process_frames()
-
-    def _move_home_and_capture_pose(self):
-        self.get_logger().info("시스템 준비 중... Home으로 이동합니다.")
-
-        ok = self.motion.move_to_home_joints(self.get_logger())
-        if not ok:
-            self.get_logger().error("초기 Home 이동 실패")
-            return
-
-        transform = get_ee_matrix(self.robot)
-        self.home_xyz = (
-            transform[0, 3],
-            transform[1, 3],
-            transform[2, 3],
-        )
-
-        qx, qy, qz, qw = Rotation.from_matrix(transform[:3, :3]).as_quat()
-        self.home_ori = {
-            "x": float(qx),
-            "y": float(qy),
-            "z": float(qz),
-            "w": float(qw),
-        }
-
-        self.get_logger().info(
-            f"Home 저장 완료: x={self.home_xyz[0]:.3f}, "
-            f"y={self.home_xyz[1]:.3f}, z={self.home_xyz[2]:.3f}"
-        )
 
     def _process_frames(self):
         if self.home_xyz is None or self.home_ori is None:
@@ -553,7 +471,7 @@ class MacGyvBotNode(Node):
         while rclpy.ok():
             rclpy.spin_once(self, timeout_sec=0.01)
 
-            if not self._has_camera_state():
+            if not self.frame_processor.has_camera_state():
                 continue
 
             if self.picking:
@@ -563,14 +481,7 @@ class MacGyvBotNode(Node):
                     break
                 continue
 
-            results = self.detector.detect(self.color_image)
-            annotated_frame = results[0].plot()
-
-            if self.target_label:
-                self._handle_target_detection(
-                    results[0].boxes,
-                    annotated_frame,
-                )
+            annotated_frame = self.frame_processor.process_current_frame()
 
             self._show_robot_window(annotated_frame)
             self._show_hand_grasp_window()
@@ -580,86 +491,8 @@ class MacGyvBotNode(Node):
 
         self._close_windows()
 
-    def _has_camera_state(self):
-        return (
-            self.color_image is not None
-            and self.depth_image is not None
-            and self.intrinsics is not None
-        )
-
-    def _handle_target_detection(self, boxes, annotated_frame):
-        found = False
-
-        for box in boxes:
-            label = self.detector.names[int(box.cls)]
-            if label != self.target_label:
-                continue
-
-            found = True
-            u, v, source, vlm_rpy_deg = self.grasp_point_selector.select(
-                box,
-                label,
-                self.color_image,
-                self.depth_image,
-                self.intrinsics,
-                self.target_label,
-            )
-            target = self.depth_projector.pixel_to_base_target(
-                u,
-                v,
-                label,
-                source,
-                self.depth_image,
-                self.intrinsics,
-                self.get_logger(),
-                vlm_rpy_deg,
-            )
-            if target is None:
-                continue
-
-            bx, by, bz, z_m, vlm_rpy_deg = target
-            vlm_yaw_deg = self._extract_vlm_yaw(vlm_rpy_deg)
-            self._draw_grasp_marker(annotated_frame, u, v, source)
-            self.start_pick_sequence(bx, by, bz, z_m, vlm_yaw_deg)
-            break
-
-        if not found:
-            self.get_logger().info(
-                f"'{self.target_label}' 탐색 중... 현재 프레임에서는 미검출"
-            )
-            if self._last_search_status_target != self.target_label:
-                self._last_search_status_target = self.target_label
-                self._publish_robot_status(
-                    "searching",
-                    tool_name=self.target_label,
-                    action="bring",
-                    message=f"{self.target_label} 탐색 중입니다.",
-                    command=self.current_command,
-                )
-
-    def _extract_vlm_yaw(self, vlm_rpy_deg):
-        if vlm_rpy_deg is None or len(vlm_rpy_deg) < 3:
-            return None
-
-        try:
-            return float(vlm_rpy_deg[2])
-        except (TypeError, ValueError):
-            self.get_logger().warn(f"VLM yaw 파싱 실패: {vlm_rpy_deg}")
-            return None
-
-    @staticmethod
-    def _draw_grasp_marker(frame, u, v, source):
-        cv2.circle(frame, (u, v), 6, (0, 255, 255), -1)
-        cv2.putText(
-            frame,
-            source,
-            (u + 8, v - 8),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.45,
-            (0, 255, 255),
-            1,
-            cv2.LINE_AA,
-        )
+    def _latest_camera_state(self):
+        return self.color_image, self.depth_image, self.intrinsics
 
     def _publish_robot_status(
         self,
@@ -670,17 +503,16 @@ class MacGyvBotNode(Node):
         reason="",
         command=None,
     ):
-        payload = {
-            "status": status,
-            "tool_name": tool_name or self.target_label or "unknown",
-            "action": action or (command or {}).get("action", "unknown"),
-            "message": message,
-        }
-        if reason:
-            payload["reason"] = reason
-        if command is not None:
-            payload["command"] = command
+        self.status_publisher.publish(
+            status,
+            tool_name=tool_name,
+            action=action,
+            message=message,
+            reason=reason,
+            command=command,
+        )
 
+    def _publish_status_payload(self, payload):
         self.robot_status_pub.publish(
             String(data=json.dumps(payload, ensure_ascii=False))
         )

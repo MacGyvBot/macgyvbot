@@ -16,10 +16,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from macgyvbot.util.command_input.input_mapping.command_context import (  # noqa: E402
+from macgyvbot.command_input.input_mapping.command_context import (  # noqa: E402
     CommandContext,
 )
-from macgyvbot.util.command_input.input_mapping.command_llm_parser import (  # noqa: E402
+from macgyvbot.command_input.input_mapping.command_llm_parser import (  # noqa: E402
     CommandLlmParser,
 )
 

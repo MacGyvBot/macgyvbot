@@ -1,13 +1,13 @@
 import numpy as np
 
-from macgyvbot.util.hand_grasp_detection.hand_grasp.calculations import (
+from macgyvbot.perception.hand_grasp.calculations import (
     build_depth_grasp_info,
 )
-from macgyvbot.util.hand_grasp_detection.hand_grasp.ml_grasp_classifier import (
+from macgyvbot.perception.hand_grasp.ml_grasp_classifier import (
     FEATURE_COUNT,
     extract_ml_features,
 )
-from macgyvbot.util.hand_grasp_detection.hand_grasp.sam_tool_mask import (
+from macgyvbot.perception.hand_grasp.sam_tool_mask import (
     LockedToolMask,
     compute_mask_contact,
 )

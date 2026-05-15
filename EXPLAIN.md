@@ -37,9 +37,41 @@ hand_grasp_detection_node
   - `config` 하위 패키지 인식용 파일입니다.
 
 - `macgyvbot/config/config.py`
-  - 런타임 공통 설정을 Python 상수로 보관합니다.
-  - MoveIt group/link 이름, home joint, 안전 Z offset, hand grasp topic, debug window 이름, grasp point mode 등을 제공합니다.
-  - 여러 util과 node에서 import하는 중앙 설정 파일입니다.
+  - 기존 `macgyvbot.config.config` import 호환을 위한 facade입니다.
+  - 신규 코드는 역할별 config 모듈을 직접 import합니다.
+
+- `macgyvbot/config/robot.py`
+  - MoveIt group, base/end-effector frame, Home/observation joint pose를 제공합니다.
+
+- `macgyvbot/config/topics.py`
+  - ROS topic 이름을 제공합니다.
+
+- `macgyvbot/config/models.py`
+  - YOLO, hand grasp ML, SAM weight 파일명을 제공합니다.
+
+- `macgyvbot/config/pick.py`
+  - pick target planning용 Z offset과 높이 보정값을 제공합니다.
+
+- `macgyvbot/config/grasp.py`
+  - gripper grasp 검증 timeout, polling, retry 값을 제공합니다.
+
+- `macgyvbot/config/hand_grasp.py`
+  - human grasp 판단 timeout과 ML confidence 기준을 제공합니다.
+
+- `macgyvbot/config/handoff.py`
+  - handoff 위치 탐색, 안정화, offset, replan 설정을 제공합니다.
+
+- `macgyvbot/config/return_flow.py`
+  - return workflow의 force-guided Z 하강 설정을 제공합니다.
+
+- `macgyvbot/config/timing.py`
+  - sequence polling 주기를 제공합니다.
+
+- `macgyvbot/config/ui.py`
+  - OpenCV debug window 이름을 제공합니다.
+
+- `macgyvbot/config/vlm.py`
+  - grasp point selection mode와 VLM grid 설정을 제공합니다.
 
 ### `macgyvbot/nodes/`
 
@@ -65,7 +97,8 @@ hand_grasp_detection_node
   - `/robot_task_status`가 `accepted/searching/picking/grasping`인 구간에서만 최신 YOLO ROI와 선택적 SAM mask를 갱신합니다.
   - `/robot_task_status`의 `grasp_success`를 lock trigger로 사용하고, 직전 mask/ROI를 고정한 뒤 `/hand_grasp_detection/tool_mask_lock`으로 응답합니다.
   - main pick sequence는 이 lock 응답을 받은 뒤에만 lift와 handoff 이동을 시작합니다.
-  - handoff pose에서는 locked ROI 또는 SAM mask, depth contact, `.pkl` ML classifier를 함께 사용하고, raw/stable 모두 `grasp`일 때만 handoff 성공을 인정합니다.
+  - handoff pose에서는 depth contact, `.pkl` ML classifier grasp, locked ROI/SAM mask contact가 모두 참일 때 handoff 성공을 인정합니다.
+  - 각 신호는 `/human_grasped_tool` payload에 진단값으로 함께 발행합니다.
   - 결과 JSON을 `/human_grasped_tool`로 발행하고, overlay 이미지를 `/hand_grasp_detection/annotated_image`로 발행합니다.
 
 ### `macgyvbot/ui/`
@@ -78,137 +111,142 @@ hand_grasp_detection_node
   - 사용자 입력창, 전송 버튼, 채팅 로그, 상태 라벨을 구성합니다.
   - ROS 로직은 직접 갖지 않고, `command_input_node`의 메서드를 호출해 입력을 전달합니다.
 
-### `macgyvbot/util/`
+### `macgyvbot/domain/`
 
-- `macgyvbot/util/__init__.py`
-  - util 하위 패키지 인식용 파일입니다.
+- `macgyvbot/domain/target_models.py`
+  - YOLO box, grasp point, depth projection으로 생성한 pick target 결과 타입을 제공합니다.
 
-## `macgyvbot/util/command_input/input_mapping/`
+- `macgyvbot/domain/pick_models.py`
+  - perception 결과를 pick motion waypoint로 바꾼 결과 타입을 제공합니다.
 
-- `macgyvbot/util/command_input/input_mapping/__init__.py`
-  - 명령 해석 유틸 패키지 인식용 파일입니다.
+### `macgyvbot/application/`
 
-- `macgyvbot/util/command_input/input_mapping/command_hard_parser.py`
-  - LLM 호출 전에 먼저 실행되는 빠른 local parser입니다.
-  - 공구 별칭, 한국어 키워드, fuzzy matching, action keyword를 사용합니다.
-  - 명확한 명령은 이 단계에서 바로 `tool_name`, `action`, `confidence`로 변환됩니다.
+- `macgyvbot/application/tool_command_controller.py`
+  - parsed command를 bring/return/release/stop 실행 경로로 라우팅합니다.
+  - ROS message 타입을 직접 알지 않고 callback과 status publisher를 통해 동작합니다.
 
-- `macgyvbot/util/command_input/input_mapping/command_llm_parser.py`
-  - local parser 실패 시 Ollama LLM fallback을 수행하는 parser입니다.
-  - JSON command 형식을 검증하고, 낮은 confidence는 확인 질문 상태로 넘깁니다.
-  - `bring`, `return`, `release`, `stop` 같은 action과 허용된 tool 목록을 관리합니다.
+- `macgyvbot/application/robot_status_publisher.py`
+  - `/robot_task_status` payload shape을 한 곳에서 조립합니다.
+  - ROS publish 자체는 node adapter에 위임합니다.
 
-## `macgyvbot/util/command_input/stt/`
+- `macgyvbot/application/robot_home_initializer.py`
+  - 초기 Home 이동과 Home pose/orientation 저장을 담당합니다.
 
-- `macgyvbot/util/command_input/stt/__init__.py`
-  - STT 유틸 패키지 인식용 파일입니다.
+- `macgyvbot/application/pick_frame_processor.py`
+  - 카메라 프레임의 YOLO 추론, target detection, grasp marker 렌더링, searching status 발행을 담당합니다.
 
-- `macgyvbot/util/command_input/stt/speech_to_text.py`
-  - `speech_recognition` 기반 마이크 STT wrapper입니다.
-  - 마이크 목록 출력, 주변 소음 보정, Google STT background listen을 담당합니다.
-  - ROS 의존성 없이 텍스트 callback만 호출하도록 분리되어 있습니다.
+- `macgyvbot/application/pick_target_planner.py`
+  - object base 좌표와 depth 보정값을 안전 workspace 내부 pick waypoint로 변환합니다.
 
-## `macgyvbot/util/macgyvbot_main/perception/`
+- `macgyvbot/application/pick_grasp_flow.py`
+  - 초기 gripper grasp 검증을 담당합니다.
 
-- `macgyvbot/util/macgyvbot_main/perception/__init__.py`
-  - perception 유틸 패키지 인식용 파일입니다.
+- `macgyvbot/application/pick_handoff_flow.py`
+  - 사용자 손 위치 탐색, handoff 이동, hand grasp 대기, 실패 시 원위치 반환을 담당합니다.
 
-- `macgyvbot/util/macgyvbot_main/perception/yolo_detector.py`
+- `macgyvbot/application/return_handoff_flow.py`
+  - 반납할 사용자-held 공구 위치 탐색, 수령 위치 이동, gripper grasp를 담당합니다.
+
+- `macgyvbot/application/return_home_placement_flow.py`
+  - 반납 공구를 Home 위치로 이동시키고 force-guided 하강 후 release합니다.
+
+- `macgyvbot/application/return_status_reporter.py`
+  - return workflow 전용 status payload를 조립하고 발행합니다.
+
+- `macgyvbot/application/pick_sequence.py`
+  - pick, lift, handoff 대기, 실패 시 원위치 반환까지의 실행 시퀀스를 담당합니다.
+  - target planning, 초기 grasp 검증, handoff 세부 절차는 하위 workflow에 위임합니다.
+
+- `macgyvbot/application/return_sequence.py`
+  - `return` 명령에서 사용자 handoff를 기다린 뒤 공구를 받아 Home 기준 반납 위치에 내려놓습니다.
+  - 수령, 배치, status reporting 세부 절차는 하위 workflow에 위임합니다.
+
+### `macgyvbot/perception/`
+
+- `macgyvbot/perception/model_paths.py`
+  - YOLO, SAM, ML 모델 weight 경로 해석을 공통으로 처리합니다.
+
+- `macgyvbot/perception/yolo_detector.py`
   - Ultralytics YOLO 모델 로딩과 추론을 감싼 wrapper입니다.
-  - ROS install share의 `weights/`, 현재 작업 디렉터리의 `weights/` 등을 순서대로 찾아 모델 경로를 해석합니다.
 
-- `macgyvbot/util/macgyvbot_main/perception/depth_projection.py`
-  - image pixel과 depth 값을 robot base 좌표로 변환합니다.
-  - camera intrinsics와 gripper-to-camera calibration, 현재 end-effector transform을 사용합니다.
+- `macgyvbot/perception/pick_target_resolver.py`
+  - YOLO box 선택, grasp point 선택, depth projection을 묶어 pick target을 생성합니다.
+  - `macgyvbot_main_node`의 target detection callback 성격 로직을 node 밖으로 분리합니다.
 
-## `macgyvbot/util/macgyvbot_main/grasp_mechanism/`
+- `macgyvbot/perception/depth_projection.py`
+  - image pixel과 depth 값을 camera/base 좌표로 변환합니다.
+  - 로봇 객체를 직접 알지 않고 `base_to_camera` 행렬 provider만 주입받습니다.
 
-- `macgyvbot/util/macgyvbot_main/grasp_mechanism/__init__.py`
-  - grasp mechanism 패키지 인식용 파일입니다.
+### `macgyvbot/perception/grasp_mechanism/`
 
-- `macgyvbot/util/macgyvbot_main/grasp_mechanism/grasp_point_selector.py`
+- `macgyvbot/perception/grasp_mechanism/grasp_point_selector.py`
   - 탐지된 bbox에서 실제 grasp pixel을 선택합니다.
-  - 기본은 bbox 중심점이고, 설정이 `vlm`이면 `grasp_by_vlm.py`를 lazy import해 VLM grasp point를 시도합니다.
-  - VLM 실패 시 bbox 중심점으로 fallback합니다.
+  - 기본은 bbox 중심점이고, 설정이 `vlm`이면 VLM grasp point를 시도합니다.
 
-- `macgyvbot/util/macgyvbot_main/grasp_mechanism/grasp_by_vlm.py`
-  - VLM 기반 grasp point 선택 로직입니다.
-  - object crop을 grid로 나누고, VLM 응답에서 적절한 grasp region과 yaw/orientation 후보를 추출합니다.
-  - depth refinement로 선택 pixel을 보정할 수 있습니다.
-  - 무거운 model dependency가 있어 `grasp_point_selector.py`에서 필요할 때 lazy load됩니다.
+- `macgyvbot/perception/grasp_mechanism/grasp_by_vlm.py`
+  - VLM 기반 grasp point 선택과 depth refinement를 담당합니다.
 
-## `macgyvbot/util/macgyvbot_main/model_control/`
+### `macgyvbot/control/`
 
-- `macgyvbot/util/macgyvbot_main/model_control/__init__.py`
-  - robot control 유틸 패키지 인식용 파일입니다.
-
-- `macgyvbot/util/macgyvbot_main/model_control/moveit_controller.py`
+- `macgyvbot/control/moveit_controller.py`
   - MoveItPy planning과 execution helper입니다.
-  - pose goal/state goal 실행, safe workspace clamp, VLM yaw 기반 wrist joint 회전을 담당합니다.
 
-- `macgyvbot/util/macgyvbot_main/model_control/robot_pose.py`
-  - `PoseStamped` 생성, 현재 end-effector transform 조회, orientation 변환, angle normalize helper를 제공합니다.
+- `macgyvbot/control/robot_pose.py`
+  - `PoseStamped` 생성, 현재 end-effector transform 조회, orientation 변환 helper를 제공합니다.
 
-- `macgyvbot/util/macgyvbot_main/model_control/robot_safezone.py`
+- `macgyvbot/control/robot_safezone.py`
   - robot workspace 안전 범위 clamp를 담당합니다.
-  - 목표 pose가 안전 영역 밖이면 최소/최대 경계로 보정합니다.
 
-- `macgyvbot/util/macgyvbot_main/model_control/onrobot_gripper.py`
+- `macgyvbot/control/onrobot_gripper.py`
   - OnRobot RG gripper 제어 클래스입니다.
-  - gripper open/close, TCP/Modbus 계열 통신 처리를 담당합니다.
 
-- `macgyvbot/util/macgyvbot_main/model_control/grasp_verifier.py`
-  - gripper close 뒤 동작이 끝난 상태에서 OnRobot RG의 `grip detected`와 폭을 연속 확인합니다.
-  - grasp 확인 실패 시 `GRASP_RETRY_LIMIT`회까지 open/close를 재시도합니다.
+- `macgyvbot/control/grasp_verifier.py`
+  - 초기 grasp 성공 여부를 OnRobot RG 상태로 검증합니다.
 
-- `macgyvbot/util/macgyvbot_main/model_control/force_detection.py`
-  - force/torque 입력의 Z 반대방향 힘을 보며 step 단위 Z 하강을 수행합니다.
-  - 반력이 감지되거나 안전 최소 Z에 도달하면 하강을 중단합니다.
+- `macgyvbot/control/force_detection.py`
+  - force/torque 입력 기반 Z 하강을 수행합니다.
 
-## `macgyvbot/util/macgyvbot_main/task_pipeline/`
+### `macgyvbot/recovery/`
 
-- `macgyvbot/util/macgyvbot_main/task_pipeline/__init__.py`
-  - task pipeline 패키지 인식용 파일입니다.
+- `macgyvbot/recovery/__init__.py`
+  - recovery 전용 객체를 위한 자리입니다. 현재 리팩토링 범위에서는 동작을 추가하지 않습니다.
 
-- `macgyvbot/util/macgyvbot_main/task_pipeline/pick_sequence.py`
-  - pick, lift, home 복귀, 사용자 handoff 대기, 실패 시 원위치 반환까지의 실행 시퀀스를 담당합니다.
-  - `macgyvbot_main_node`에서 시작되지만, 실제 단계별 MoveIt/gripper 실행 흐름은 이 파일에 분리되어 있습니다.
-  - 주요 성공/실패 상태를 `/robot_task_status`로 보고할 수 있도록 node state를 사용합니다.
-  - gripper grasp 성공 후에는 mask lock 응답을 기다리고, lock이 확인된 뒤에만 공구를 들어 올립니다.
-  - Home 근처에서 공구를 먼저 grasp한 뒤 Home 기준 전방 20cm 사용자 전달 위치로 이동하고, 전달 후 Home으로 복귀합니다.
+### `macgyvbot/command_input/`
 
-- `macgyvbot/util/macgyvbot_main/task_pipeline/return_sequence.py`
-  - `return` 명령에서 Home 기준 전방 20cm 위치로 이동한 뒤 사용자 handoff를 기다리고 공구를 받습니다.
-  - hand grasp detection 결과나 명령의 공구명을 기준으로 공구를 식별합니다.
-  - 반납 위치인 Home의 z=0.30m 위치로 이동하고, force-guided 하강 후 gripper를 release하고 Home으로 복귀합니다.
+- `macgyvbot/command_input/input_mapping/command_hard_parser.py`
+  - LLM 호출 전에 먼저 실행되는 빠른 local parser입니다.
 
-## `macgyvbot/util/hand_grasp_detection/hand_grasp/`
+- `macgyvbot/command_input/input_mapping/command_llm_parser.py`
+  - local parser 실패 시 Ollama LLM fallback을 수행하는 parser입니다.
 
-- `macgyvbot/util/hand_grasp_detection/hand_grasp/__init__.py`
-  - hand grasp 유틸 패키지 인식용 파일입니다.
+- `macgyvbot/command_input/input_mapping/command_vocabulary.py`
+  - tool alias, action keyword, LLM 허용 schema, confirmation vocabulary를 보관합니다.
 
-- `macgyvbot/util/hand_grasp_detection/hand_grasp/hand_detector.py`
+- `macgyvbot/command_input/stt/speech_to_text.py`
+  - `speech_recognition` 기반 마이크 STT wrapper입니다.
+
+- `macgyvbot/command_input/tts/tts_service.py`
+  - 음성 안내 출력을 담당합니다.
+
+### `macgyvbot/perception/hand_grasp/`
+
+- `macgyvbot/perception/hand_grasp/hand_detector.py`
   - MediaPipe Hands wrapper입니다.
-  - 손 landmark, palm center, handedness, hand bbox를 계산합니다.
-  - 중복 검출된 손을 IoU와 palm distance 기준으로 정리합니다.
 
-- `macgyvbot/util/hand_grasp_detection/hand_grasp/tool_detector.py`
+- `macgyvbot/perception/hand_grasp/tool_detector.py`
   - hand grasp 판단용 YOLO tool ROI detector입니다.
-  - target class 중 가장 confidence가 높은 tool bbox를 반환합니다.
-  - 기본 target class는 `drill`, `hammer`, `pliers`, `screwdriver`, `tape_measure`, `wrench`입니다.
 
-- `macgyvbot/util/hand_grasp_detection/hand_grasp/grasp_detector.py`
-  - 손과 공구가 실제로 잡힘 상태인지 판단하는 heuristic state machine입니다.
-  - landmark proximity, palm/tool distance, hand-tool overlap, pinch distance, depth contact를 종합합니다.
-  - 일정 frame 이상 grasp candidate가 유지되면 `HUMAN_GRASPED_TOOL`로 확정합니다.
+- `macgyvbot/perception/hand_grasp/ml_grasp_classifier.py`
+  - ML 기반 손 grasp classifier를 로드하고, raw/stable grasp 상태를 판정합니다.
 
-- `macgyvbot/util/hand_grasp_detection/hand_grasp/calculations.py`
+- `macgyvbot/perception/hand_grasp/sam_tool_mask.py`
+  - 선택적 SAM mask 생성과 locked mask contact 계산을 담당합니다.
+
+- `macgyvbot/perception/hand_grasp/calculations.py`
   - hand grasp 판단에 필요한 geometry/depth helper 모음입니다.
-  - rectangle distance, IoU, depth median, depth contact 정보 생성, active hand 선택, text drawing 등을 제공합니다.
 
-- `macgyvbot/util/hand_grasp_detection/hand_grasp/visualization.py`
+- `macgyvbot/perception/hand_grasp/visualization.py`
   - hand grasp detection overlay drawing helper입니다.
-  - tool bbox, hand landmarks, active hand, state text를 camera frame 위에 그립니다.
 
 ## `weights/`
 

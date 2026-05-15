@@ -36,9 +36,12 @@ geometry_module.msg = geometry_msg_module
 sys.modules.setdefault("geometry_msgs", geometry_module)
 sys.modules.setdefault("geometry_msgs.msg", geometry_msg_module)
 
-numpy_module = types.ModuleType("numpy")
-numpy_module.asarray = lambda value, dtype=None: value
-sys.modules.setdefault("numpy", numpy_module)
+try:
+    import numpy  # noqa: F401
+except ImportError:
+    numpy_module = types.ModuleType("numpy")
+    numpy_module.asarray = lambda value, dtype=None: value
+    sys.modules.setdefault("numpy", numpy_module)
 
 scipy_module = types.ModuleType("scipy")
 scipy_spatial_module = types.ModuleType("scipy.spatial")
@@ -55,7 +58,7 @@ sys.modules.setdefault("scipy.spatial", scipy_spatial_module)
 sys.modules.setdefault("scipy.spatial.transform", scipy_transform_module)
 
 handover_targeting = import_module(
-    "macgyvbot.util.macgyvbot_main.model_control.handover_targeting"
+    "macgyvbot.control.handover_targeting"
 )
 TargetCandidate = handover_targeting.TargetCandidate
 _observe_stable_candidate = handover_targeting._observe_stable_candidate
@@ -84,6 +87,13 @@ class FakeMotion:
         self.targets = []
 
     def plan_and_execute(self, logger, pose_goal=None, state_goal=None):
+        if pose_goal is not None:
+            x = pose_goal.pose.position.x
+            y = pose_goal.pose.position.y
+            z = pose_goal.pose.position.z
+            pose_goal.pose.position.x = max(0.0, x)
+            pose_goal.pose.position.y = min(max(y, -0.3), 0.3)
+            pose_goal.pose.position.z = max(0.24, z)
         self.targets.append(
             (
                 pose_goal.pose.position.x,

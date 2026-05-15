@@ -20,11 +20,11 @@ from macgyvbot.ui.voice_command_window import (
     QTimer,
     VoiceCommandGuiWindow,
 )
-from macgyvbot.util.command_input.input_mapping.command_llm_parser import (
+from macgyvbot.command_input.input_mapping.command_llm_parser import (
     CommandLlmParser,
 )
-from macgyvbot.util.command_input.stt.speech_to_text import SpeechToTextService
-from macgyvbot.util.command_input.tts import TtsService
+from macgyvbot.command_input.stt.speech_to_text import SpeechToTextService
+from macgyvbot.command_input.tts import TtsService
 
 
 class CommandInputNode(Node):
