@@ -19,16 +19,8 @@ class GraspVerifier:
         self.gripper = gripper
         self.wait_fn = wait_fn or cooperative_wait
 
-    def try_grasp(self, logger, publish_attempt=None, failure_prefix="공구 grasp", is_stopped_cb = None):
-
+    def try_grasp(self, logger, publish_attempt=None, failure_prefix="공구 grasp"):
         for attempt in range(1, GRASP_RETRY_LIMIT + 1):
-            
-            # --- 그리퍼를 닫기 전에 매번 깃발이 올라왔는지 확인! ---
-            if is_stopped_cb is not None and is_stopped_cb():
-                logger.warn("Grasp 시도 중 비상 정지 감지! 그리퍼 잡기 루프를 즉시 파괴합니다.")
-                return False
-            # --------------------------------------------------------
-
             logger.info(f"{failure_prefix} 시도 {attempt}/{GRASP_RETRY_LIMIT}")
             if publish_attempt is not None:
                 publish_attempt(attempt, GRASP_RETRY_LIMIT)
