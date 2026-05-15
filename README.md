@@ -362,8 +362,8 @@ TTS 관련 파라미터:
 - `tts_engine`: 사용할 엔진, 기본값 `auto` (`edge-tts` 우선, 실패 시 `espeak-ng` fallback)
 - `tts_voice`: TTS voice, 기본값 `ko-KR-SunHiNeural`
 - `tts_rate`: `espeak-ng` 읽기 속도, 기본값 `165`
-- `tts_edge_rate`: `edge-tts` 읽기 속도, 기본값 `+10%`
-- `tts_pitch`: `edge-tts` pitch, 기본값 `+8Hz`
+- `tts_edge_rate`: `edge-tts` 읽기 속도, 기본값 `+25%`
+- `tts_pitch`: `edge-tts` pitch, 기본값 `+35Hz`
 - `tts_timeout_sec`: 한 문장 TTS 생성/재생 제한 시간, 기본값 `20.0`
 
 마이크 STT까지 단독으로 확인하려면 `enable_microphone:=true`로 실행합니다.
@@ -373,6 +373,20 @@ ros2 run macgyvbot command_input_node --ros-args -p enable_microphone:=true
 ```
 
 통합 노드는 GUI 채팅 입력과 선택적 마이크 STT를 처리하며, `/tool_command`, `/command_feedback`을 발행합니다. 로봇 실행 상태는 `/robot_task_status`로 GUI에 돌아옵니다.
+
+`/robot_task_status`는 JSON 문자열로 받으며, GUI에서는 내부 상태명을 그대로 보여주지 않고 MacGyvBot 말풍선과 좌측 상태 패널로 변환해 표시합니다. 예를 들어 `searching`은 “드라이버를 찾는 중입니다.”, `waiting_handoff`는 “손으로 공구를 잡아주세요.”처럼 표시됩니다. 같은 상태가 연속으로 반복되면 채팅과 TTS를 중복 출력하지 않습니다.
+
+TTS는 MacGyvBot이 사용자에게 꼭 알려야 하는 문장만 읽습니다. 확인 질문, 실패/오류, `waiting_handoff`, `done`, `paused`, `resumed` 같은 상태는 음성으로 안내하고, `searching`처럼 자주 반복되는 진행 상태나 confidence/method 같은 디버그 정보는 읽지 않습니다.
+
+상태 표시만 수동으로 확인하려면 GUI를 켠 뒤 별도 터미널에서 아래처럼 publish할 수 있습니다.
+
+```bash
+ros2 topic pub --once /robot_task_status std_msgs/msg/String \
+  "{data: '{\"status\":\"waiting_handoff\",\"tool_name\":\"screwdriver\"}'}"
+
+ros2 topic pub --once /robot_task_status std_msgs/msg/String \
+  "{data: '{\"status\":\"failed\",\"tool_name\":\"screwdriver\",\"reason\":\"robot_grasp_failed\"}'}"
+```
 
 GUI 실행에 PyQt5가 필요합니다.
 
