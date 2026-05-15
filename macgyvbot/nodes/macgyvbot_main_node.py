@@ -19,7 +19,7 @@ from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import String
 
 # 로봇 정지를 위한 서비스
-from macgyvbot_msgs.srv import RobotTaskControl
+from my_custom_interfaces.srv import RobotTaskControl
 from action_msgs.srv import CancelGoal
 
 from macgyvbot.config.config import (
@@ -268,9 +268,6 @@ class MacGyvBotNode(Node):
             future = self._cancel_goal_cli.call_async(cancel_req)
             future.add_done_callback(self._cancel_goal_response_cb)
             self.get_logger().info("MoveIt 궤적 이동 강제 취소(CancelGoal)를 요청했습니다.")
-
-            # 그리퍼 동작 차단
-            # => pick_sequence.py와 연계된 로직 필요 (todo)
 
             # 로봇 준비상태 변경 => stopped
             robot_readiness_status = "stopped"
