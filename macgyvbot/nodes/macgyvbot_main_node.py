@@ -3,6 +3,7 @@
 
 import json
 import threading
+import time
 from pathlib import Path
 
 import cv2
@@ -360,9 +361,12 @@ class MacGyvBotNode(Node):
         try:
             result = json.loads(msg.data)
         except json.JSONDecodeError:
-            self.get_logger().warn(f"잡기 인식 결과 JSON 파싱 실패: {msg.data}")
+            self.get_logger().warn(
+                f"잡기 인식 결과 JSON 파싱 실패: {msg.data}"
+            )
             return
 
+        result["_received_monotonic_sec"] = time.monotonic()
         self._attach_base_position_to_grasp_result(result)
         self.last_grasp_result = result
         self.human_grasped_tool = bool(result.get("human_grasped_tool", False))
@@ -413,6 +417,10 @@ class MacGyvBotNode(Node):
             "z": float(bz),
             "frame_id": BASE_FRAME,
         }
+        result["position_observed_monotonic_sec"] = result.get(
+            "_received_monotonic_sec",
+            time.monotonic(),
+        )
 
     def _hand_grasp_image_cb(self, msg):
         try:
