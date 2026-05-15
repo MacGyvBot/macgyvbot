@@ -6,6 +6,7 @@
 """
 
 import json
+import signal
 import sys
 import threading
 
@@ -23,6 +24,7 @@ from macgyvbot.util.command_input.input_mapping.command_llm_parser import (
     CommandLlmParser,
 )
 from macgyvbot.util.command_input.stt.speech_to_text import SpeechToTextService
+from macgyvbot.util.command_input.tts import TtsService
 
 
 class CommandInputNode(Node):
@@ -62,6 +64,13 @@ class CommandInputNode(Node):
         self.declare_parameter('use_local_parser', True)
         self.declare_parameter('use_llm_fallback', True)
         self.declare_parameter('parser_mode', 'llm_primary')
+        self.declare_parameter('enable_tts', True)
+        self.declare_parameter('tts_engine', 'auto')
+        self.declare_parameter('tts_voice', 'ko-KR-SunHiNeural')
+        self.declare_parameter('tts_rate', 165)
+        self.declare_parameter('tts_edge_rate', '+25%')
+        self.declare_parameter('tts_pitch', '+35Hz')
+        self.declare_parameter('tts_timeout_sec', 20.0)
 
         self._use_gui = bool(self.get_parameter('use_gui').value)
         self._enable_microphone = bool(self.get_parameter('enable_microphone').value)
@@ -93,6 +102,7 @@ class CommandInputNode(Node):
         self._last_target_label = ''
         self._last_camera_stamp_ns = None
         self._last_connection_text = ''
+        self._last_robot_status_key = None
         self._robot_node_names = {
             name.strip()
             for name in str(self.get_parameter('robot_node_names').value).split(',')
@@ -131,6 +141,17 @@ class CommandInputNode(Node):
             parser_mode=self.get_parameter('parser_mode').value,
             logger=self._log_parser,
         )
+        self._tts_service = TtsService(
+            enabled=bool(self.get_parameter('enable_tts').value),
+            engine=self.get_parameter('tts_engine').value,
+            voice=self.get_parameter('tts_voice').value,
+            rate=int(self.get_parameter('tts_rate').value),
+            edge_rate=self.get_parameter('tts_edge_rate').value,
+            pitch=self.get_parameter('tts_pitch').value,
+            timeout_sec=float(self.get_parameter('tts_timeout_sec').value),
+            logger=self._log_tts,
+        )
+        self._tts_service.start()
 
         self._self_published = {}
         self._self_pub_lock = threading.Lock()
@@ -165,6 +186,8 @@ class CommandInputNode(Node):
             self.get_logger().info(f'수업 예제 호환 topic: {compat_topic}')
         if self._use_gui:
             self.get_logger().info('GUI 모드 활성화: command_input_node가 UI를 직접 연결합니다.')
+        if self._tts_service.enabled:
+            self.get_logger().info('TTS 모드 활성화: MacGyvBot 응답을 음성으로 출력합니다.')
 
     def attach_window(self, window):
         self.window = window
@@ -193,6 +216,9 @@ class CommandInputNode(Node):
     def _log_parser(self, level, message):
         self._log_stt(level, message)
 
+    def _log_tts(self, level, message):
+        self._log_stt(level, message)
+
     def _mark_self_published(self, text):
         with self._self_pub_lock:
             self._self_published[text] = self._self_published.get(text, 0) + 1
@@ -216,15 +242,11 @@ class CommandInputNode(Node):
         msg = String()
         msg.data = text
 
-        self._mark_self_published(text)
         self._stt_pub.publish(msg)
         if self._compat_pub is not None:
             self._compat_pub.publish(msg)
 
         self.get_logger().info(f'STT 인식 결과: "{text}"')
-        self._append_user(text, source='voice')
-        self._set_status('음성 명령 수신')
-        self._handle_text(text)
 
     def _text_cb(self, msg):
         text = (msg.data or '').strip()
@@ -314,6 +336,7 @@ class CommandInputNode(Node):
             )
             if self.window is not None and hasattr(self.window, 'append_confirmation'):
                 self.window.append_confirmation(confirmation_message)
+                self._speak_bot(confirmation_message)
             else:
                 self._append_bot(confirmation_message)
             self._set_status('확인 응답 대기')
@@ -351,33 +374,13 @@ class CommandInputNode(Node):
         if hasattr(self._parser, 'update_robot_status'):
             self._parser.update_robot_status(status)
 
-        state = status.get('status', status.get('state', 'unknown'))
-        tool_name = status.get(
-            'tool_name',
-            self._last_target_label or 'unknown',
-        )
-        message = status.get('message', '')
+        view = self._build_robot_status_view(status)
+        self._last_target_label = view['target_label']
+        self._set_status(view['panel_status'])
+        self._set_task_status(view['target_label'], view['stage_text'])
 
-        if state in ('accepted', 'searching', 'picking', 'waiting_handoff'):
-            self._last_target_label = tool_name
-            self._append_system(message or f'{tool_name}: {state}')
-            self._set_status(message or state)
-            self._set_task_status(tool_name, message or state)
-        elif state in ('done', 'completed', 'success'):
-            self._append_bot(message or f'{tool_name} 전달 동작이 완료되었습니다.')
-            self._set_status('완료')
-            self._set_task_status(tool_name, message or '완료')
-        elif state in ('failed', 'error'):
-            self._append_bot(message or f'{tool_name} 동작 중 문제가 발생했습니다.')
-            self._set_status('실패')
-            self._set_task_status(tool_name, message or '실패')
-        elif state in ('busy', 'cancelled', 'returned', 'rejected'):
-            self._append_bot(message or f'{tool_name}: {state}')
-            self._set_status(state)
-            self._set_task_status(tool_name, message or state)
-        else:
-            self._append_system(message or f'{tool_name}: {state}')
-            self._set_task_status(tool_name, message or state)
+        if view['show_chat']:
+            self._append_bot(view['message'], speak=view['speak'])
 
     def _camera_status_cb(self, _msg):
         self._last_camera_stamp_ns = self.get_clock().now().nanoseconds
@@ -444,17 +447,219 @@ class CommandInputNode(Node):
             )
         return message or '명령을 이해하지 못했습니다. 다시 입력해주세요.'
 
+    def _build_robot_status_view(self, status):
+        state = str(status.get('status', status.get('state', 'unknown'))).strip()
+        if not state:
+            state = 'unknown'
+        state = state.lower()
+
+        tool_name = status.get('tool_name') or self._last_target_label or 'unknown'
+        target_label = self._tool_display_name(tool_name)
+        raw_message = str(status.get('message') or '').strip()
+        reason = str(status.get('reason') or '').strip()
+
+        message = self._robot_status_message(state, target_label, raw_message, reason)
+        panel_status = self._robot_panel_status(state, message)
+        stage_text = self._robot_stage_text(state, message)
+        speak = self._should_speak_robot_status(state)
+
+        key = (state, str(tool_name), raw_message or message)
+        force_show = state in self._always_show_robot_statuses()
+        show_chat = force_show or key != self._last_robot_status_key
+        if show_chat:
+            self._last_robot_status_key = key
+
+        return {
+            'state': state,
+            'message': message,
+            'panel_status': panel_status,
+            'stage_text': stage_text,
+            'target_label': target_label,
+            'speak': speak and show_chat,
+            'show_chat': show_chat,
+        }
+
+    def _robot_status_message(self, state, target_label, raw_message, reason):
+        if raw_message:
+            if state in ('failed', 'error') and reason and reason not in raw_message:
+                return f'{raw_message} 원인: {reason}'
+            return raw_message
+
+        templates = {
+            'accepted': f'요청을 확인했습니다. {target_label} 작업을 시작할게요.',
+            'searching_drawer': f'{target_label}를 꺼낼 공구함을 찾는 중입니다.',
+            'moving_to_drawer': '공구함으로 이동 중입니다.',
+            'searching_drawer_handle': '서랍 손잡이를 찾는 중입니다.',
+            'opening_drawer': '서랍을 여는 중입니다.',
+            'closing_drawer': '서랍 문을 닫는 중입니다.',
+            'searching': f'{target_label}를 찾는 중입니다.',
+            'picking': f'{target_label}를 집는 위치로 이동 중입니다.',
+            'approaching_tool': f'{target_label} 상단으로 접근 중입니다.',
+            'grasping': '공구를 잡는 중입니다.',
+            'grasp_success': '공구를 안정적으로 잡았습니다.',
+            'lifting_tool': '공구를 안전 높이로 들어 올리는 중입니다.',
+            'moving_to_handoff': '사용자 전달 위치로 이동 중입니다.',
+            'searching_hand': '사용자 손을 찾는 중입니다.',
+            'waiting_handoff': '손으로 공구를 잡아주세요.',
+            'handoff_complete': '공구 전달을 완료했습니다.',
+            'waiting_return_handoff': '반납할 공구를 받을 준비를 하고 있습니다.',
+            'moving_return_grasp_pose': '반납 공구를 감지할 위치로 이동 중입니다.',
+            'placing_return_tool': f'{target_label}를 보관 위치에 놓는 중입니다.',
+            'returning_home': 'Home 위치로 복귀하는 중입니다.',
+            'done': '작업이 완료되었습니다.',
+            'completed': '작업이 완료되었습니다.',
+            'success': '작업이 완료되었습니다.',
+            'failed': '작업에 실패했습니다.',
+            'error': '작업 중 오류가 발생했습니다.',
+            'busy': '이미 다른 작업을 수행 중입니다.',
+            'paused': '로봇이 일시정지되었습니다.',
+            'resumed': '작업을 다시 시작합니다.',
+            'cancelled': '작업이 취소되었습니다.',
+            'returned': '반납 작업을 완료했습니다.',
+            'rejected': '요청을 수행할 수 없습니다.',
+        }
+
+        message = templates.get(state, f'현재 작업 상태는 {state}입니다.')
+        if state in ('failed', 'error') and reason:
+            return f'{message} 원인: {reason}'
+        return message
+
+    def _robot_panel_status(self, state, message):
+        labels = {
+            'accepted': '요청 확인',
+            'searching_drawer': '공구함 탐색',
+            'moving_to_drawer': '공구함 이동',
+            'searching_drawer_handle': '손잡이 탐색',
+            'opening_drawer': '서랍 열기',
+            'closing_drawer': '서랍 닫기',
+            'searching': '공구 탐색',
+            'picking': '공구 접근',
+            'approaching_tool': '공구 접근',
+            'grasping': '공구 파지',
+            'grasp_success': '파지 성공',
+            'lifting_tool': '공구 들어올림',
+            'moving_to_handoff': '전달 위치 이동',
+            'searching_hand': '손 탐색',
+            'waiting_handoff': '전달 대기',
+            'handoff_complete': '전달 완료',
+            'waiting_return_handoff': '반납 대기',
+            'moving_return_grasp_pose': '반납 위치 이동',
+            'placing_return_tool': '공구 보관',
+            'returning_home': 'Home 복귀',
+            'done': '완료',
+            'completed': '완료',
+            'success': '완료',
+            'failed': '실패',
+            'error': '오류',
+            'busy': '작업 중',
+            'paused': '일시정지',
+            'resumed': '재개',
+            'cancelled': '취소',
+            'returned': '반납 완료',
+            'rejected': '거절',
+        }
+        return labels.get(state, message)
+
+    def _robot_stage_text(self, state, message):
+        stage_labels = {
+            'accepted': '요청 확인',
+            'searching_drawer': '공구함 찾는 중',
+            'moving_to_drawer': '공구함 이동 중',
+            'searching_drawer_handle': '서랍 손잡이 찾는 중',
+            'opening_drawer': '서랍 여는 중',
+            'closing_drawer': '서랍 닫는 중',
+            'searching': '공구 찾는 중',
+            'picking': '공구 집는 위치로 이동 중',
+            'approaching_tool': '공구 접근 중',
+            'grasping': '공구 잡는 중',
+            'grasp_success': '공구 잡기 성공',
+            'lifting_tool': '안전 높이로 이동 중',
+            'moving_to_handoff': '전달 위치 이동 중',
+            'searching_hand': '사용자 손 찾는 중',
+            'waiting_handoff': '사용자 잡기 대기',
+            'handoff_complete': '공구 전달 완료',
+            'waiting_return_handoff': '반납 공구 수령 대기',
+            'moving_return_grasp_pose': '반납 공구 감지 위치 이동 중',
+            'placing_return_tool': '서랍 안에 공구 보관 중',
+            'returning_home': 'Home 복귀 중',
+            'done': '작업 완료',
+            'completed': '작업 완료',
+            'success': '작업 완료',
+            'failed': '작업 실패',
+            'error': '작업 오류',
+            'busy': '다른 작업 수행 중',
+            'paused': '작업 일시정지',
+            'resumed': '작업 재개',
+            'cancelled': '작업 취소',
+            'returned': '반납 완료',
+            'rejected': '작업 거절',
+        }
+        return stage_labels.get(state, message)
+
+    def _should_speak_robot_status(self, state):
+        return state in {
+            'waiting_handoff',
+            'waiting_return_handoff',
+            'done',
+            'completed',
+            'success',
+            'failed',
+            'error',
+            'busy',
+            'paused',
+            'resumed',
+            'cancelled',
+            'rejected',
+        }
+
+    def _always_show_robot_statuses(self):
+        return {
+            'waiting_handoff',
+            'waiting_return_handoff',
+            'done',
+            'completed',
+            'success',
+            'failed',
+            'error',
+            'busy',
+            'paused',
+            'resumed',
+            'cancelled',
+            'rejected',
+            'grasp_success',
+            'handoff_complete',
+        }
+
+    def _tool_display_name(self, tool_name):
+        label = str(tool_name or 'unknown').strip()
+        display_names = {
+            'screwdriver': '드라이버',
+            'pliers': '플라이어',
+            'hammer': '망치',
+            'tape_measure': '줄자',
+            'drill': '드릴',
+            'wrench': '렌치',
+            'unknown': '공구',
+        }
+        return display_names.get(label, label)
+
     def _append_user(self, text, source='keyboard'):
         if self.window is not None:
             self.window.append_user(text, source=source)
 
-    def _append_bot(self, text):
+    def _append_bot(self, text, speak=True):
         if self.window is not None:
             self.window.append_bot(text)
+        if speak:
+            self._speak_bot(text)
 
     def _append_system(self, text):
         if self.window is not None:
             self.window.append_system(text)
+
+    def _speak_bot(self, text):
+        if hasattr(self, '_tts_service') and self._tts_service is not None:
+            self._tts_service.speak(text)
 
     def _set_status(self, text):
         if self.window is not None:
@@ -467,6 +672,8 @@ class CommandInputNode(Node):
     def destroy_node(self):
         if self._stt_service is not None:
             self._stt_service.stop()
+        if self._tts_service is not None:
+            self._tts_service.stop()
         super().destroy_node()
 
 
@@ -480,12 +687,28 @@ def main(args=None):
         node.attach_window(window)
         window.show()
 
+        shutdown_requested = {'value': False}
+
+        def request_shutdown(_signum=None, _frame=None):
+            if shutdown_requested['value']:
+                return
+            shutdown_requested['value'] = True
+            node.get_logger().info('종료 신호를 받아 GUI와 command_input_node를 종료합니다.')
+            window.close()
+            app.quit()
+
+        signal.signal(signal.SIGINT, request_shutdown)
+        signal.signal(signal.SIGTERM, request_shutdown)
+
         timer = QTimer()
         timer.timeout.connect(lambda: rclpy.spin_once(node, timeout_sec=0.0))
         timer.start(30)
 
         try:
             exit_code = app.exec_()
+        except KeyboardInterrupt:
+            request_shutdown()
+            exit_code = 0
         finally:
             timer.stop()
             node.destroy_node()

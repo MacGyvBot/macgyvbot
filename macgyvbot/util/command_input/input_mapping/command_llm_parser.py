@@ -356,6 +356,19 @@ class CommandLlmParser:
             )
             return command
 
+        if action == 'stop':
+            command = {
+                'tool_name': 'unknown',
+                'action': 'stop',
+                'target_mode': 'unknown',
+                'raw_text': text,
+                'match_method': 'stop_keyword',
+                'match_score': 1.0,
+                'confidence': 1.0,
+            }
+            self._info('local parser가 정지 명령으로 확정했습니다.')
+            return command
+
         if not tool_name:
             if action == 'return' and self._has_deictic_target(text):
                 command = {
@@ -883,6 +896,36 @@ class CommandLlmParser:
                     raw_text=raw_text,
                     reason='unknown_action',
                     message='무엇을 해야 하는지 확정하지 못했습니다. 다시 입력해주세요.',
+                    command=candidate_command,
+                ),
+            }
+
+        if action == 'stop' and not self._has_stop_intent(raw_text):
+            self._warn('명확한 정지 표현이 없어 stop 명령을 무시합니다.')
+            candidate_command['action'] = 'unknown'
+            return {
+                'command': None,
+                'feedback': self._feedback(
+                    status='rejected',
+                    raw_text=raw_text,
+                    reason='unknown_action',
+                    message='무엇을 해야 하는지 확정하지 못했습니다. 다시 입력해주세요.',
+                    command=candidate_command,
+                ),
+            }
+
+        if action == 'bring' and target_mode == 'deictic':
+            self._warn('deictic bring 명령은 지원하지 않아 재입력을 요청합니다.')
+            return {
+                'command': None,
+                'feedback': self._feedback(
+                    status='rejected',
+                    raw_text=raw_text,
+                    reason='deictic_bring_not_supported',
+                    message=(
+                        '가져오기 명령은 공구 이름이 필요합니다. '
+                        '어떤 공구를 가져올지 말해주세요.'
+                    ),
                     command=candidate_command,
                 ),
             }
