@@ -19,6 +19,8 @@ def generate_launch_description():
     llm_model = LaunchConfiguration("llm_model")
     llm_timeout_sec = LaunchConfiguration("llm_timeout_sec")
     parser_mode = LaunchConfiguration("parser_mode")
+    sam_enabled = LaunchConfiguration("sam_enabled")
+    sam_checkpoint = LaunchConfiguration("sam_checkpoint")
 
     # Doosan M0609 MoveIt 기본 설정 (URDF, SRDF, kinematics, controllers 등)
     moveit_config = (
@@ -175,8 +177,8 @@ def generate_launch_description():
                         "depth_min_contact_landmarks": 4,
                         "robot_status_topic": "/robot_task_status",
                         "grasp_model": LaunchConfiguration("grasp_model"),
-                        "sam_enabled": LaunchConfiguration("sam_enabled"),
-                        "sam_checkpoint": LaunchConfiguration("sam_checkpoint"),
+                        "sam_enabled": sam_enabled,
+                        "sam_checkpoint": sam_checkpoint,
                         "sam_backend": "mobile_sam",
                         "sam_model_type": "vit_t",
                         "sam_device": "cuda",
@@ -186,7 +188,6 @@ def generate_launch_description():
                         "require_ml_grasp": True,
                         "require_locked_tool": True,
                         "require_depth_grasp": True,
-                        "ml_min_confidence": 0.60,
                     }
                 ],
             ),

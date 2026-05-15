@@ -548,7 +548,7 @@ sequence는 이 lock 응답을 확인한 뒤에만 lift와 handoff 이동을 시
 handoff pose에서는 사용자 손이 locked ROI/mask 근처에 있는지, 손 landmark의
 depth가 공구 ROI depth와 가까운지, `.pkl` ML classifier가 `grasp`로 판정하는지
 함께 확인합니다. 기본 설정에서는 ML raw/stable 상태가 모두 `grasp`이고,
-confidence와 depth 조건을 통과해야 `/human_grasped_tool`의
+ML confidence가 `0.85` 이상이며 depth 조건을 통과해야 `/human_grasped_tool`의
 `human_grasped_tool=true`가 발행됩니다.
 
 ML 모델은 Git에 포함하지 않습니다. 기본 경로는 `weights/hand_grasp_model.pkl`
