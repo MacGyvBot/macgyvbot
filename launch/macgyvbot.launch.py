@@ -10,8 +10,15 @@ from moveit_configs_utils import MoveItConfigsBuilder
 def generate_launch_description():
     use_voice_command = LaunchConfiguration("use_voice_command")
     use_stt = LaunchConfiguration("use_stt")
+    use_tts = LaunchConfiguration("use_tts")
+    tts_engine = LaunchConfiguration("tts_engine")
+    tts_voice = LaunchConfiguration("tts_voice")
+    tts_edge_rate = LaunchConfiguration("tts_edge_rate")
+    tts_pitch = LaunchConfiguration("tts_pitch")
+    tts_timeout_sec = LaunchConfiguration("tts_timeout_sec")
     llm_model = LaunchConfiguration("llm_model")
     llm_timeout_sec = LaunchConfiguration("llm_timeout_sec")
+    parser_mode = LaunchConfiguration("parser_mode")
 
     # Doosan M0609 MoveIt 기본 설정 (URDF, SRDF, kinematics, controllers 등)
     moveit_config = (
@@ -51,6 +58,36 @@ def generate_launch_description():
                 description="마이크 STT 노드를 실행할지 여부",
             ),
             DeclareLaunchArgument(
+                "use_tts",
+                default_value="true",
+                description="MacGyvBot GUI 응답과 주요 상태 메시지를 TTS로 출력할지 여부",
+            ),
+            DeclareLaunchArgument(
+                "tts_engine",
+                default_value="auto",
+                description="TTS engine: auto, edge, espeak-ng",
+            ),
+            DeclareLaunchArgument(
+                "tts_voice",
+                default_value="ko-KR-SunHiNeural",
+                description="TTS voice. edge 사용 시 예: ko-KR-SunHiNeural",
+            ),
+            DeclareLaunchArgument(
+                "tts_edge_rate",
+                default_value="+25%",
+                description="edge-tts speech rate. 예: +10%, +0%, -10%",
+            ),
+            DeclareLaunchArgument(
+                "tts_pitch",
+                default_value="+35Hz",
+                description="edge-tts pitch. 예: +8Hz, +0Hz, -5Hz",
+            ),
+            DeclareLaunchArgument(
+                "tts_timeout_sec",
+                default_value="20.0",
+                description="TTS 생성/재생 명령 제한 시간(초)",
+            ),
+            DeclareLaunchArgument(
                 "llm_model",
                 default_value="gemma3:1b",
                 description="Ollama command parser에 사용할 로컬 LLM 모델명",
@@ -59,6 +96,11 @@ def generate_launch_description():
                 "llm_timeout_sec",
                 default_value="25.0",
                 description="Ollama command parser 응답 대기 시간(초)",
+            ),
+            DeclareLaunchArgument(
+                "parser_mode",
+                default_value="llm_primary",
+                description="Command parser mode: hybrid or llm_primary",
             ),
             DeclareLaunchArgument(
                 "grasp_point_mode",
@@ -110,13 +152,18 @@ def generate_launch_description():
                 name="hand_grasp_detection_node",
                 output="screen",
                 parameters=[
+                    moveit_config.to_dict(),
+                    moveit_py_params,
                     {
                         "color_topic": "/camera/camera/color/image_raw",
+                        "camera_info_topic": "/camera/camera/color/camera_info",
                         "depth_topic": "/camera/camera/aligned_depth_to_color/image_raw",
                         "result_topic": "/human_grasped_tool",
                         "annotated_topic": "/hand_grasp_detection/annotated_image",
                         "mask_lock_topic": "/hand_grasp_detection/tool_mask_lock",
                         "use_depth": True,
+                        "publish_base_position": False,
+                        "position_frame_id": "base_link",
                         "publish_annotated": True,
                         "display": False,
                         "yolo_model": LaunchConfiguration("yolo_model"),
@@ -152,9 +199,16 @@ def generate_launch_description():
                     {
                         "use_gui": True,
                         "enable_microphone": use_stt,
+                        "enable_tts": use_tts,
+                        "tts_engine": tts_engine,
+                        "tts_voice": tts_voice,
+                        "tts_edge_rate": tts_edge_rate,
+                        "tts_pitch": tts_pitch,
+                        "tts_timeout_sec": tts_timeout_sec,
                         "model": llm_model,
                         "use_local_parser": True,
                         "use_llm_fallback": True,
+                        "parser_mode": parser_mode,
                         "timeout_sec": llm_timeout_sec,
                         "min_confidence": 0.55,
                     }

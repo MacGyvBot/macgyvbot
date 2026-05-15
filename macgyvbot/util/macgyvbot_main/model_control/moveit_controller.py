@@ -9,7 +9,12 @@ from macgyvbot.util.macgyvbot_main.model_control.robot_safezone import (
     clamp_to_safe_workspace,
 )
 
-from macgyvbot.config.config import GROUP_NAME, EE_LINK, WRIST_JOINT_NAME
+from macgyvbot.config.config import (
+    EE_LINK,
+    GROUP_NAME,
+    HOME_JOINTS,
+    WRIST_JOINT_NAME,
+)
 from macgyvbot.util.macgyvbot_main.model_control.robot_pose import normalize_angle_deg
 
 
@@ -70,6 +75,15 @@ class MoveItController:
             state_goal=state_goal,
             params=self.params,
         )
+
+    def move_to_home_joints(self, logger):
+        """Move to the configured Home joint pose."""
+        state_goal = RobotState(self.robot.get_robot_model())
+        state_goal.joint_positions = HOME_JOINTS
+        state_goal.update()
+
+        logger.info("Home joint pose로 복귀합니다.")
+        return self.plan_and_execute(logger, state_goal=state_goal)
 
     def rotate_wrist_by_yaw_deg(self, yaw_deg, logger):
         if yaw_deg is None:

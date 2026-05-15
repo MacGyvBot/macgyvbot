@@ -141,8 +141,7 @@ else:
             self._node.publish_user_text(text)
 
         def append_user(self, text, source='keyboard'):
-            label = '나' if source == 'keyboard' else '음성 입력'
-            self._append_bubble(label, text, align='right', role='user')
+            self._append_bubble('나', text, align='right', role='user')
 
         def append_bot(self, text):
             self._append_bubble('MacGyvBot', text, align='left', role='bot')

@@ -29,6 +29,9 @@ from macgyvbot.util.hand_grasp_detection.hand_grasp.grasp_detector import (
 from macgyvbot.util.hand_grasp_detection.hand_grasp.hand_detector import (
     HandDetector,
 )
+from macgyvbot.util.hand_grasp_detection.hand_grasp.hand_center import (
+    extract_hand_center_pixel,
+)
 from macgyvbot.util.hand_grasp_detection.hand_grasp.tool_detector import (
     DEFAULT_MODEL_PATH,
     DEFAULT_TOOL_CLASSES,
@@ -377,7 +380,7 @@ class HandGraspDetectionNode(Node):
         ml_result = self._update_ml_grasp(hand_for_state)
         result = self._compose_result(contact_result, mask_result, ml_result)
 
-        self._publish_result(result, tool_detection, active_hand)
+        self._publish_result(result, tool_detection, active_hand, hand_infos)
 
         if self.publish_annotated or self.display:
             annotated = frame.copy()
@@ -611,7 +614,9 @@ class HandGraspDetectionNode(Node):
         result: dict,
         tool_detection: Optional[ToolDetection],
         active_hand: Optional[dict],
+        hand_infos: list[dict],
     ) -> None:
+        hand_pixel = extract_hand_center_pixel(active_hand, hand_infos)
         payload = {
             "state": result["state"],
             "human_grasped_tool": result["human_grasped_tool"],
@@ -646,6 +651,7 @@ class HandGraspDetectionNode(Node):
                 if self.locked_tool is not None
                 else tool_detection.roi if tool_detection else None
             ),
+            "hand_pixel": hand_pixel,
         }
         self.result_pub.publish(String(data=json.dumps(payload, ensure_ascii=False)))
 

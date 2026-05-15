@@ -256,7 +256,27 @@ ros2 launch macgyvbot macgyvbot.launch.py grasp_point_mode:=vlm
 
 VLM 모드는 YOLO가 검출한 객체 crop에서 grid 기반 grasp region을 선택한 뒤 depth로 grasp pixel을 보정합니다. VLM 추론 또는 depth 보정이 실패하면 기존 중심점 방식으로 fallback합니다.
 
-`macgyvbot.launch.py`는 로봇 메인 노드, hand grasp detection, STT/GUI/명령 해석 통합 노드를 함께 실행합니다.
+`macgyvbot.launch.py`는 로봇 메인 노드, hand grasp detection, STT/GUI/명령 해석 통합 노드를 함께 실행합니다. 최종 데모용 기본 launch는 TTS까지 함께 켜지도록 설정되어 있으므로 일반 실행은 아래 명령 하나면 됩니다.
+
+```bash
+ros2 launch macgyvbot macgyvbot.launch.py
+```
+
+TTS 음성 출력에는 TTS 엔진이 필요합니다. 기본 설정은 `edge-tts`가 설치되어 있으면 더 자연스러운 온라인 음성을 먼저 사용하고, 없으면 `espeak-ng`를 사용합니다.
+
+```bash
+python3 -m pip install edge-tts
+sudo apt install ffmpeg
+sudo apt install espeak-ng
+```
+
+TTS를 임시로 끄고 싶을 때만 launch argument를 넘깁니다.
+
+```bash
+ros2 launch macgyvbot macgyvbot.launch.py use_tts:=false
+```
+
+TTS 엔진이 없거나 실행에 실패해도 경고만 남기고 GUI와 로봇 명령 흐름은 계속 동작합니다.
 
 ### Terminal 4: Ollama 서버 실행
 
@@ -275,7 +295,7 @@ ollama serve
 
 ### Terminal 5: 음성 명령 통합 노드 실행
 
-로봇/카메라 없이 GUI와 명령 해석만 확인할 때는 통합 노드를 단독 실행합니다. 단독 실행 기본값은 GUI 입력 테스트에 맞춰 `enable_microphone=false`, `use_llm_fallback=true`, `model=gemma3:1b`입니다.
+로봇/카메라 없이 GUI와 명령 해석만 확인할 때는 통합 노드를 단독 실행합니다. 단독 실행 기본값은 GUI 입력 테스트에 맞춰 `enable_microphone=false`, `use_llm_fallback=true`, `model=gemma3:1b`, `parser_mode=llm_primary`, `enable_tts=true`입니다. 즉 옵션을 따로 주지 않아도 LLM을 먼저 사용하고, LLM이 확정하지 못할 때만 local parser가 최후 보조로 동작하며 GUI와 TTS가 함께 켜집니다.
 
 ```bash
 source /opt/ros/humble/setup.bash
@@ -284,9 +304,24 @@ source ~/ros2_ws/install/setup.bash
 ros2 run macgyvbot command_input_node
 ```
 
-명시적으로 같은 설정을 줄 수도 있습니다.
+TTS를 임시로 끄고 싶을 때만 명시적으로 파라미터를 줍니다.
 
 ```bash
+ros2 run macgyvbot command_input_node --ros-args \
+  -p use_gui:=true \
+  -p enable_microphone:=false \
+  -p use_llm_fallback:=true \
+  -p model:=gemma3:1b \
+  -p enable_tts:=false
+```
+
+MacGyvBot 답변과 확인 질문, 주요 작업 상태를 자연스러운 edge-tts 음성으로 듣고 싶다면 실행컴에 edge-tts와 재생 도구를 설치합니다. 설치되어 있지 않으면 `espeak-ng`를 fallback으로 사용합니다.
+
+```bash
+python3 -m pip install edge-tts
+sudo apt install ffmpeg
+sudo apt install espeak-ng
+
 ros2 run macgyvbot command_input_node --ros-args \
   -p use_gui:=true \
   -p enable_microphone:=false \
@@ -294,13 +329,64 @@ ros2 run macgyvbot command_input_node --ros-args \
   -p model:=gemma3:1b
 ```
 
+edge-tts 음성을 명시적으로 사용할 경우:
+
+```bash
+ros2 run macgyvbot command_input_node --ros-args \
+  -p use_gui:=true \
+  -p tts_engine:=edge \
+  -p tts_voice:=ko-KR-SunHiNeural \
+  -p tts_edge_rate:="+10%" \
+  -p tts_pitch:="+8Hz"
+```
+
+전체 launch에서 edge-tts 음성을 명시적으로 사용할 경우:
+
+```bash
+ros2 launch macgyvbot macgyvbot.launch.py \
+  tts_engine:=edge \
+  tts_voice:=ko-KR-SunHiNeural \
+  tts_edge_rate:="+10%" \
+  tts_pitch:="+8Hz"
+```
+
+전체 launch에서 사용할 경우:
+
+```bash
+ros2 launch macgyvbot macgyvbot.launch.py
+```
+
+TTS 관련 파라미터:
+
+- `enable_tts`: TTS 사용 여부, 기본값 `true`
+- `tts_engine`: 사용할 엔진, 기본값 `auto` (`edge-tts` 우선, 실패 시 `espeak-ng` fallback)
+- `tts_voice`: TTS voice, 기본값 `ko-KR-SunHiNeural`
+- `tts_rate`: `espeak-ng` 읽기 속도, 기본값 `165`
+- `tts_edge_rate`: `edge-tts` 읽기 속도, 기본값 `+25%`
+- `tts_pitch`: `edge-tts` pitch, 기본값 `+35Hz`
+- `tts_timeout_sec`: 한 문장 TTS 생성/재생 제한 시간, 기본값 `20.0`
+
 마이크 STT까지 단독으로 확인하려면 `enable_microphone:=true`로 실행합니다.
 
 ```bash
 ros2 run macgyvbot command_input_node --ros-args -p enable_microphone:=true
 ```
 
-통합 노드는 GUI 채팅 입력과 선택적 마이크 STT를 처리하며, `/tool_command`, `/command_feedback`을 발행합니다. 로봇 실행 상태는 `/robot_task_status`로 GUI에 돌아옵니다.
+통합 노드는 GUI 채팅 입력과 선택적 마이크 STT를 처리하며, `/tool_command`, `/command_feedback`을 발행합니다. 로봇 실행 상태는 `/robot_task_status`로 GUI에 돌아옵니다. 명령 해석기는 최근 입력과 최근 성공 작업을 메모리에 짧게 보관해서 “아까 가져온 거 정리해”, “지금 뭐 하는 중이야?” 같은 문장을 처리합니다. 이 context는 파일로 저장하지 않으며 노드 재시작 시 초기화됩니다.
+
+`/robot_task_status`는 JSON 문자열로 받으며, GUI에서는 내부 상태명을 그대로 보여주지 않고 MacGyvBot 말풍선과 좌측 상태 패널로 변환해 표시합니다. 예를 들어 `searching`은 “드라이버를 찾는 중입니다.”, `waiting_handoff`는 “손으로 공구를 잡아주세요.”처럼 표시됩니다. 같은 상태가 연속으로 반복되면 채팅과 TTS를 중복 출력하지 않습니다.
+
+TTS는 MacGyvBot이 사용자에게 꼭 알려야 하는 문장만 읽습니다. 확인 질문, 실패/오류, `waiting_handoff`, `done`, `paused`, `resumed` 같은 상태는 음성으로 안내하고, `searching`처럼 자주 반복되는 진행 상태나 confidence/method 같은 디버그 정보는 읽지 않습니다.
+
+상태 표시만 수동으로 확인하려면 GUI를 켠 뒤 별도 터미널에서 아래처럼 publish할 수 있습니다.
+
+```bash
+ros2 topic pub --once /robot_task_status std_msgs/msg/String \
+  "{data: '{\"status\":\"waiting_handoff\",\"tool_name\":\"screwdriver\"}'}"
+
+ros2 topic pub --once /robot_task_status std_msgs/msg/String \
+  "{data: '{\"status\":\"failed\",\"tool_name\":\"screwdriver\",\"reason\":\"robot_grasp_failed\"}'}"
+```
 
 GUI 실행에 PyQt5가 필요합니다.
 
@@ -314,6 +400,8 @@ sudo apt install python3-pyqt5
 You > 드라이버 가져다줘
 You > 그 조이는 거 가져와
 You > 망치 줘
+You > 아까 가져온 거 정리해
+You > 지금 뭐 하는 중이야?
 ```
 
 흐름:
@@ -321,10 +409,22 @@ You > 망치 줘
 ```text
 command_input_node (GUI + STT input)
   -> /stt_text
-  -> command parser (hard parser -> LLM fallback)
+  -> command parser (LLM primary -> local parser fallback)
   -> /tool_command
   -> macgyvbot
   -> /robot_task_status
+```
+
+명령 해석 모드는 두 가지입니다.
+
+- `parser_mode:=llm_primary`: 기본값. LLM으로 먼저 의도와 context를 해석하고, LLM이 확정하지 못한 경우에만 local parser가 보조합니다.
+- `parser_mode:=hybrid`: 빠른 local parser를 먼저 쓰고 실패하면 LLM fallback을 사용합니다. 디버깅이나 Ollama가 불안정한 환경에서만 사용합니다.
+
+최종 데모 전 LLM 중심 해석을 확인하려면 아래처럼 실행합니다.
+
+```bash
+ros2 run macgyvbot command_input_node --ros-args \
+  -p parser_mode:=llm_primary
 ```
 
 전체 로봇 launch에서 마이크 STT 없이 키보드 입력만 테스트하려면 `use_stt:=false`로 실행합니다.
@@ -378,9 +478,10 @@ source install/setup.bash
 ```bash
 ros2 param get /command_input_node use_llm_fallback
 ros2 param get /command_input_node model
+ros2 param get /command_input_node parser_mode
 ```
 
-기대값은 `True`, `gemma3:1b`입니다.
+기대값은 `True`, `gemma3:1b`, `llm_primary`입니다.
 
 ## 수동 대상 공구 요청
 
@@ -390,7 +491,7 @@ ros2 param get /command_input_node model
 ros2 topic pub --once /target_label std_msgs/msg/String "{data: screwdriver}"
 ```
 
-사용 가능한 공구 label은 학습한 YOLO 모델의 class 이름과 같아야 합니다. 현재 명령 파서는 `drill`, `hammer`, `pliers`, `screwdriver`, `tape_measure`, `wrench`를 기준으로 합니다.
+사용 가능한 공구 label은 학습한 YOLO 모델의 class 이름과 같아야 합니다. 현재 명령 파서는 수업 데모 범위에 맞춰 `hammer`, `pliers`, `screwdriver`, `tape_measure` 네 가지 공구를 기준으로 합니다.
 
 ## 음성 명령 입력만 테스트
 
