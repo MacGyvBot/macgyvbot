@@ -18,6 +18,7 @@ def generate_launch_description():
     tts_timeout_sec = LaunchConfiguration("tts_timeout_sec")
     llm_model = LaunchConfiguration("llm_model")
     llm_timeout_sec = LaunchConfiguration("llm_timeout_sec")
+    parser_mode = LaunchConfiguration("parser_mode")
 
     # Doosan M0609 MoveIt 기본 설정 (URDF, SRDF, kinematics, controllers 등)
     moveit_config = (
@@ -97,6 +98,11 @@ def generate_launch_description():
                 description="Ollama command parser 응답 대기 시간(초)",
             ),
             DeclareLaunchArgument(
+                "parser_mode",
+                default_value="llm_primary",
+                description="Command parser mode: hybrid or llm_primary",
+            ),
+            DeclareLaunchArgument(
                 "grasp_point_mode",
                 default_value="center",
                 description="Grasp point selection mode: center or vlm",
@@ -167,6 +173,7 @@ def generate_launch_description():
                         "model": llm_model,
                         "use_local_parser": True,
                         "use_llm_fallback": True,
+                        "parser_mode": parser_mode,
                         "timeout_sec": llm_timeout_sec,
                         "min_confidence": 0.55,
                     }

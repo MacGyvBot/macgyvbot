@@ -1,7 +1,7 @@
 """Unified command-input node for macgyvbot.
 
 - 마이크 STT와 GUI 입력을 하나의 채팅 흐름으로 수집한다.
-- 입력 텍스트를 local parser -> LLM fallback 순서로 해석한다.
+- 입력 텍스트를 LLM 중심으로 해석하고 local parser는 최후 보조로 사용한다.
 - 결과를 `/tool_command`, `/command_feedback`로 발행한다.
 """
 
@@ -63,6 +63,7 @@ class CommandInputNode(Node):
         self.declare_parameter('min_confidence', 0.55)
         self.declare_parameter('use_local_parser', True)
         self.declare_parameter('use_llm_fallback', True)
+        self.declare_parameter('parser_mode', 'llm_primary')
         self.declare_parameter('enable_tts', True)
         self.declare_parameter('tts_engine', 'auto')
         self.declare_parameter('tts_voice', 'ko-KR-SunHiNeural')
@@ -137,6 +138,7 @@ class CommandInputNode(Node):
             min_confidence=float(self.get_parameter('min_confidence').value),
             use_local_parser=bool(self.get_parameter('use_local_parser').value),
             use_llm_fallback=bool(self.get_parameter('use_llm_fallback').value),
+            parser_mode=self.get_parameter('parser_mode').value,
             logger=self._log_parser,
         )
         self._tts_service = TtsService(
@@ -345,6 +347,11 @@ class CommandInputNode(Node):
             self._set_status('명령 취소')
             return
 
+        if status == 'assistant_response':
+            self._append_bot(message or '네, 필요한 공구가 있으면 말해주세요.')
+            self._set_status('대화 응답')
+            return
+
         if status == 'rejected':
             self._append_bot(self._build_rejected_message(reason, message))
             self._set_status('재입력 필요')
@@ -415,13 +422,13 @@ class CommandInputNode(Node):
         if reason == 'llm_failed':
             return (
                 '문장을 끝까지 이해하지 못했습니다. '
-                '드라이버, 드릴, 플라이어, 망치, 렌치, 줄자 중 어떤 공구인지 '
+                '드라이버, 플라이어, 망치, 줄자 중 어떤 공구인지 '
                 '조금 더 구체적으로 말해주세요.'
             )
         if reason == 'unknown_tool':
             return (
                 '어떤 공구인지 확실하지 않습니다. '
-                '드라이버, 드릴, 플라이어, 망치, 렌치, 줄자 중에서 다시 말해주세요.'
+                '드라이버, 플라이어, 망치, 줄자 중에서 다시 말해주세요.'
             )
         if reason == 'unknown_action':
             return (
