@@ -67,8 +67,9 @@ HANDOVER_SEARCH_TIMEOUT_SEC = 45.0
 OBSERVATION_TIMEOUT_SEC = 20.0
 
 # 손 위치가 우연히 1프레임만 잡힌 좌표로 이동하지 않도록 요구하는 안정 유지 시간.
+# 카메라가 30fps로 들어올 때 약 30프레임에 해당한다.
 # 이 시간 동안 새 프레임의 손 위치가 허용 오차 안에 계속 들어와야 handoff 목표로 확정한다.
-HAND_POSE_WAIT_AFTER_DETECTION_SEC = 1.5
+HAND_POSE_WAIT_AFTER_DETECTION_SEC = 1.0
 
 # 손 위치 안정 판정 허용 오차. x/y/z 중 하나라도 이 범위를 벗어나면 안정화 timer를 다시 시작한다.
 HAND_POSE_STABLE_TOLERANCE_M = 0.03
