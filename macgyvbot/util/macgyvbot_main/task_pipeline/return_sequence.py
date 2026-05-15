@@ -13,6 +13,7 @@ from macgyvbot.config.config import (
     HAND_GRASP_TIMEOUT_SEC,
     SAFE_Z,
     SEQUENCE_WAIT_POLL_SEC,
+    USE_DRAWER_HANDLE_OFFSET_FALLBACK,
 )
 from macgyvbot.util.macgyvbot_main.model_control.grasp_verifier import (
     GraspVerifier,
@@ -101,7 +102,13 @@ class ReturnSequenceRunner:
                 "서랍 손잡이를 찾는 중입니다.",
                 command,
             )
-            handle_target = self.drawer.wait_for_target(DRAWER_HANDLE_LABEL, log)
+            if USE_DRAWER_HANDLE_OFFSET_FALLBACK:
+                handle_target = self.drawer.handle_target_from_drawer_offset(
+                    drawer_target,
+                    log,
+                )
+            else:
+                handle_target = self.drawer.wait_for_target(DRAWER_HANDLE_LABEL, log)
             if handle_target is None:
                 self._fail(
                     requested_tool,

@@ -23,6 +23,7 @@ from macgyvbot.util.command_input.input_mapping.command_llm_parser import (
     CommandLlmParser,
 )
 from macgyvbot.util.command_input.stt.speech_to_text import SpeechToTextService
+from macgyvbot.util.command_input.tts import TtsService
 
 
 class CommandInputNode(Node):
@@ -61,6 +62,13 @@ class CommandInputNode(Node):
         self.declare_parameter('min_confidence', 0.55)
         self.declare_parameter('use_local_parser', True)
         self.declare_parameter('use_llm_fallback', True)
+        self.declare_parameter('enable_tts', True)
+        self.declare_parameter('tts_engine', 'auto')
+        self.declare_parameter('tts_voice', 'ko-KR-SunHiNeural')
+        self.declare_parameter('tts_rate', 165)
+        self.declare_parameter('tts_edge_rate', '+25%')
+        self.declare_parameter('tts_pitch', '+35Hz')
+        self.declare_parameter('tts_timeout_sec', 20.0)
 
         self._use_gui = bool(self.get_parameter('use_gui').value)
         self._enable_microphone = bool(self.get_parameter('enable_microphone').value)
@@ -129,6 +137,17 @@ class CommandInputNode(Node):
             use_llm_fallback=bool(self.get_parameter('use_llm_fallback').value),
             logger=self._log_parser,
         )
+        self._tts_service = TtsService(
+            enabled=bool(self.get_parameter('enable_tts').value),
+            engine=self.get_parameter('tts_engine').value,
+            voice=self.get_parameter('tts_voice').value,
+            rate=int(self.get_parameter('tts_rate').value),
+            edge_rate=self.get_parameter('tts_edge_rate').value,
+            pitch=self.get_parameter('tts_pitch').value,
+            timeout_sec=float(self.get_parameter('tts_timeout_sec').value),
+            logger=self._log_tts,
+        )
+        self._tts_service.start()
 
         self._self_published = {}
         self._self_pub_lock = threading.Lock()
@@ -189,6 +208,9 @@ class CommandInputNode(Node):
         logger.info(message)
 
     def _log_parser(self, level, message):
+        self._log_stt(level, message)
+
+    def _log_tts(self, level, message):
         self._log_stt(level, message)
 
     def _mark_self_published(self, text):
@@ -312,6 +334,7 @@ class CommandInputNode(Node):
             )
             if self.window is not None and hasattr(self.window, 'append_confirmation'):
                 self.window.append_confirmation(confirmation_message)
+                self._speak_bot(confirmation_message)
             else:
                 self._append_bot(confirmation_message)
             self._set_status('확인 응답 대기')
@@ -455,10 +478,15 @@ class CommandInputNode(Node):
     def _append_bot(self, text):
         if self.window is not None:
             self.window.append_bot(text)
+        self._speak_bot(text)
 
     def _append_system(self, text):
         if self.window is not None:
             self.window.append_system(text)
+
+    def _speak_bot(self, text):
+        if hasattr(self, '_tts_service') and self._tts_service is not None:
+            self._tts_service.speak(text)
 
     def _set_status(self, text):
         if self.window is not None:
@@ -471,6 +499,8 @@ class CommandInputNode(Node):
     def destroy_node(self):
         if self._stt_service is not None:
             self._stt_service.stop()
+        if self._tts_service is not None:
+            self._tts_service.stop()
         super().destroy_node()
 
 

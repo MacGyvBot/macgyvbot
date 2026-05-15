@@ -10,6 +10,12 @@ from moveit_configs_utils import MoveItConfigsBuilder
 def generate_launch_description():
     use_voice_command = LaunchConfiguration("use_voice_command")
     use_stt = LaunchConfiguration("use_stt")
+    use_tts = LaunchConfiguration("use_tts")
+    tts_engine = LaunchConfiguration("tts_engine")
+    tts_voice = LaunchConfiguration("tts_voice")
+    tts_edge_rate = LaunchConfiguration("tts_edge_rate")
+    tts_pitch = LaunchConfiguration("tts_pitch")
+    tts_timeout_sec = LaunchConfiguration("tts_timeout_sec")
     llm_model = LaunchConfiguration("llm_model")
     llm_timeout_sec = LaunchConfiguration("llm_timeout_sec")
 
@@ -49,6 +55,36 @@ def generate_launch_description():
                 "use_stt",
                 default_value="true",
                 description="마이크 STT 노드를 실행할지 여부",
+            ),
+            DeclareLaunchArgument(
+                "use_tts",
+                default_value="true",
+                description="MacGyvBot GUI 응답과 주요 상태 메시지를 TTS로 출력할지 여부",
+            ),
+            DeclareLaunchArgument(
+                "tts_engine",
+                default_value="auto",
+                description="TTS engine: auto, edge, espeak-ng",
+            ),
+            DeclareLaunchArgument(
+                "tts_voice",
+                default_value="ko-KR-SunHiNeural",
+                description="TTS voice. edge 사용 시 예: ko-KR-SunHiNeural",
+            ),
+            DeclareLaunchArgument(
+                "tts_edge_rate",
+                default_value="+25%",
+                description="edge-tts speech rate. 예: +10%, +0%, -10%",
+            ),
+            DeclareLaunchArgument(
+                "tts_pitch",
+                default_value="+35Hz",
+                description="edge-tts pitch. 예: +8Hz, +0Hz, -5Hz",
+            ),
+            DeclareLaunchArgument(
+                "tts_timeout_sec",
+                default_value="20.0",
+                description="TTS 생성/재생 명령 제한 시간(초)",
             ),
             DeclareLaunchArgument(
                 "llm_model",
@@ -122,6 +158,12 @@ def generate_launch_description():
                     {
                         "use_gui": True,
                         "enable_microphone": use_stt,
+                        "enable_tts": use_tts,
+                        "tts_engine": tts_engine,
+                        "tts_voice": tts_voice,
+                        "tts_edge_rate": tts_edge_rate,
+                        "tts_pitch": tts_pitch,
+                        "tts_timeout_sec": tts_timeout_sec,
                         "model": llm_model,
                         "use_local_parser": True,
                         "use_llm_fallback": True,

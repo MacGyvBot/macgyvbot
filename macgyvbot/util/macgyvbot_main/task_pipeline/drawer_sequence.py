@@ -12,6 +12,10 @@ from macgyvbot.config.config import (
     DRAWER_DETECTION_TIMEOUT_SEC,
     DRAWER_HANDLE_APPROACH_Z_OFFSET,
     DRAWER_HANDLE_GRASP_Z_OFFSET,
+    DRAWER_HANDLE_LABEL,
+    DRAWER_HANDLE_OFFSET_X,
+    DRAWER_HANDLE_OFFSET_Y,
+    DRAWER_HANDLE_OFFSET_Z,
     DRAWER_OPEN_DIRECTION_X,
     DRAWER_PULL_DISTANCE_M,
     DRAWER_TOOL_PLACE_APPROACH_Z_OFFSET,
@@ -132,6 +136,27 @@ class DrawerInteraction:
             source=source,
             yaw_deg=self._extract_yaw(vlm_rpy_deg, logger),
         )
+
+    def handle_target_from_drawer_offset(self, drawer_target, logger):
+        handle_target = DetectedTarget(
+            label=DRAWER_HANDLE_LABEL,
+            x=drawer_target.x + DRAWER_HANDLE_OFFSET_X,
+            y=drawer_target.y + DRAWER_HANDLE_OFFSET_Y,
+            z=drawer_target.z + DRAWER_HANDLE_OFFSET_Z,
+            depth_m=drawer_target.depth_m,
+            pixel_u=drawer_target.pixel_u,
+            pixel_v=drawer_target.pixel_v,
+            source="drawer_offset_fallback",
+        )
+        logger.info(
+            "서랍 손잡이 offset fallback 적용: "
+            f"drawer=({drawer_target.x:.3f}, {drawer_target.y:.3f}, {drawer_target.z:.3f}) "
+            f"offset=({DRAWER_HANDLE_OFFSET_X:.3f}, {DRAWER_HANDLE_OFFSET_Y:.3f}, "
+            f"{DRAWER_HANDLE_OFFSET_Z:.3f}) "
+            f"handle=({handle_target.x:.3f}, {handle_target.y:.3f}, "
+            f"{handle_target.z:.3f})"
+        )
+        return handle_target
 
     def move_to_drawer_view(self, drawer_target, logger):
         travel_z = self._travel_z(drawer_target.z)
