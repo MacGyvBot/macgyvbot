@@ -12,7 +12,6 @@ import rclpy
 from ament_index_python.packages import get_package_share_directory
 from cv_bridge import CvBridge
 from geometry_msgs.msg import WrenchStamped
-from moveit.core.robot_state import RobotState
 from moveit.planning import MoveItPy, PlanRequestParameters
 from rclpy.node import Node
 from scipy.spatial.transform import Rotation
@@ -27,7 +26,6 @@ from macgyvbot.config.config import (
     HAND_GRASP_IMAGE_TOPIC,
     HAND_GRASP_TOPIC,
     HAND_GRASP_WINDOW_NAME,
-    HOME_JOINTS,
     ROBOT_WINDOW_NAME,
     ROBOT_STATUS_TOPIC,
     TOOL_COMMAND_TOPIC,
@@ -35,7 +33,6 @@ from macgyvbot.config.config import (
 )
 from macgyvbot.util.macgyvbot_main.model_control.moveit_controller import (
     MoveItController,
-    plan_and_execute,
 )
 from macgyvbot.util.macgyvbot_main.model_control.onrobot_gripper import RG
 from macgyvbot.util.macgyvbot_main.model_control.robot_pose import get_ee_matrix
@@ -497,15 +494,7 @@ class MacGyvBotNode(Node):
     def _move_home_and_capture_pose(self):
         self.get_logger().info("시스템 준비 중... Home으로 이동합니다.")
 
-        home_state = RobotState(self.robot.get_robot_model())
-        home_state.joint_positions = HOME_JOINTS
-
-        ok = plan_and_execute(
-            self.robot,
-            self.arm,
-            self.get_logger(),
-            state_goal=home_state,
-        )
+        ok = self.motion.move_to_home_joints(self.get_logger())
         if not ok:
             self.get_logger().error("초기 Home 이동 실패")
             return

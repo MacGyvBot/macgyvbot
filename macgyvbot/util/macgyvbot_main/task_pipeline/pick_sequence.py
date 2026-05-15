@@ -364,17 +364,8 @@ class PickSequenceRunner:
             logger.error("공구를 놓은 뒤 안전 높이 복귀 실패")
             return False
 
-        logger.info("반환 5단계: Home 위치로 복귀")
-        ok = self.motion.plan_and_execute(
-            logger,
-            pose_goal=make_safe_pose(
-                self.state.home_xyz[0],
-                self.state.home_xyz[1],
-                travel_z,
-                ori,
-                logger,
-            ),
-        )
+        logger.info("반환 5단계: Home joint pose로 복귀")
+        ok = self.motion.move_to_home_joints(logger)
         if not ok:
             logger.error("공구 반환 후 Home 복귀 실패")
             return False
@@ -475,16 +466,7 @@ class PickSequenceRunner:
         )
 
     def move_home_after_handoff(self, travel_z, ori, logger, publish_on_failure=True):
-        ok = self.motion.plan_and_execute(
-            logger,
-            pose_goal=make_safe_pose(
-                self.state.home_xyz[0],
-                self.state.home_xyz[1],
-                max(travel_z, self.state.home_xyz[2], SAFE_Z),
-                ori,
-                logger,
-            ),
-        )
+        ok = self.motion.move_to_home_joints(logger)
         if not ok:
             logger.error("전달 후 Home 복귀 실패")
             if publish_on_failure:

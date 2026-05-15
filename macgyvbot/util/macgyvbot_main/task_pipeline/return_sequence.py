@@ -12,8 +12,6 @@ from macgyvbot.config.config import (
     HANDOVER_HAND_Z_OFFSET_M,
     HAND_GRASP_TIMEOUT_SEC,
     OBSERVATION_TIMEOUT_SEC,
-    RETURN_HOME_DESCENT_START_Z,
-    SAFE_Z,
     SEQUENCE_WAIT_POLL_SEC,
 )
 from macgyvbot.util.macgyvbot_main.model_control.force_detection import (
@@ -27,10 +25,9 @@ from macgyvbot.util.macgyvbot_main.model_control.handover_targeting import (
     move_to_candidate_with_offset,
     start_async_observation_search,
 )
-from macgyvbot.util.macgyvbot_main.model_control.robot_pose import make_safe_pose
-from macgyvbot.util.macgyvbot_main.model_control.robot_safezone import (
-    SAFE_Z_MIN,
-    clamp_to_safe_workspace,
+from macgyvbot.util.macgyvbot_main.model_control.robot_pose import (
+    get_ee_matrix,
+    make_safe_pose,
 )
 
 
@@ -169,38 +166,34 @@ class ReturnSequenceRunner:
         )
 
     def _place_tool_at_robot_home(self, tool_name, ori, command, logger):
-        target_x, target_y, _ = self.state.home_xyz
-        approach_z = max(RETURN_HOME_DESCENT_START_Z, SAFE_Z_MIN)
-
         self._publish_status(
             "placing_return_tool",
             tool_name,
-            f"{tool_name} 반납 위치인 Home으로 이동합니다.",
+            f"{tool_name} 반납 위치인 Home joint pose로 이동합니다.",
             command,
         )
 
-        logger.info(
-            f"반납 2단계: {tool_name} 반납 Home 위치 이동 "
-            f"x={target_x:.3f}, y={target_y:.3f}, z={approach_z:.3f}"
-        )
-        ok = self.motion.plan_and_execute(
-            logger,
-            pose_goal=make_safe_pose(target_x, target_y, approach_z, ori, logger),
-        )
+        logger.info(f"반납 2단계: {tool_name} 반납 Home joint pose 이동")
+        ok = self.motion.move_to_home_joints(logger)
         if not ok:
             self._fail(
                 tool_name,
-                f"{tool_name} 반납 Home 위치 이동에 실패했습니다.",
+                f"{tool_name} 반납 Home joint pose 이동에 실패했습니다.",
                 "return_home_move_failed",
                 command,
                 logger,
             )
             return False
 
+        current_pose = get_ee_matrix(self.robot)
+        target_x = float(current_pose[0, 3])
+        target_y = float(current_pose[1, 3])
+        approach_z = float(current_pose[2, 3])
+
         self._publish_status(
             "lowering_return_tool",
             tool_name,
-            "Home에서 Z를 낮추며 반력을 확인합니다.",
+            "Home joint pose에서 Z를 낮추며 반력을 확인합니다.",
             command,
         )
         stop_z = self.force_detector.descend_until_z_reaction(
@@ -259,12 +252,8 @@ class ReturnSequenceRunner:
             )
             return False
 
-        final_x, final_y, final_z = self.state.home_xyz
-        final_z = max(final_z, approach_z)
-        ok = self.motion.plan_and_execute(
-            logger,
-            pose_goal=make_safe_pose(final_x, final_y, final_z, ori, logger),
-        )
+        logger.info("반납 6단계: Home joint pose로 복귀")
+        ok = self.motion.move_to_home_joints(logger)
         if not ok:
             self._fail(
                 tool_name,
@@ -389,12 +378,7 @@ class ReturnSequenceRunner:
             command,
             reason=reason,
         )
-        x, y, z = self.state.home_xyz
-        safe_z = max(z, SAFE_Z)
-        ok = self.motion.plan_and_execute(
-            logger,
-            pose_goal=make_safe_pose(x, y, safe_z, ori, logger),
-        )
+        ok = self.motion.move_to_home_joints(logger)
         if ok:
             self._publish_status(
                 "returned",

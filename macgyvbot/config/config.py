@@ -120,9 +120,6 @@ GRIPPER_CLOSED_WIDTH_THRESHOLD_MM = 5.0
 # 반납 시 Z 하강 중 반력을 읽는 force/torque sensor topic.
 FORCE_TORQUE_TOPIC = "/force_torque_sensor_broadcaster/wrench"
 
-# 반납(Home placing)에서 반력 감지 하강을 시작하는 z 높이.
-RETURN_HOME_DESCENT_START_Z = 0.30
-
 # 반납 Z 하강 시 한 번에 낮추는 거리.
 RETURN_HOME_DESCENT_STEP_M = 0.01
 
