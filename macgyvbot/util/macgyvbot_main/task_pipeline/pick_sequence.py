@@ -20,6 +20,7 @@ from macgyvbot.config.config import (
     MIN_TRAVEL_Z,
     SAFE_Z,
     SEQUENCE_WAIT_POLL_SEC,
+    EmergencyStopException,
 )
 from macgyvbot.util.macgyvbot_main.model_control.grasp_verifier import (
     GraspVerifier,
@@ -38,23 +39,6 @@ class PickSequenceRunner:
         self.gripper = gripper
         self.state = state
         self.grasp_verifier = GraspVerifier(gripper, self.cooperative_wait)
-
-    # --- 비상 정지 상태를 확인하는 헬퍼 함수 ---
-    def _is_stopped(self, logger):
-        if getattr(self.state, 'stop_requested', False):
-            logger.warn("비상 정지 깃발 감지! Pick 시퀀스(스레드)를 즉시 강제 종료합니다.")
-
-            self.state._publish_robot_status(
-                    "stopped",
-                    message="비상 정지 요청 수신, 예정된 로봇 움직임을 차단합니다.",
-                    reason="user_halt",
-                    command=self.state.current_command,
-                )
-            
-            return True
-        
-        return False
-    # ------------------------------------------------
 
     def run(self, bx, by, bz, z_m, vlm_yaw_deg=None):
         self.state.human_grasped_tool = False
@@ -126,8 +110,6 @@ class PickSequenceRunner:
             self.gripper.open_gripper()
             self.cooperative_wait(0.5)
 
-            # 비상정지 활성화시 이후 작업을 차단하고 리턴
-            if self._is_stopped(log): return
             log.info("1단계: 안전 이동 높이 확보")
             ok = self.motion.plan_and_execute(
                 log,
@@ -149,8 +131,6 @@ class PickSequenceRunner:
                 )
                 return
 
-            # 비상정지 활성화시 이후 작업을 차단하고 리턴
-            if self._is_stopped(log): return
             log.info("2단계: 안전 높이에서 XY 수평 이동")
             ok = self.motion.plan_and_execute(
                 log,
@@ -172,8 +152,6 @@ class PickSequenceRunner:
                 )
                 return
 
-            # 비상정지 활성화시 이후 작업을 차단하고 리턴
-            if self._is_stopped(log): return
             if vlm_yaw_deg is not None:
                 ok = self.motion.rotate_wrist_by_yaw_deg(vlm_yaw_deg, log)
                 if not ok:
@@ -186,9 +164,7 @@ class PickSequenceRunner:
                     )
                     return
                 ori = current_ee_orientation(self.robot)
-            
-            # 비상정지 활성화시 이후 작업을 차단하고 리턴
-            if self._is_stopped(log): return
+
             log.info("3단계: 타겟 상단 접근")
             ok = self.motion.plan_and_execute(
                 log,
@@ -210,8 +186,6 @@ class PickSequenceRunner:
                 )
                 return
 
-            # 비상정지 활성화시 이후 작업을 차단하고 리턴
-            if self._is_stopped(log): return
             if should_descend_to_grasp:
                 log.info("4단계: 파지 높이 하강")
                 ok = self.motion.plan_and_execute(
@@ -236,8 +210,6 @@ class PickSequenceRunner:
             else:
                 log.info("4단계: approach_z와 grasp_z가 같아 추가 하강 생략")
 
-            # 비상정지 활성화시 이후 작업을 차단하고 리턴
-            if self._is_stopped(log): return
             log.info("5단계: 공구 grasp 시도")
             if not self.try_robot_grasp(log):
                 log.error("공구 grasp 실패. Pick 시퀀스 중단")
@@ -255,8 +227,6 @@ class PickSequenceRunner:
                 command=self.state.current_command,
             )
 
-            # 비상정지 활성화시 이후 작업을 차단하고 리턴
-            if self._is_stopped(log): return
             log.info("6단계: 안전 높이 복귀")
             ok = self.motion.plan_and_execute(
                 log,
@@ -286,8 +256,6 @@ class PickSequenceRunner:
             if handoff_pose[0] is None:
                 return
 
-            # 비상정지 활성화시 이후 작업을 차단하고 리턴
-            if self._is_stopped(log): return
             log.info("8단계: 사용자 잡기 인식 대기")
             self.state._publish_robot_status(
                 "waiting_handoff",
@@ -317,14 +285,10 @@ class PickSequenceRunner:
                 )
                 return
 
-            # 비상정지 활성화시 이후 작업을 차단하고 리턴
-            if self._is_stopped(log): return
             log.info("9단계: 사용자 잡기 확인 후 그리퍼 오픈(놓기)")
             self.gripper.open_gripper()
             self.cooperative_wait(0.8)
 
-            # 비상정지 활성화시 이후 작업을 차단하고 리턴
-            if self._is_stopped(log): return
             log.info("10단계: 전달 후 Home 위치로 복귀")
             ok = self.move_home_after_handoff(travel_z, ori, log)
             if not ok:
@@ -334,6 +298,14 @@ class PickSequenceRunner:
             self.state._publish_robot_status(
                 "done",
                 message="공구 전달 후 Home 복귀까지 완료되었습니다.",
+                command=self.state.current_command,
+            )
+
+        except EmergencyStopException:
+            log.warn("💥 [PickSequence] 비상 정지 예외 감지! 시퀀스를 즉시 파괴합니다.")
+            self.state._publish_robot_status(
+                "cancelled",
+                message="비상 정지 명령으로 인해 작업이 강제 종료되었습니다.",
                 command=self.state.current_command,
             )
 
@@ -491,12 +463,11 @@ class PickSequenceRunner:
                 message=f"공구 grasp 시도 {attempt}/{retry_limit}",
                 command=self.state.current_command,
             )
-        
+
         return self.grasp_verifier.try_grasp(
             logger,
             publish_attempt=publish_attempt,
             failure_prefix="그리퍼 grasp",
-            is_stopped_cb=lambda: getattr(self.state, 'stop_requested', False)
         )
 
     @staticmethod
