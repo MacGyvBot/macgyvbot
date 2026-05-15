@@ -6,6 +6,7 @@
 """
 
 import json
+import signal
 import sys
 import threading
 
@@ -679,12 +680,28 @@ def main(args=None):
         node.attach_window(window)
         window.show()
 
+        shutdown_requested = {'value': False}
+
+        def request_shutdown(_signum=None, _frame=None):
+            if shutdown_requested['value']:
+                return
+            shutdown_requested['value'] = True
+            node.get_logger().info('종료 신호를 받아 GUI와 command_input_node를 종료합니다.')
+            window.close()
+            app.quit()
+
+        signal.signal(signal.SIGINT, request_shutdown)
+        signal.signal(signal.SIGTERM, request_shutdown)
+
         timer = QTimer()
         timer.timeout.connect(lambda: rclpy.spin_once(node, timeout_sec=0.0))
         timer.start(30)
 
         try:
             exit_code = app.exec_()
+        except KeyboardInterrupt:
+            request_shutdown()
+            exit_code = 0
         finally:
             timer.stop()
             node.destroy_node()
