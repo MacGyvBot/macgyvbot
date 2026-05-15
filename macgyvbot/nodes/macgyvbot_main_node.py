@@ -3,6 +3,7 @@
 
 import json
 import threading
+import time
 from pathlib import Path
 
 import cv2
@@ -11,7 +12,6 @@ import rclpy
 from ament_index_python.packages import get_package_share_directory
 from cv_bridge import CvBridge
 from geometry_msgs.msg import WrenchStamped
-from moveit.core.robot_state import RobotState
 from moveit.planning import MoveItPy, PlanRequestParameters
 from rclpy.node import Node
 from scipy.spatial.transform import Rotation
@@ -19,6 +19,7 @@ from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import String
 
 from macgyvbot.config.config import (
+    BASE_FRAME,
     DEFAULT_GRASP_POINT_MODE,
     DRAWER_LABEL,
     DRAWER_YOLO_MODEL_NAME,
@@ -27,7 +28,6 @@ from macgyvbot.config.config import (
     HAND_GRASP_IMAGE_TOPIC,
     HAND_GRASP_TOPIC,
     HAND_GRASP_WINDOW_NAME,
-    HOME_JOINTS,
     ROBOT_WINDOW_NAME,
     ROBOT_STATUS_TOPIC,
     TOOL_COMMAND_TOPIC,
@@ -35,11 +35,13 @@ from macgyvbot.config.config import (
 )
 from macgyvbot.util.macgyvbot_main.model_control.moveit_controller import (
     MoveItController,
-    plan_and_execute,
 )
 from macgyvbot.util.macgyvbot_main.model_control.onrobot_gripper import RG
 from macgyvbot.util.macgyvbot_main.model_control.robot_pose import get_ee_matrix
-from macgyvbot.util.macgyvbot_main.perception.depth_projection import DepthProjector
+from macgyvbot.util.macgyvbot_main.perception.depth_projection import (
+    DepthProjector,
+    pixel_to_camera_point,
+)
 from macgyvbot.util.macgyvbot_main.grasp_mechanism.grasp_point_selector import (
     GraspPointSelector,
     normalize_grasp_point_mode,
@@ -365,16 +367,72 @@ class MacGyvBotNode(Node):
             message=f"{val}를 꺼낼 공구함 찾기를 시작합니다.",
             command=command,
         )
+        self.start_drawer_pick_sequence(val, command)
 
     def _hand_grasp_cb(self, msg):
         try:
             result = json.loads(msg.data)
         except json.JSONDecodeError:
-            self.get_logger().warn(f"잡기 인식 결과 JSON 파싱 실패: {msg.data}")
+            self.get_logger().warn(
+                f"잡기 인식 결과 JSON 파싱 실패: {msg.data}"
+            )
             return
 
+        result["_received_monotonic_sec"] = time.monotonic()
+        self._attach_base_position_to_grasp_result(result)
         self.last_grasp_result = result
         self.human_grasped_tool = bool(result.get("human_grasped_tool", False))
+
+    def _attach_base_position_to_grasp_result(self, result):
+        position = result.get("position")
+        if isinstance(position, dict) and all(k in position for k in ("x", "y", "z")):
+            return
+
+        hand_pixel = result.get("hand_pixel")
+        if not isinstance(hand_pixel, dict):
+            return
+        if self.depth_image is None or self.intrinsics is None:
+            return
+
+        try:
+            u = int(hand_pixel["u"])
+            v = int(hand_pixel["v"])
+        except (KeyError, TypeError, ValueError):
+            return
+
+        height, width = self.depth_image.shape[:2]
+        clamped_u = min(max(u, 0), max(width - 1, 0))
+        clamped_v = min(max(v, 0), max(height - 1, 0))
+        if clamped_u != u or clamped_v != v:
+            self.get_logger().warn(
+                "handover_hand_pixel 경계 클램프 적용: "
+                f"raw=({u}, {v}), clamped=({clamped_u}, {clamped_v}), "
+                f"size=({width}, {height})"
+            )
+        u, v = clamped_u, clamped_v
+
+        camera_point = pixel_to_camera_point(
+            u,
+            v,
+            self.depth_image,
+            self.intrinsics,
+            logger=self.get_logger(),
+            source="handover_hand_pixel",
+        )
+        if camera_point is None:
+            return
+
+        bx, by, bz = self.depth_projector.camera_to_base(camera_point)
+        result["position"] = {
+            "x": float(bx),
+            "y": float(by),
+            "z": float(bz),
+            "frame_id": BASE_FRAME,
+        }
+        result["position_observed_monotonic_sec"] = result.get(
+            "_received_monotonic_sec",
+            time.monotonic(),
+        )
 
     def _hand_grasp_image_cb(self, msg):
         try:
@@ -395,6 +453,21 @@ class MacGyvBotNode(Node):
 
     def _depth_cb(self, msg):
         self.depth_image = self.bridge.imgmsg_to_cv2(msg, "passthrough")
+
+    def start_drawer_pick_sequence(self, tool_name, command=None):
+        if self.picking:
+            self.get_logger().warn("이미 pick 동작 중이라 새 drawer pick 요청을 무시합니다.")
+            return
+
+        self.picking = True
+        self.target_label = tool_name
+        self.current_command = command
+        self.pending_pick_thread = threading.Thread(
+            target=self.pick_runner.run_drawer_pick,
+            args=(tool_name,),
+            daemon=True,
+        )
+        self.pending_pick_thread.start()
 
     def start_pick_sequence(self, bx, by, bz, z_m, vlm_yaw_deg=None):
         if self.picking:
@@ -451,15 +524,7 @@ class MacGyvBotNode(Node):
     def _move_home_and_capture_pose(self):
         self.get_logger().info("시스템 준비 중... Home으로 이동합니다.")
 
-        home_state = RobotState(self.robot.get_robot_model())
-        home_state.joint_positions = HOME_JOINTS
-
-        ok = plan_and_execute(
-            self.robot,
-            self.arm,
-            self.get_logger(),
-            state_goal=home_state,
-        )
+        ok = self.motion.move_to_home_joints(self.get_logger())
         if not ok:
             self.get_logger().error("초기 Home 이동 실패")
             return

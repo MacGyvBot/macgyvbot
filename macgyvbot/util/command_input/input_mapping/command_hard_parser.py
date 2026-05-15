@@ -23,15 +23,6 @@ TOOL_KEYWORDS = {
         '나사드라이버',
         '나사 드라이버',
     ],
-    'drill': [
-        '드릴',
-        '전동드릴',
-        '전동 드릴',
-        '구멍뚫는거',
-        '구멍 뚫는 거',
-        '뚫는공구',
-        '뚫는 공구',
-    ],
     'pliers': [
         '플라이어',
         '플라이어스',
@@ -48,15 +39,6 @@ TOOL_KEYWORDS = {
         '장도리',
         '고무망치',
         '고무 망치',
-    ],
-    'wrench': [
-        '렌치',
-        '스패너',
-        '스패나',
-        '몽키스패너',
-        '몽키 스패너',
-        '볼트조이는거',
-        '볼트 조이는 거',
     ],
     'tape_measure': [
         '줄자',
@@ -116,6 +98,17 @@ RELEASE_KEYWORDS = [
     '내려놔',
     '내려놓',
     '두고',
+]
+
+STOP_KEYWORDS = [
+    '멈춰',
+    '멈추',
+    '정지',
+    '중지',
+    '중단',
+    '스탑',
+    'stop',
+    'pause',
 ]
 
 
@@ -189,6 +182,10 @@ def find_tool(text):
 def find_action(text):
     normalized = normalize_text(text)
 
+    for keyword in STOP_KEYWORDS:
+        if normalize_text(keyword) in normalized:
+            return 'stop'
+
     # "가져다가 놔", "정리해"는 사용자에게 전달이 아니라 보관 위치로 반납하는 명령이다.
     for keyword in RETURN_KEYWORDS:
         if normalize_text(keyword) in normalized:
@@ -202,4 +199,4 @@ def find_action(text):
         if normalize_text(keyword) in normalized:
             return 'release'
 
-    return 'bring'
+    return 'unknown'

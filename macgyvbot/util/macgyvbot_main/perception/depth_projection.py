@@ -7,6 +7,45 @@ import numpy as np
 from macgyvbot.util.macgyvbot_main.model_control.robot_pose import get_ee_matrix
 
 
+def pixel_to_camera_point(
+    u,
+    v,
+    depth_image,
+    intrinsics,
+    depth_scale=0.001,
+    logger=None,
+    source="pixel",
+):
+    """Project an image pixel with depth into the camera frame."""
+    height, width = depth_image.shape[:2]
+
+    if not (0 <= u < width and 0 <= v < height):
+        if logger is not None:
+            logger.warn(
+                f"{source} is outside depth image: u={u}, v={v}, "
+                f"size=({width}, {height})"
+            )
+        return None
+
+    z_raw = float(depth_image[v, u])
+    if not np.isfinite(z_raw) or z_raw <= 0.0:
+        if logger is not None:
+            logger.warn(f"{source} depth is invalid: u={u}, v={v}, depth={z_raw}")
+        return None
+
+    z_m = z_raw * depth_scale
+    cam_x = (u - intrinsics["ppx"]) * z_m / intrinsics["fx"]
+    cam_y = (v - intrinsics["ppy"]) * z_m / intrinsics["fy"]
+    return float(cam_x), float(cam_y), float(z_m)
+
+
+def transform_point_to_base(cam_xyz, robot, gripper_to_camera):
+    """Transform a camera-frame point into the robot base frame."""
+    coord = np.append(np.array(cam_xyz, dtype=float), 1.0)
+    base_to_camera = get_ee_matrix(robot) @ gripper_to_camera
+    return (base_to_camera @ coord)[:3]
+
+
 class DepthProjector:
     """Project image-space grasp pixels into the robot base frame."""
 
@@ -25,26 +64,22 @@ class DepthProjector:
         logger,
         vlm_rpy_deg=None,
     ):
-        height, width = depth_image.shape[:2]
-
-        if not (0 <= u < width and 0 <= v < height):
-            logger.warn(
-                f"{source} 픽셀이 depth 이미지 범위를 벗어남: u={u}, v={v}"
-            )
+        camera_point = pixel_to_camera_point(
+            u,
+            v,
+            depth_image,
+            intrinsics,
+            logger=logger,
+            source=source,
+        )
+        if camera_point is None:
             return None
 
-        z_raw = depth_image[v, u]
-        if z_raw == 0:
-            logger.warn(f"{label} 검출됨, 하지만 {source} depth 값이 0입니다.")
-            return None
-
-        z_m = float(z_raw) / 1000.0
-        cam_x = (u - intrinsics["ppx"]) * z_m / intrinsics["fx"]
-        cam_y = (v - intrinsics["ppy"]) * z_m / intrinsics["fy"]
-        bx, by, bz = self.camera_to_base((cam_x, cam_y, z_m))
+        cam_x, cam_y, z_m = camera_point
+        bx, by, bz = self.camera_to_base(camera_point)
 
         logger.info(
-            f"'{label}' 검출: source={source}, "
+            f"'{label}' detected: source={source}, "
             f"pixel=({u}, {v}), "
             f"camera=({cam_x:.3f}, {cam_y:.3f}, {z_m:.3f}), "
             f"base=({bx:.3f}, {by:.3f}, {bz:.3f})"
@@ -53,6 +88,4 @@ class DepthProjector:
         return bx, by, bz, z_m, vlm_rpy_deg
 
     def camera_to_base(self, cam_xyz):
-        coord = np.append(np.array(cam_xyz), 1.0)
-        base_to_camera = get_ee_matrix(self.robot) @ self.gripper_to_camera
-        return (base_to_camera @ coord)[:3]
+        return transform_point_to_base(cam_xyz, self.robot, self.gripper_to_camera)

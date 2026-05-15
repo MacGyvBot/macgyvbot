@@ -19,6 +19,7 @@ def generate_launch_description():
     llm_model = LaunchConfiguration("llm_model")
     llm_timeout_sec = LaunchConfiguration("llm_timeout_sec")
     drawer_yolo_model = LaunchConfiguration("drawer_yolo_model")
+    parser_mode = LaunchConfiguration("parser_mode")
 
     # Doosan M0609 MoveIt 기본 설정 (URDF, SRDF, kinematics, controllers 등)
     moveit_config = (
@@ -104,6 +105,11 @@ def generate_launch_description():
                 description="Ollama command parser 응답 대기 시간(초)",
             ),
             DeclareLaunchArgument(
+                "parser_mode",
+                default_value="llm_primary",
+                description="Command parser mode: hybrid or llm_primary",
+            ),
+            DeclareLaunchArgument(
                 "grasp_point_mode",
                 default_value="center",
                 description="Grasp point selection mode: center or vlm",
@@ -139,12 +145,17 @@ def generate_launch_description():
                 name="hand_grasp_detection_node",
                 output="screen",
                 parameters=[
+                    moveit_config.to_dict(),
+                    moveit_py_params,
                     {
                         "color_topic": "/camera/camera/color/image_raw",
+                        "camera_info_topic": "/camera/camera/color/camera_info",
                         "depth_topic": "/camera/camera/aligned_depth_to_color/image_raw",
                         "result_topic": "/human_grasped_tool",
                         "annotated_topic": "/hand_grasp_detection/annotated_image",
                         "use_depth": True,
+                        "publish_base_position": False,
+                        "position_frame_id": "base_link",
                         "publish_annotated": True,
                         "display": False,
                         "yolo_model": LaunchConfiguration("yolo_model"),
@@ -175,6 +186,7 @@ def generate_launch_description():
                         "model": llm_model,
                         "use_local_parser": True,
                         "use_llm_fallback": True,
+                        "parser_mode": parser_mode,
                         "timeout_sec": llm_timeout_sec,
                         "min_confidence": 0.55,
                     }

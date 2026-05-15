@@ -64,8 +64,12 @@ class HandDetector:
             landmarks: Dict[int, Point] = {}
 
             for idx, landmark in enumerate(hand_landmarks.landmark):
+                # MediaPipe can return slightly out-of-range normalized values
+                # near image boundaries, so clamp to valid pixel indices.
                 x = int(landmark.x * width)
                 y = int(landmark.y * height)
+                x = min(max(x, 0), max(width - 1, 0))
+                y = min(max(y, 0), max(height - 1, 0))
                 landmarks[idx] = (x, y)
 
             palm_center = self._calculate_palm_center(landmarks)
