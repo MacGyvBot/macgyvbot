@@ -1,6 +1,28 @@
 #!/usr/bin/env python3
 """Main ROS wiring node for the MacGyvBot pick pipeline."""
 
+#-----------------------------------------------------------
+# 로봇정지용
+import ctypes
+from macgyvbot.config.config import EmergencyStopException
+
+def kill_thread(thread_obj, exctype=EmergencyStopException):
+    """지정된 스레드에 비동기 예외를 발생시켜 강제 종료를 유도합니다."""
+    if not thread_obj or not thread_obj.is_alive():
+        return
+    
+    tid = ctypes.c_long(thread_obj.ident)
+    res = ctypes.pythonapi.PyThreadState_SetAsyncExc(tid, ctypes.py_object(exctype))
+    
+    if res == 0:
+        raise ValueError("존재하지 않는 스레드 ID입니다.")
+    elif res != 1:
+        # 혹시라도 실패하면 상태 복구
+        ctypes.pythonapi.PyThreadState_SetAsyncExc(tid, None)
+        raise SystemError("스레드 예외 주입 실패")
+    
+#-----------------------------------------------------------
+
 import json
 import threading
 from pathlib import Path
@@ -247,30 +269,29 @@ class MacGyvBotNode(Node):
             return
 
         self._set_target_label(val, source="/target_label")
-    
-    def _task_control_cb(self, msg):
-        """ 
-        /robot_task_control 토픽을 받았을 때의 단발성 정지 콜백 
-        """
 
+    def _task_control_cb(self, msg):
         if msg.data == 1:
             self.get_logger().warn("정지 토픽 수신! 즉시 작업을 취소합니다.")
             
-            # 1. 깃발 세우기 (현재 실행 중인 스레드 죽이기용)
-            self.stop_requested = True
-            
-            # 2. MoveIt 액션 강제 취소
+            # 1. MoveIt 액션 강제 취소 (C++ 레벨 정지)
             cancel_req = CancelGoal.Request()
             self._cancel_goal_cli.call_async(cancel_req)
             
-            # 3. 그리퍼 강제 오픈
+            # 2. 그리퍼 오픈
             try:
                 self.gripper.open_gripper()
-            except Exception as e:
+            except Exception:
                 pass
             
-            # 4. 상태를 즉시 ready(대기)로 변경
-            self._publish_robot_status("ready", message="작업이 취소되었습니다. 다음 명령을 대기합니다.")
+            # ✨ 현재 돌고 있는 시퀀스 스레드의 머리 위에 폭탄 투하!
+            if self.picking:
+                if self.pending_pick_thread and self.pending_pick_thread.is_alive():
+                    kill_thread(self.pending_pick_thread)
+                if self.pending_return_thread and self.pending_return_thread.is_alive():
+                    kill_thread(self.pending_return_thread)
+            
+            self._publish_robot_status("ready", message="작업이 취소되었습니다.")
 
     def _tool_command_cb(self, msg):
         try:
