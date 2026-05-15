@@ -78,8 +78,9 @@ HAND_GRASP_REQUIRE_LOCKED_TOOL = True
 # depth 기반 grasp 확인을 요구할지 여부.
 HAND_GRASP_REQUIRE_DEPTH = True
 
-# ML classifier grasp 판정 최소 confidence.
-HAND_GRASP_ML_CONFIDENCE = 0.60
+# ML classifier가 손 상태를 grasp로 예측했더라도 이 confidence 이상일 때만
+# 사용자 grasp로 인정한다. 낮은 confidence의 순간 오인식을 handoff 조건에서 제외한다.
+HAND_GRASP_ML_CONFIDENCE = 0.85
 
 # 이 로봇 상태가 publish되면 hand grasp detector가 tool mask lock을 시작한다.
 HAND_GRASP_LOCK_ON_STATUS = "grasp_success"
