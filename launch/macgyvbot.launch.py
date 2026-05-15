@@ -18,8 +18,10 @@ def generate_launch_description():
     tts_timeout_sec = LaunchConfiguration("tts_timeout_sec")
     llm_model = LaunchConfiguration("llm_model")
     llm_timeout_sec = LaunchConfiguration("llm_timeout_sec")
-    drawer_yolo_model = LaunchConfiguration("drawer_yolo_model")
     parser_mode = LaunchConfiguration("parser_mode")
+    sam_enabled = LaunchConfiguration("sam_enabled")
+    sam_checkpoint = LaunchConfiguration("sam_checkpoint")
+    drawer_yolo_model = LaunchConfiguration("drawer_yolo_model")
 
     # Doosan M0609 MoveIt 기본 설정 (URDF, SRDF, kinematics, controllers 등)
     moveit_config = (
@@ -47,7 +49,6 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "yolo_model",
                 default_value="yolov11_best.pt",
-                description="공구 탐지용 YOLO 모델 경로 또는 weights/ 내 파일명",
             ),
             DeclareLaunchArgument(
                 "drawer_yolo_model",
@@ -119,6 +120,21 @@ def generate_launch_description():
                 default_value="/force_torque_sensor_broadcaster/wrench",
                 description="반납 Home 하강 중 Z 반력 감지에 사용할 WrenchStamped topic",
             ),
+            DeclareLaunchArgument(
+                "grasp_model",
+                default_value="weights/hand_grasp_model.pkl",
+                description="사용자 hand grasp/open 분류 .pkl 모델 경로",
+            ),
+            DeclareLaunchArgument(
+                "sam_enabled",
+                default_value="false",
+                description="robot grasp success 이후 SAM tool mask lock을 사용할지 여부",
+            ),
+            DeclareLaunchArgument(
+                "sam_checkpoint",
+                default_value="weights/mobile_sam.pt",
+                description="MobileSAM 또는 SAM checkpoint 경로",
+            ),
             Node(
                 package="macgyvbot",
                 executable="macgyvbot",
@@ -153,6 +169,7 @@ def generate_launch_description():
                         "depth_topic": "/camera/camera/aligned_depth_to_color/image_raw",
                         "result_topic": "/human_grasped_tool",
                         "annotated_topic": "/hand_grasp_detection/annotated_image",
+                        "mask_lock_topic": "/hand_grasp_detection/tool_mask_lock",
                         "use_depth": True,
                         "publish_base_position": False,
                         "position_frame_id": "base_link",
@@ -165,6 +182,19 @@ def generate_launch_description():
                         "max_hands": 2,
                         "depth_diff_threshold_mm": 35.0,
                         "depth_min_contact_landmarks": 4,
+                        "robot_status_topic": "/robot_task_status",
+                        "grasp_model": LaunchConfiguration("grasp_model"),
+                        "sam_enabled": sam_enabled,
+                        "sam_checkpoint": sam_checkpoint,
+                        "sam_backend": "mobile_sam",
+                        "sam_model_type": "vit_t",
+                        "sam_device": "cuda",
+                        "sam_track_interval": 10,
+                        "sam_track_margin": 12,
+                        "allow_bbox_lock": True,
+                        "require_ml_grasp": True,
+                        "require_locked_tool": True,
+                        "require_depth_grasp": True,
                     }
                 ],
             ),

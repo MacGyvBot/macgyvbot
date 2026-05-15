@@ -35,6 +35,8 @@ setup(
         ('share/' + package_name + '/config', glob('config/*.yaml')),
         ('share/' + package_name + '/calibration', glob('calibration/*.npy') + glob('calibration/*.md')),
         ('share/' + package_name + '/weights', glob('weights/*.pt')),
+        ('share/' + package_name + '/weights', glob('weights/*.pth')),
+        ('share/' + package_name + '/weights', glob('weights/*.pkl')),
         ('share/' + package_name + '/weights', glob('weights/*.py')),
     ] + gather_data_files('weights/vlm', 'share/' + package_name + '/weights/vlm'),
     install_requires=['setuptools', 'SpeechRecognition'],

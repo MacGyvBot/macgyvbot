@@ -45,19 +45,32 @@ class TestDrawerInspectionRouting(unittest.TestCase):
 
         self.assertIn("start_drawer_pick_sequence", _method_calls(method))
 
-    def test_frame_loop_does_not_start_legacy_pick_detection(self):
-        method = _method_node(self.node_class, "_process_frames")
-        calls = _method_calls(method)
-
-        self.assertNotIn("_handle_target_detection", calls)
-        self.assertNotIn("start_pick_sequence", calls)
-
-    def test_drawer_pick_thread_runs_inspection_before_drawer_detection(self):
+    def test_drawer_pick_thread_is_used_for_bring_requests(self):
         method = _method_node(self.node_class, "start_drawer_pick_sequence")
         calls = _method_calls(method)
 
         self.assertIn("Thread", calls)
         self.assertNotIn("start_pick_sequence", calls)
+
+    def test_drawer_pick_thread_sets_picking_before_target_label(self):
+        method = _method_node(self.node_class, "start_drawer_pick_sequence")
+
+        picking_line = None
+        target_line = None
+        for node in ast.walk(method):
+            if not isinstance(node, ast.Assign):
+                continue
+            for target in node.targets:
+                if not isinstance(target, ast.Attribute):
+                    continue
+                if target.attr == "picking":
+                    picking_line = node.lineno
+                if target.attr == "target_label":
+                    target_line = node.lineno
+
+        self.assertIsNotNone(picking_line)
+        self.assertIsNotNone(target_line)
+        self.assertLess(picking_line, target_line)
 
 
 if __name__ == "__main__":

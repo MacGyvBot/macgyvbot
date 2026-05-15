@@ -526,6 +526,7 @@ ros2 launch macgyvbot macgyvbot.launch.py
 
 - `/human_grasped_tool`: `std_msgs/msg/String` JSON 결과
 - `/hand_grasp_detection/annotated_image`: annotation 이미지
+- `/hand_grasp_detection/tool_mask_lock`: robot grasp 이후 mask lock 성공/실패 JSON 결과
 
 커스텀 YOLO 모델을 사용할 경우 launch 파라미터 `yolo_model`에 모델 경로를 지정합니다. 모델 파일은 저장소에 커밋하지 않습니다.
 
@@ -533,6 +534,55 @@ ros2 launch macgyvbot macgyvbot.launch.py
 
 ```bash
 ros2 launch macgyvbot macgyvbot.launch.py yolo_model:=/path/to/yolov11_best.pt
+```
+
+전달 파이프라인에서는 hand grasp detection 노드가 `/robot_task_status`의
+`accepted/searching/picking/grasping` 구간에서만 최신 YOLO tool ROI와 선택적
+SAM mask를 갱신합니다. 이 구간은 공구 후보 선택과 VLM 호출 전후부터 robot
+grasp 직전까지입니다. 로봇이 gripper close 후 공구 grasp에 성공하면 main
+노드가 `/robot_task_status`에 `status=grasp_success`를 발행합니다. hand grasp
+detection 노드는 이 이벤트에서 직전 SAM mask 또는 bbox ROI를 lock하고
+`/hand_grasp_detection/tool_mask_lock`에 성공/실패를 발행합니다. main pick
+sequence는 이 lock 응답을 확인한 뒤에만 lift와 handoff 이동을 시작합니다.
+
+handoff pose에서는 사용자 손이 locked ROI/mask 근처에 있는지, 손 landmark의
+depth가 공구 ROI depth와 가까운지, `.pkl` ML classifier가 `grasp`로 판정하는지
+함께 확인합니다. 기본 설정에서는 ML raw/stable 상태가 모두 `grasp`이고,
+ML confidence가 `0.85` 이상이며 depth 조건을 통과해야 `/human_grasped_tool`의
+`human_grasped_tool=true`가 발행됩니다.
+
+ML 모델은 Git에 포함하지 않습니다. 기본 경로는 `weights/hand_grasp_model.pkl`
+이며, 다른 경로를 쓸 때는 launch 파라미터로 넘깁니다.
+
+```bash
+ros2 launch macgyvbot macgyvbot.launch.py \
+  yolo_model:=/path/to/merge.pt \
+  grasp_model:=/path/to/hand_grasp_model.pkl
+```
+
+SAM mask lock은 선택 기능입니다. 기본값은 bbox lock fallback이며, MobileSAM
+checkpoint가 준비된 환경에서는 다음처럼 켤 수 있습니다. SAM은 lock 전 최신
+mask를 주기적으로 갱신하므로, robot grasp 직후 현재 프레임에서 공구가 일부
+가려져도 직전 mask를 lock 기준으로 사용할 수 있습니다.
+
+MobileSAM checkpoint는 다음 명령으로 준비합니다. 모델 파일은 `weights/`에
+저장되지만 Git에는 포함하지 않습니다.
+
+```bash
+python weights/download_sam_weights.py --model mobile_sam
+```
+
+원본 SAM ViT-B checkpoint가 필요하면 다음 명령을 사용합니다.
+
+```bash
+python weights/download_sam_weights.py --model sam_vit_b
+```
+
+```bash
+ros2 launch macgyvbot macgyvbot.launch.py \
+  grasp_model:=/path/to/hand_grasp_model.pkl \
+  sam_enabled:=true \
+  sam_checkpoint:=/path/to/mobile_sam.pt
 ```
 
 ## 테스트

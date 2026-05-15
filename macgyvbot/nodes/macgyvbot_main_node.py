@@ -21,11 +21,11 @@ from std_msgs.msg import String
 from macgyvbot.config.config import (
     BASE_FRAME,
     DEFAULT_GRASP_POINT_MODE,
-    DRAWER_LABEL,
     DRAWER_YOLO_MODEL_NAME,
     FORCE_TORQUE_TOPIC,
     GROUP_NAME,
     HAND_GRASP_IMAGE_TOPIC,
+    HAND_GRASP_MASK_LOCK_TOPIC,
     HAND_GRASP_TOPIC,
     HAND_GRASP_WINDOW_NAME,
     ROBOT_WINDOW_NAME,
@@ -69,6 +69,8 @@ class MacGyvBotNode(Node):
         self.pending_return_thread = None
         self.human_grasped_tool = False
         self.last_grasp_result = None
+        self.tool_mask_locked = False
+        self.last_tool_mask_lock_result = None
         self.hand_grasp_image = None
         self.latest_wrench = None
         self.home_xyz = None
@@ -212,6 +214,12 @@ class MacGyvBotNode(Node):
             10,
         )
         self.create_subscription(
+            String,
+            HAND_GRASP_MASK_LOCK_TOPIC,
+            self._tool_mask_lock_cb,
+            10,
+        )
+        self.create_subscription(
             WrenchStamped,
             self.force_torque_topic,
             self._wrench_cb,
@@ -220,7 +228,7 @@ class MacGyvBotNode(Node):
 
     def _log_startup(self):
         self.get_logger().info("노드 초기화 완료")
-        self.get_logger().info(f"Tool YOLO model: {self.yolo_model}")
+        self.get_logger().info(f"YOLO model: {self.yolo_model}")
         self.get_logger().info(f"Drawer YOLO model: {self.drawer_yolo_model}")
         self.get_logger().info(f"grasp point mode: {self.grasp_point_mode}")
         self.get_logger().info(
@@ -231,6 +239,7 @@ class MacGyvBotNode(Node):
         self.get_logger().info(f"로봇 상태 토픽: {ROBOT_STATUS_TOPIC}")
         self.get_logger().info(f"잡기 인식 결과 토픽: {HAND_GRASP_TOPIC}")
         self.get_logger().info(f"잡기 인식 화면 토픽: {HAND_GRASP_IMAGE_TOPIC}")
+        self.get_logger().info(f"공구 mask lock 토픽: {HAND_GRASP_MASK_LOCK_TOPIC}")
         self.get_logger().info(f"힘/토크 입력 토픽: {self.force_torque_topic}")
 
     def _target_label_cb(self, msg):
@@ -384,6 +393,16 @@ class MacGyvBotNode(Node):
         self.last_grasp_result = result
         self.human_grasped_tool = bool(result.get("human_grasped_tool", False))
 
+    def _tool_mask_lock_cb(self, msg):
+        try:
+            result = json.loads(msg.data)
+        except json.JSONDecodeError:
+            self.get_logger().warn(f"공구 mask lock 결과 JSON 파싱 실패: {msg.data}")
+            return
+
+        self.last_tool_mask_lock_result = result
+        self.tool_mask_locked = bool(result.get("locked", False))
+
     def _attach_base_position_to_grasp_result(self, result):
         position = result.get("position")
         if isinstance(position, dict) and all(k in position for k in ("x", "y", "z")):
@@ -477,10 +496,10 @@ class MacGyvBotNode(Node):
 
         self.picking = True
         self._publish_robot_status(
-            "moving_to_drawer",
+            "picking",
             tool_name=self.target_label,
             action="bring",
-            message="공구함으로 이동 중입니다.",
+            message=f"{self.target_label} pick 동작을 시작합니다.",
             command=self.current_command,
         )
         self.pending_pick_thread = threading.Thread(
@@ -577,6 +596,12 @@ class MacGyvBotNode(Node):
             results = self.detector.detect(self.color_image)
             annotated_frame = results[0].plot()
 
+            if self.target_label:
+                self._handle_target_detection(
+                    results[0].boxes,
+                    annotated_frame,
+                )
+
             self._show_robot_window(annotated_frame)
             self._show_hand_grasp_window()
 
@@ -594,16 +619,21 @@ class MacGyvBotNode(Node):
 
     def _handle_target_detection(self, boxes, annotated_frame):
         found = False
-        search_label = DRAWER_LABEL
 
         for box in boxes:
-            label = self.drawer_detector.names[int(box.cls)]
-            if label != search_label:
+            label = self.detector.names[int(box.cls)]
+            if label != self.target_label:
                 continue
 
             found = True
-            u, v = self._box_center_pixel(box)
-            source = "drawer_center"
+            u, v, source, vlm_rpy_deg = self.grasp_point_selector.select(
+                box,
+                label,
+                self.color_image,
+                self.depth_image,
+                self.intrinsics,
+                self.target_label,
+            )
             target = self.depth_projector.pixel_to_base_target(
                 u,
                 v,
@@ -612,27 +642,28 @@ class MacGyvBotNode(Node):
                 self.depth_image,
                 self.intrinsics,
                 self.get_logger(),
+                vlm_rpy_deg,
             )
             if target is None:
                 continue
 
-            bx, by, bz, z_m, _ = target
+            bx, by, bz, z_m, vlm_rpy_deg = target
+            vlm_yaw_deg = self._extract_vlm_yaw(vlm_rpy_deg)
             self._draw_grasp_marker(annotated_frame, u, v, source)
-            self.start_pick_sequence(bx, by, bz, z_m)
+            self.start_pick_sequence(bx, by, bz, z_m, vlm_yaw_deg)
             break
 
         if not found:
             self.get_logger().info(
-                f"'{search_label}' 탐색 중... 현재 프레임에서는 미검출"
+                f"'{self.target_label}' 탐색 중... 현재 프레임에서는 미검출"
             )
-            status_key = f"{self.target_label}:{search_label}"
-            if self._last_search_status_target != status_key:
-                self._last_search_status_target = status_key
+            if self._last_search_status_target != self.target_label:
+                self._last_search_status_target = self.target_label
                 self._publish_robot_status(
-                    "searching_drawer",
+                    "searching",
                     tool_name=self.target_label,
                     action="bring",
-                    message=f"{self.target_label}를 꺼낼 공구함 찾기 중입니다.",
+                    message=f"{self.target_label} 탐색 중입니다.",
                     command=self.current_command,
                 )
 
@@ -659,13 +690,6 @@ class MacGyvBotNode(Node):
             1,
             cv2.LINE_AA,
         )
-
-    @staticmethod
-    def _box_center_pixel(box):
-        bbox = box.xyxy[0].cpu().numpy()
-        u = int((bbox[0] + bbox[2]) / 2)
-        v = int((bbox[1] + bbox[3]) / 2)
-        return u, v
 
     def _publish_robot_status(
         self,
