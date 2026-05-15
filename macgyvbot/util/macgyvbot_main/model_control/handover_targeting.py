@@ -239,7 +239,7 @@ def move_to_candidate_with_offset(
 
     target_x = candidate.x + float(x_offset_m)
     target_y = candidate.y
-    target_z = SAFE_Z_MIN + 0.15
+    target_z = max(SAFE_Z_MIN + 0.15, candidate.z + float(z_offset_m))
     attempts = [
         clamp_to_safe_workspace(target_x, target_y, target_z, logger),
     ]

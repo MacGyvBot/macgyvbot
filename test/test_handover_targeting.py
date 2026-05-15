@@ -181,6 +181,31 @@ class TestHandoverTargeting(unittest.TestCase):
         self.assertAlmostEqual(motion.targets[1][2], 0.39)
         self.assertEqual(final_pose.x, motion.targets[2][0])
 
+    def test_handoff_target_z_uses_hand_height_when_higher_than_minimum(self):
+        motion = FakeMotion([True])
+        candidate = TargetCandidate(
+            found=True,
+            x=0.5,
+            y=0.18,
+            z=0.40,
+            frame_id="base_link",
+            source="test",
+        )
+
+        ok, final_pose, reason = move_to_candidate_with_offset(
+            motion,
+            candidate,
+            {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+            FakeLogger(),
+            x_offset_m=0.0,
+            z_offset_m=0.08,
+        )
+
+        self.assertTrue(ok)
+        self.assertEqual(reason, "")
+        self.assertAlmostEqual(motion.targets[0][2], 0.48)
+        self.assertAlmostEqual(final_pose.z, 0.48)
+
 
 if __name__ == "__main__":
     unittest.main()
