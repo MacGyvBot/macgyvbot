@@ -6,6 +6,11 @@ from math import sqrt
 from pathlib import Path
 from typing import Optional
 
+from ament_index_python.packages import (
+    PackageNotFoundError,
+    get_package_share_directory,
+)
+
 ACTIVE_GRASP_STATES = {"grasp"}
 ACTIVE_MODEL_STATES = {"open", "grasp"}
 EXPECTED_LANDMARK_COUNT = 21
@@ -167,7 +172,16 @@ def resolve_model_path(model_path: str) -> Path:
 
     package_root = Path(__file__).resolve().parents[3]
     project_root = Path(__file__).resolve().parents[4]
+    try:
+        package_share = Path(get_package_share_directory("macgyvbot"))
+    except PackageNotFoundError:
+        package_share = None
     candidates = [
+        *(
+            (package_share / path, package_share / "weights" / path)
+            if package_share is not None
+            else ()
+        ),
         Path.cwd() / path,
         Path.cwd() / "weights" / path,
         project_root / path,
