@@ -57,6 +57,34 @@ HAND_GRASP_TOPIC = "/human_grasped_tool"
 # 손-공구 grasp 인식 시각화 이미지를 publish/subscribe 하는 topic.
 HAND_GRASP_IMAGE_TOPIC = "/hand_grasp_detection/annotated_image"
 
+# 로봇 grasp 성공 후 hand grasp detector가 공구 mask를 고정했다는 결과 topic.
+HAND_GRASP_MASK_LOCK_TOPIC = "/hand_grasp_detection/tool_mask_lock"
+
+# 공구 mask lock 결과를 기다리는 최대 시간.
+HAND_GRASP_MASK_LOCK_TIMEOUT_SEC = 3.0
+
+# 손 grasp ML classifier 모델 파일명.
+HAND_GRASP_MODEL_NAME = "hand_grasp_model.pkl"
+
+# Mobile SAM checkpoint 파일명.
+HAND_GRASP_SAM_CHECKPOINT_NAME = "mobile_sam.pt"
+
+# handoff grasp 판단에 ML classifier 결과가 필요한지 여부.
+HAND_GRASP_REQUIRE_ML = True
+
+# locked tool mask 기준 접촉/근접을 요구할지 여부.
+HAND_GRASP_REQUIRE_LOCKED_TOOL = True
+
+# depth 기반 grasp 확인을 요구할지 여부.
+HAND_GRASP_REQUIRE_DEPTH = True
+
+# ML classifier가 손 상태를 grasp로 예측했더라도 이 confidence 이상일 때만
+# 사용자 grasp로 인정한다. 낮은 confidence의 순간 오인식을 handoff 조건에서 제외한다.
+HAND_GRASP_ML_CONFIDENCE = 0.85
+
+# 이 로봇 상태가 publish되면 hand grasp detector가 tool mask lock을 시작한다.
+HAND_GRASP_LOCK_ON_STATUS = "grasp_success"
+
 # handoff 단계에서 사용자가 공구를 잡았는지 기다리는 최대 시간.
 HAND_GRASP_TIMEOUT_SEC = 20.0
 

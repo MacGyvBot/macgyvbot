@@ -7,6 +7,7 @@ import mediapipe as mp
 import numpy as np
 
 from .calculations import distance, rect_from_points, rect_iou
+from .ml_grasp_classifier import extract_mediapipe_features
 
 Point = Tuple[int, int]
 
@@ -78,7 +79,11 @@ class HandDetector:
             hands.append(
                 {
                     "hand_index": hand_index,
-                    "handedness": handedness_labels[hand_index] if hand_index < len(handedness_labels) else "Unknown",
+                    "handedness": (
+                        handedness_labels[hand_index]
+                        if hand_index < len(handedness_labels)
+                        else "Unknown"
+                    ),
                     "landmarks": landmarks,
                     "hand_rect": hand_rect,
                     "palm_center": palm_center,
@@ -87,6 +92,7 @@ class HandDetector:
                     "middle_tip": landmarks[MIDDLE_TIP],
                     "ring_tip": landmarks[RING_TIP],
                     "pinky_tip": landmarks[PINKY_TIP],
+                    "ml_features": extract_mediapipe_features(hand_landmarks),
                 }
             )
 
@@ -124,9 +130,13 @@ class HandDetector:
         for hand in hands:
             is_duplicate = False
             for kept_hand in filtered_hands:
-                same_region = rect_iou(hand["hand_rect"], kept_hand["hand_rect"]) >= DUPLICATE_HAND_IOU_THRESHOLD
+                same_region = (
+                    rect_iou(hand["hand_rect"], kept_hand["hand_rect"])
+                    >= DUPLICATE_HAND_IOU_THRESHOLD
+                )
                 same_palm = (
-                    distance(hand["palm_center"], kept_hand["palm_center"]) <= DUPLICATE_PALM_DISTANCE_THRESHOLD
+                    distance(hand["palm_center"], kept_hand["palm_center"])
+                    <= DUPLICATE_PALM_DISTANCE_THRESHOLD
                 )
                 if same_region or same_palm:
                     is_duplicate = True

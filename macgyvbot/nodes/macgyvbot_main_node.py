@@ -24,6 +24,7 @@ from macgyvbot.config.config import (
     FORCE_TORQUE_TOPIC,
     GROUP_NAME,
     HAND_GRASP_IMAGE_TOPIC,
+    HAND_GRASP_MASK_LOCK_TOPIC,
     HAND_GRASP_TOPIC,
     HAND_GRASP_WINDOW_NAME,
     ROBOT_WINDOW_NAME,
@@ -67,6 +68,8 @@ class MacGyvBotNode(Node):
         self.pending_return_thread = None
         self.human_grasped_tool = False
         self.last_grasp_result = None
+        self.tool_mask_locked = False
+        self.last_tool_mask_lock_result = None
         self.hand_grasp_image = None
         self.latest_wrench = None
         self.home_xyz = None
@@ -199,6 +202,12 @@ class MacGyvBotNode(Node):
             10,
         )
         self.create_subscription(
+            String,
+            HAND_GRASP_MASK_LOCK_TOPIC,
+            self._tool_mask_lock_cb,
+            10,
+        )
+        self.create_subscription(
             WrenchStamped,
             self.force_torque_topic,
             self._wrench_cb,
@@ -217,6 +226,7 @@ class MacGyvBotNode(Node):
         self.get_logger().info(f"로봇 상태 토픽: {ROBOT_STATUS_TOPIC}")
         self.get_logger().info(f"잡기 인식 결과 토픽: {HAND_GRASP_TOPIC}")
         self.get_logger().info(f"잡기 인식 화면 토픽: {HAND_GRASP_IMAGE_TOPIC}")
+        self.get_logger().info(f"공구 mask lock 토픽: {HAND_GRASP_MASK_LOCK_TOPIC}")
         self.get_logger().info(f"힘/토크 입력 토픽: {self.force_torque_topic}")
 
     def _target_label_cb(self, msg):
@@ -367,6 +377,16 @@ class MacGyvBotNode(Node):
         self._attach_base_position_to_grasp_result(result)
         self.last_grasp_result = result
         self.human_grasped_tool = bool(result.get("human_grasped_tool", False))
+
+    def _tool_mask_lock_cb(self, msg):
+        try:
+            result = json.loads(msg.data)
+        except json.JSONDecodeError:
+            self.get_logger().warn(f"공구 mask lock 결과 JSON 파싱 실패: {msg.data}")
+            return
+
+        self.last_tool_mask_lock_result = result
+        self.tool_mask_locked = bool(result.get("locked", False))
 
     def _attach_base_position_to_grasp_result(self, result):
         position = result.get("position")
