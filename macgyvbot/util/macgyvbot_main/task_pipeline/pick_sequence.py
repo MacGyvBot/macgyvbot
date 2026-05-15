@@ -5,6 +5,7 @@ import time
 import rclpy
 
 from macgyvbot.util.macgyvbot_main.model_control.robot_safezone import (
+    SAFE_Z_MIN,
     clamp_to_safe_workspace,
 )
 
@@ -51,8 +52,8 @@ class PickSequenceRunner:
         ori = self.state.home_ori
 
         corrected_bz = bz - OBJECT_Z_HEIGHT_BIAS_M
-        approach_z = corrected_bz + APPROACH_Z_OFFSET
-        grasp_z = corrected_bz - GRASP_Z_OFFSET
+        grasp_z = SAFE_Z_MIN + corrected_bz - GRASP_Z_OFFSET
+        approach_z = grasp_z - GRASP_Z_OFFSET
 
         current_pose = get_ee_matrix(self.robot)
         current_x = current_pose[0, 3]

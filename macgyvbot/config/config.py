@@ -36,7 +36,7 @@ APPROACH_Z_OFFSET = 0.18
 # Pick 시 실제 파지 pose를 물체 검출 z보다 얼마나 낮게 잡을지 결정하는 보정값.
 # grasp_z = corrected_object_z - GRASP_Z_OFFSET 로 계산되며,
 # 최종적으로 robot_safezone.SAFE_Z_MIN 아래로는 내려가지 않는다.
-GRASP_Z_OFFSET = 0.02
+GRASP_Z_OFFSET = 0.03
 
 # 바닥 기준 물체 높이 측정값이 캘리브레이션 기준보다 높게 나오는 편차.
 # 현재 depth/base 변환 결과가 실제보다 0.03m 높으므로 pick z 계산 전에 이 값을 뺀다.
