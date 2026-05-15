@@ -15,7 +15,7 @@ from sensor_msgs.msg import Image
 from std_msgs.msg import String
 
 # 로봇 정지를 위한 커스텀 서비스
-from macgyvbot_msgs.srv import RobotTaskControl
+from my_custom_interfaces.srv import RobotTaskControl
 
 from macgyvbot.ui.voice_command_window import (
     QApplication,
