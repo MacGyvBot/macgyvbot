@@ -6,6 +6,10 @@ from typing import Optional, Tuple
 
 import cv2
 import numpy as np
+from ament_index_python.packages import (
+    PackageNotFoundError,
+    get_package_share_directory,
+)
 
 from macgyvbot.util.hand_grasp_detection.hand_grasp.calculations import (
     point_to_rect_distance,
@@ -51,7 +55,7 @@ class BBoxPromptSegmenter:
         close_kernel: int = 5,
         keep_largest_component: bool = True,
     ) -> None:
-        checkpoint = Path(checkpoint_path).expanduser()
+        checkpoint = resolve_checkpoint_path(checkpoint_path)
         if not checkpoint.exists():
             raise RuntimeError(f"SAM checkpoint not found: {checkpoint}")
 
@@ -202,6 +206,37 @@ def overlay_locked_mask(frame: np.ndarray, locked_tool: Optional[LockedToolMask]
     green[:, :] = (0, 255, 0)
     mask = locked_tool.mask.astype(bool)
     frame[mask] = cv2.addWeighted(frame, 0.65, green, 0.35, 0)[mask]
+
+
+def resolve_checkpoint_path(checkpoint_path: str) -> Path:
+    path = Path(checkpoint_path).expanduser()
+    if path.exists() or path.is_absolute():
+        return path
+
+    package_root = Path(__file__).resolve().parents[3]
+    project_root = Path(__file__).resolve().parents[4]
+    try:
+        package_share = Path(get_package_share_directory("macgyvbot"))
+    except PackageNotFoundError:
+        package_share = None
+
+    candidates = [
+        *(
+            (package_share / path, package_share / "weights" / path)
+            if package_share is not None
+            else ()
+        ),
+        Path.cwd() / path,
+        Path.cwd() / "weights" / path,
+        project_root / path,
+        project_root / "weights" / path,
+        package_root / path,
+        package_root / "weights" / path,
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return path
 
 
 def mask_to_roi(mask: np.ndarray) -> Optional[Rect]:
