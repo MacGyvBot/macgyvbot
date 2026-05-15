@@ -137,12 +137,17 @@ def generate_launch_description():
                 name="hand_grasp_detection_node",
                 output="screen",
                 parameters=[
+                    moveit_config.to_dict(),
+                    moveit_py_params,
                     {
                         "color_topic": "/camera/camera/color/image_raw",
+                        "camera_info_topic": "/camera/camera/color/camera_info",
                         "depth_topic": "/camera/camera/aligned_depth_to_color/image_raw",
                         "result_topic": "/human_grasped_tool",
                         "annotated_topic": "/hand_grasp_detection/annotated_image",
                         "use_depth": True,
+                        "publish_base_position": False,
+                        "position_frame_id": "base_link",
                         "publish_annotated": True,
                         "display": False,
                         "yolo_model": LaunchConfiguration("yolo_model"),

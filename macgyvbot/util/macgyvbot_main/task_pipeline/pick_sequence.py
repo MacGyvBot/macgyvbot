@@ -5,24 +5,29 @@ import time
 import rclpy
 
 from macgyvbot.util.macgyvbot_main.model_control.robot_safezone import (
+    SAFE_Z_MIN,
     clamp_to_safe_workspace,
 )
 
 from macgyvbot.config.config import (
     APPROACH_Z_OFFSET,
-    COLLISION_MARGIN,
-    GRASP_ADVANCE_DISTANCE_M,
+    BASE_FRAME,
     GRASP_Z_OFFSET,
+    HANDOVER_HAND_X_OFFSET_M,
+    HANDOVER_HAND_Z_OFFSET_M,
+    OBJECT_Z_HEIGHT_BIAS_M,
+    OBSERVATION_TIMEOUT_SEC,
     HAND_GRASP_TIMEOUT_SEC,
-    MAX_DESCENT_FROM_APPROACH,
-    MIN_GRASP_CLEARANCE,
-    MIN_PICK_Z,
-    MIN_TRAVEL_Z,
     SAFE_Z,
     SEQUENCE_WAIT_POLL_SEC,
 )
 from macgyvbot.util.macgyvbot_main.model_control.grasp_verifier import (
     GraspVerifier,
+)
+from macgyvbot.util.macgyvbot_main.model_control.handover_targeting import (
+    move_to_observation_pose,
+    move_to_candidate_with_offset,
+    start_async_observation_search,
 )
 from macgyvbot.util.macgyvbot_main.model_control.robot_pose import (
     current_ee_orientation,
@@ -46,25 +51,9 @@ class PickSequenceRunner:
         log = self.state.logger()
         ori = self.state.home_ori
 
-        safe_grasp_offset = max(
-            GRASP_Z_OFFSET,
-            z_m * 0.35 + MIN_GRASP_CLEARANCE,
-        )
-        safe_grasp_offset += COLLISION_MARGIN
-
-        approach_z = bz + APPROACH_Z_OFFSET + COLLISION_MARGIN
-        grasp_z = bz + safe_grasp_offset
-        grasp_z = max(grasp_z, MIN_TRAVEL_Z, MIN_PICK_Z)
-        if grasp_z > approach_z:
-            grasp_z = approach_z - 0.01
-
-        min_safe_grasp_z = approach_z - MAX_DESCENT_FROM_APPROACH
-        if grasp_z < min_safe_grasp_z:
-            log.warn(
-                f"grasp_z({grasp_z:.3f})가 과도하게 낮아 "
-                f"하강 제한 적용: {min_safe_grasp_z:.3f}"
-            )
-            grasp_z = min_safe_grasp_z
+        corrected_bz = bz - OBJECT_Z_HEIGHT_BIAS_M
+        grasp_z = SAFE_Z_MIN + corrected_bz - GRASP_Z_OFFSET
+        approach_z = grasp_z - GRASP_Z_OFFSET
 
         current_pose = get_ee_matrix(self.robot)
         current_x = current_pose[0, 3]
@@ -102,7 +91,8 @@ class PickSequenceRunner:
         try:
             log.info(
                 f"시퀀스 시작: Target({target_x:.3f}, {target_y:.3f}), "
-                f"depth={z_m:.3f}, travel_z={travel_z:.3f}, "
+                f"depth={z_m:.3f}, raw_bz={bz:.3f}, "
+                f"corrected_bz={corrected_bz:.3f}, travel_z={travel_z:.3f}, "
                 f"approach_z={approach_z:.3f}, grasp_z={grasp_z:.3f}"
             )
 
@@ -253,6 +243,26 @@ class PickSequenceRunner:
                 log,
             )
             if handoff_pose[0] is None:
+                log.error("사용자 손 위치 확인 실패. 원래 공구 위치로 반환합니다.")
+                returned = self.return_tool_to_original_position(
+                    target_x,
+                    target_y,
+                    travel_z,
+                    grasp_z,
+                    ori,
+                    log,
+                )
+                status = "returned" if returned else "failed"
+                self.state._publish_robot_status(
+                    status,
+                    message=(
+                        "사용자 손 위치 확인 실패로 공구를 원래 위치에 반환했습니다."
+                        if returned
+                        else "사용자 손 위치 확인 실패 후 원위치 반환에도 실패했습니다."
+                    ),
+                    reason="handoff_pose_unavailable",
+                    command=self.state.current_command,
+                )
                 return
 
             log.info("8단계: 사용자 잡기 인식 대기")
@@ -358,17 +368,8 @@ class PickSequenceRunner:
             logger.error("공구를 놓은 뒤 안전 높이 복귀 실패")
             return False
 
-        logger.info("반환 5단계: Home 위치로 복귀")
-        ok = self.motion.plan_and_execute(
-            logger,
-            pose_goal=make_safe_pose(
-                self.state.home_xyz[0],
-                self.state.home_xyz[1],
-                travel_z,
-                ori,
-                logger,
-            ),
-        )
+        logger.info("반환 5단계: Home joint pose로 복귀")
+        ok = self.motion.move_to_home_joints(logger)
         if not ok:
             logger.error("공구 반환 후 Home 복귀 실패")
             return False
@@ -376,23 +377,10 @@ class PickSequenceRunner:
         return True
 
     def move_to_handoff_pose(self, travel_z, ori, logger):
-        target_x = self.state.home_xyz[0] + GRASP_ADVANCE_DISTANCE_M
-        target_y = self.state.home_xyz[1]
-        target_z = max(travel_z, self.state.home_xyz[2], SAFE_Z)
-        safe_x, safe_y, safe_z = clamp_to_safe_workspace(
-            target_x,
-            target_y,
-            target_z,
-            logger,
-        )
+        ok, start_pose = move_to_observation_pose(self.motion, self.robot, logger)
         logger.info(
-            "7단계: 사용자 전달 위치 이동 "
-            f"Home 기준 전방 20cm x={self.state.home_xyz[0]:.3f}->{safe_x:.3f}, "
-            f"y={safe_y:.3f}, z={safe_z:.3f}"
-        )
-        ok = self.motion.plan_and_execute(
-            logger,
-            pose_goal=make_safe_pose(safe_x, safe_y, safe_z, ori, logger),
+            "7단계: 사용자 전달 관찰 자세 이동 "
+            f"pose=({start_pose.x:.3f},{start_pose.y:.3f},{start_pose.z:.3f})"
         )
         if not ok:
             logger.error("사용자 전달 위치 이동 실패. Pick 시퀀스 중단")
@@ -404,27 +392,94 @@ class PickSequenceRunner:
             )
             return None, None, None
 
-        return safe_x, safe_y, safe_z
-
-    def move_home_after_handoff(self, travel_z, ori, logger):
-        ok = self.motion.plan_and_execute(
+        future = start_async_observation_search(
+            self.state,
             logger,
-            pose_goal=make_safe_pose(
-                self.state.home_xyz[0],
-                self.state.home_xyz[1],
-                max(travel_z, self.state.home_xyz[2], SAFE_Z),
-                ori,
-                logger,
-            ),
+            timeout_sec=OBSERVATION_TIMEOUT_SEC,
         )
-        if not ok:
-            logger.error("전달 후 Home 복귀 실패")
+        candidate = future.result()
+
+        if not candidate.found:
+            logger.error("사용자 손 위치를 찾지 못했습니다.")
             self.state._publish_robot_status(
                 "failed",
-                message="공구 전달 후 Home 복귀에 실패했습니다.",
-                reason="home_after_handoff_failed",
+                message="사용자 손 위치를 찾지 못했습니다.",
+                reason="handoff_search_failed",
                 command=self.state.current_command,
             )
+            return None, None, None
+
+        if candidate.frame_id not in ("world", BASE_FRAME):
+            logger.error(
+                "사용자 손 위치 frame을 planning에 사용할 수 없습니다: "
+                f"frame={candidate.frame_id}, source={candidate.source}"
+            )
+            self.state._publish_robot_status(
+                "failed",
+                message="사용자 손 위치 frame이 planning frame이 아닙니다.",
+                reason="handoff_unsupported_frame",
+                command=self.state.current_command,
+            )
+            return None, None, None
+
+        ok, final_pose, reason = move_to_candidate_with_offset(
+            self.motion,
+            candidate,
+            ori,
+            logger,
+            x_offset_m=HANDOVER_HAND_X_OFFSET_M,
+            z_offset_m=HANDOVER_HAND_Z_OFFSET_M,
+        )
+        logger.info(
+            "사용자 손 위치로 전달 이동: "
+            f"source={candidate.source}, frame={candidate.frame_id}, "
+            f"raw=({candidate.x:.3f},{candidate.y:.3f},{candidate.z:.3f}), "
+            f"offset=({HANDOVER_HAND_X_OFFSET_M:.3f},0.000,{HANDOVER_HAND_Z_OFFSET_M:.3f}), "
+            f"safe=({final_pose.x:.3f},{final_pose.y:.3f},{final_pose.z:.3f})"
+        )
+        if not ok:
+            logger.error("사용자 손 위치로 전달 이동 실패")
+            self.state._publish_robot_status(
+                "failed",
+                message="사용자 손 위치로 이동하지 못했습니다.",
+                reason="handoff_hand_pose_move_failed" if reason == "target_move_failed" else reason,
+                command=self.state.current_command,
+            )
+            return None, None, None
+
+        return final_pose.x, final_pose.y, final_pose.z
+
+    def _recover_to_home(self, travel_z, ori, logger, reason):
+        logger.warn("handoff 실패 후 Home 복귀를 시도합니다.")
+        ok = self.move_home_after_handoff(
+            travel_z,
+            ori,
+            logger,
+            publish_on_failure=False,
+        )
+        status = "returned" if ok else "failed"
+        self.state._publish_robot_status(
+            status,
+            message=(
+                "handoff 실패 후 Home으로 복귀했습니다."
+                if ok
+                else "handoff 실패 후 Home 복귀에도 실패했습니다."
+            ),
+            reason=reason if ok else f"{reason}_recovery_failed",
+            command=self.state.current_command,
+        )
+
+    def move_home_after_handoff(self, travel_z, ori, logger, publish_on_failure=True):
+        ok = self.motion.move_to_home_joints(logger)
+        if not ok:
+            logger.error("전달 후 Home 복귀 실패")
+            if publish_on_failure:
+                self.state._publish_robot_status(
+                    "failed",
+                    message="공구 전달 후 Home 복귀에 실패했습니다.",
+                    reason="home_after_handoff_failed",
+                    command=self.state.current_command,
+                )
             return False
 
         return True
