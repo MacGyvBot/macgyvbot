@@ -118,6 +118,17 @@ RELEASE_KEYWORDS = [
     '두고',
 ]
 
+STOP_KEYWORDS = [
+    '멈춰',
+    '멈추',
+    '정지',
+    '중지',
+    '중단',
+    '스탑',
+    'stop',
+    'pause',
+]
+
 
 def normalize_text(text):
     return (text or '').lower().replace(' ', '')
@@ -189,6 +200,10 @@ def find_tool(text):
 def find_action(text):
     normalized = normalize_text(text)
 
+    for keyword in STOP_KEYWORDS:
+        if normalize_text(keyword) in normalized:
+            return 'stop'
+
     # "가져다가 놔", "정리해"는 사용자에게 전달이 아니라 보관 위치로 반납하는 명령이다.
     for keyword in RETURN_KEYWORDS:
         if normalize_text(keyword) in normalized:
@@ -202,4 +217,4 @@ def find_action(text):
         if normalize_text(keyword) in normalized:
             return 'release'
 
-    return 'bring'
+    return 'unknown'

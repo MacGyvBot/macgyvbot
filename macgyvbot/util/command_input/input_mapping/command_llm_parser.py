@@ -5,8 +5,10 @@ import re
 from urllib import error, request
 
 from macgyvbot.util.command_input.input_mapping.command_hard_parser import (
+    STOP_KEYWORDS,
     find_action,
     find_tool,
+    normalize_text,
 )
 
 
@@ -176,6 +178,19 @@ class CommandLlmParser:
     def _parse_locally(self, text):
         tool_name, match_method, match_score, matched_keyword = find_tool(text)
         action = find_action(text)
+
+        if action == 'stop':
+            command = {
+                'tool_name': 'unknown',
+                'action': 'stop',
+                'target_mode': 'unknown',
+                'raw_text': text,
+                'match_method': 'stop_keyword',
+                'match_score': 1.0,
+                'confidence': 1.0,
+            }
+            self._info('local parser가 정지 명령으로 확정했습니다.')
+            return command
 
         if not tool_name:
             if action == 'return' and self._has_deictic_target(text):
@@ -417,6 +432,8 @@ class CommandLlmParser:
 - "이거", "그거", "저거"처럼 공구명이나 기능 표현이 없는 지시어는 target_mode를 deictic으로 둔다.
 - deictic은 return action에서만 허용한다. deictic bring은 tool_name을 추측하지 말고 unknown으로 둔다.
 - "정리해", "가져다놔", "가져가", "제자리에 둬", "서랍에 넣어", "반납해"는 return action이다.
+- "멈춰", "정지", "중지", "중단", "스탑", "stop", "pause"처럼 명확한 정지 표현만 stop action이다.
+- 이해하지 못한 문장을 stop으로 추측하지 말고 action unknown으로 둔다.
 
 예시:
 입력: 드라이버 가져다줘
@@ -575,6 +592,20 @@ class CommandLlmParser:
                 ),
             }
 
+        if action == 'stop' and not self._has_stop_intent(raw_text):
+            self._warn('명확한 정지 표현이 없어 stop 명령을 무시합니다.')
+            candidate_command['action'] = 'unknown'
+            return {
+                'command': None,
+                'feedback': self._feedback(
+                    status='rejected',
+                    raw_text=raw_text,
+                    reason='unknown_action',
+                    message='무엇을 해야 하는지 확정하지 못했습니다. 다시 입력해주세요.',
+                    command=candidate_command,
+                ),
+            }
+
         if action == 'bring' and target_mode == 'deictic':
             self._warn('deictic bring 명령은 지원하지 않아 재입력을 요청합니다.')
             return {
@@ -615,6 +646,10 @@ class CommandLlmParser:
 
     def _adjust_action(self, raw_text, action):
         normalized = self._normalize_answer(raw_text)
+        if self._has_stop_intent(raw_text):
+            return 'stop'
+        if action == 'stop':
+            return 'unknown'
         return_tokens = (
             '가져다가놔',
             '가져다가놓',
@@ -642,6 +677,11 @@ class CommandLlmParser:
         if any(token in normalized for token in return_tokens):
             return 'return'
         return action
+
+    @staticmethod
+    def _has_stop_intent(raw_text):
+        normalized = normalize_text(raw_text)
+        return any(normalize_text(keyword) in normalized for keyword in STOP_KEYWORDS)
 
     def _adjust_ambiguous_command(
         self,
