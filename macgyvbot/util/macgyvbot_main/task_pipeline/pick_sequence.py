@@ -11,16 +11,11 @@ from macgyvbot.util.macgyvbot_main.model_control.robot_safezone import (
 from macgyvbot.config.config import (
     APPROACH_Z_OFFSET,
     BASE_FRAME,
-    COLLISION_MARGIN,
     GRASP_Z_OFFSET,
     HANDOVER_HAND_X_OFFSET_M,
     HANDOVER_HAND_Z_OFFSET_M,
     OBSERVATION_TIMEOUT_SEC,
     HAND_GRASP_TIMEOUT_SEC,
-    MAX_DESCENT_FROM_APPROACH,
-    MIN_GRASP_CLEARANCE,
-    MIN_PICK_Z,
-    MIN_TRAVEL_Z,
     SAFE_Z,
     SEQUENCE_WAIT_POLL_SEC,
 )
@@ -54,25 +49,8 @@ class PickSequenceRunner:
         log = self.state.logger()
         ori = self.state.home_ori
 
-        safe_grasp_offset = max(
-            GRASP_Z_OFFSET,
-            z_m * 0.35 + MIN_GRASP_CLEARANCE,
-        )
-        safe_grasp_offset += COLLISION_MARGIN
-
-        approach_z = bz + APPROACH_Z_OFFSET + COLLISION_MARGIN
-        grasp_z = bz + safe_grasp_offset
-        grasp_z = max(grasp_z, MIN_TRAVEL_Z, MIN_PICK_Z)
-        if grasp_z > approach_z:
-            grasp_z = approach_z - 0.01
-
-        min_safe_grasp_z = approach_z - MAX_DESCENT_FROM_APPROACH
-        if grasp_z < min_safe_grasp_z:
-            log.warn(
-                f"grasp_z({grasp_z:.3f})가 과도하게 낮아 "
-                f"하강 제한 적용: {min_safe_grasp_z:.3f}"
-            )
-            grasp_z = min_safe_grasp_z
+        approach_z = bz + APPROACH_Z_OFFSET
+        grasp_z = bz - GRASP_Z_OFFSET
 
         current_pose = get_ee_matrix(self.robot)
         current_x = current_pose[0, 3]
