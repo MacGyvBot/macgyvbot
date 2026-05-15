@@ -20,6 +20,7 @@ from macgyvbot.config.config import (
     MIN_TRAVEL_Z,
     SAFE_Z,
     SEQUENCE_WAIT_POLL_SEC,
+    EmergencyStopException,
 )
 from macgyvbot.util.macgyvbot_main.model_control.grasp_verifier import (
     GraspVerifier,
@@ -297,6 +298,14 @@ class PickSequenceRunner:
             self.state._publish_robot_status(
                 "done",
                 message="공구 전달 후 Home 복귀까지 완료되었습니다.",
+                command=self.state.current_command,
+            )
+
+        except EmergencyStopException:
+            log.warn("💥 [PickSequence] 비상 정지 예외 감지! 시퀀스를 즉시 파괴합니다.")
+            self.state._publish_robot_status(
+                "cancelled",
+                message="비상 정지 명령으로 인해 작업이 강제 종료되었습니다.",
                 command=self.state.current_command,
             )
 

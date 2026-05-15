@@ -15,6 +15,9 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
 
+# 로봇 정지를 위한 메시지타입 => 단순 정수
+from std_msgs.msg import Int8
+
 from macgyvbot.ui.voice_command_window import (
     QApplication,
     QTimer,
@@ -120,6 +123,9 @@ class CommandInputNode(Node):
         )
         self._tool_command_pub = self.create_publisher(String, tool_command_topic, 10)
         self._feedback_pub = self.create_publisher(String, command_feedback_topic, 10)
+
+        # 로봇 정지 명령을 위한 토픽 퍼블리셔
+        self._task_control_pub = self.create_publisher(Int8, '/robot_task_control', 10)
 
         self.create_subscription(String, stt_text_topic, self._text_cb, 10)
         self.create_subscription(String, tool_command_topic, self._tool_command_cb, 10)
@@ -272,7 +278,12 @@ class CommandInputNode(Node):
 
         command = result.get('command')
         if command is not None:
-            self._publish_command(command)
+            # 만약 action이 "stop"이면 단발성 정지 요청 => 토픽 발송
+            if command.get('action') == 'stop':
+                self._send_task_control_request(action='stop', reason=text)
+
+            else:
+                self._publish_command(command)
 
         for payload in result.get('feedbacks', []):
             self._publish_feedback_payload(payload)
@@ -675,6 +686,20 @@ class CommandInputNode(Node):
         if self._tts_service is not None:
             self._tts_service.stop()
         super().destroy_node()
+
+    #----------------------------------------------------------------------------------------------------
+    # 헬퍼
+
+    def _send_task_control_request(self, action, reason):
+        msg = Int8()
+
+        if action == 'stop':
+            msg.data = 1
+            self._task_control_pub.publish(msg)
+            self.get_logger().info(f"정지 토픽 발행 (이유: {reason})")
+            self._append_bot("로봇 작업을 취소합니다.")
+
+    #----------------------------------------------------------------------------------------------------
 
 
 def main(args=None):

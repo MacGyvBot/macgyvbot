@@ -49,3 +49,7 @@ GRASP_POINT_MODE_CENTER = "center"
 GRASP_POINT_MODE_VLM = "vlm"
 DEFAULT_GRASP_POINT_MODE = GRASP_POINT_MODE_CENTER
 VLM_GRASP_GRID_SIZES = ((3, 3), (4, 4))
+
+class EmergencyStopException(Exception):
+    """비상 정지 명령으로 인해 발생하는 예외"""
+    pass

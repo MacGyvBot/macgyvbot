@@ -1,6 +1,28 @@
 #!/usr/bin/env python3
 """Main ROS wiring node for the MacGyvBot pick pipeline."""
 
+#-----------------------------------------------------------
+# 로봇정지용
+import ctypes
+from macgyvbot.config.config import EmergencyStopException
+
+def kill_thread(thread_obj, exctype=EmergencyStopException):
+    """지정된 스레드에 비동기 예외를 발생시켜 강제 종료를 유도합니다."""
+    if not thread_obj or not thread_obj.is_alive():
+        return
+    
+    tid = ctypes.c_long(thread_obj.ident)
+    res = ctypes.pythonapi.PyThreadState_SetAsyncExc(tid, ctypes.py_object(exctype))
+    
+    if res == 0:
+        raise ValueError("존재하지 않는 스레드 ID입니다.")
+    elif res != 1:
+        # 혹시라도 실패하면 상태 복구
+        ctypes.pythonapi.PyThreadState_SetAsyncExc(tid, None)
+        raise SystemError("스레드 예외 주입 실패")
+    
+#-----------------------------------------------------------
+
 import json
 import threading
 from pathlib import Path
@@ -17,6 +39,11 @@ from rclpy.node import Node
 from scipy.spatial.transform import Rotation
 from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import String
+
+# 로봇 정지를 위한 메시지타입 => 단순 정수
+from std_msgs.msg import Int8
+# moveit action cancel을 위한 import
+from action_msgs.srv import CancelGoal
 
 from macgyvbot.config.config import (
     DEFAULT_GRASP_POINT_MODE,
@@ -72,6 +99,9 @@ class MacGyvBotNode(Node):
         self.current_command = None
         self._last_search_status_target = None
 
+        # 정지 상태를 관리할 플래그 변수 추가
+        self.stop_requested = False 
+
         self.grasp_point_mode = self._read_grasp_point_mode()
         self.yolo_model = self._read_yolo_model()
         self.force_torque_topic = self._read_force_torque_topic()
@@ -119,6 +149,8 @@ class MacGyvBotNode(Node):
         )
 
         self._create_subscriptions()
+        self._create_service_servers()
+        self._create_service_clients()
         self._log_startup()
 
     def logger(self):
@@ -203,6 +235,19 @@ class MacGyvBotNode(Node):
             10,
         )
 
+        # 정지용 토픽 수신용
+        self.create_subscription(Int8, '/robot_task_control', self._task_control_cb, 10)
+
+    def _create_service_servers(self):
+        pass
+
+    def _create_service_clients(self):
+        # MoveIt 액션 취소를 위한 클라이언트
+        self._cancel_goal_cli = self.create_client(
+            CancelGoal,
+            '/dsr_moveit_controller/follow_joint_trajectory/_action/cancel_goal'
+        )
+
     def _log_startup(self):
         self.get_logger().info("노드 초기화 완료")
         self.get_logger().info(f"YOLO model: {self.yolo_model}")
@@ -224,6 +269,23 @@ class MacGyvBotNode(Node):
             return
 
         self._set_target_label(val, source="/target_label")
+
+    def _task_control_cb(self, msg):
+        if msg.data == 1:
+            self.get_logger().warn("정지 토픽 수신! 즉시 작업을 취소합니다.")
+            
+            # 1. MoveIt 액션 강제 취소 (C++ 레벨 정지)
+            cancel_req = CancelGoal.Request()
+            self._cancel_goal_cli.call_async(cancel_req)
+            
+            # ✨ 현재 돌고 있는 시퀀스 스레드의 머리 위에 폭탄 투하!
+            if self.picking:
+                if self.pending_pick_thread and self.pending_pick_thread.is_alive():
+                    kill_thread(self.pending_pick_thread)
+                if self.pending_return_thread and self.pending_return_thread.is_alive():
+                    kill_thread(self.pending_return_thread)
+            
+            self._publish_robot_status("ready", message="작업이 취소되었습니다.")
 
     def _tool_command_cb(self, msg):
         try:
@@ -274,6 +336,7 @@ class MacGyvBotNode(Node):
             )
             return
 
+        '''
         if action == "stop":
             self.get_logger().warn("stop 명령 수신")
             if self.picking:
@@ -300,6 +363,7 @@ class MacGyvBotNode(Node):
                 command=command,
             )
             return
+        '''
 
         self.get_logger().warn(f"지원하지 않는 action: {action}")
         self._publish_robot_status(
@@ -386,6 +450,9 @@ class MacGyvBotNode(Node):
         if self.picking:
             self.get_logger().warn("이미 pick 동작 중이라 새 pick 요청을 무시합니다.")
             return
+        
+        # 새 작업을 시작하므로 기존의 정지 깃발을 초기화합니다.
+        self.stop_requested = False
 
         self.picking = True
         self._publish_robot_status(
@@ -417,6 +484,9 @@ class MacGyvBotNode(Node):
                 command=command,
             )
             return
+        
+        # 새 작업을 시작하므로 기존의 정지 깃발을 초기화합니다.
+        self.stop_requested = False
 
         tool_name = command.get("tool_name", "unknown")
         self.get_logger().info(f"반납 시퀀스 시작: tool={tool_name}")
