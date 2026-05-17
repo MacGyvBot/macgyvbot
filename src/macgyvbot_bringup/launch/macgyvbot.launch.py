@@ -5,6 +5,15 @@ from launch.substitutions import LaunchConfiguration
 from launch.substitutions import PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+from macgyvbot_config.topics import (
+    CAMERA_COLOR_TOPIC,
+    CAMERA_DEPTH_TOPIC,
+    CAMERA_INFO_TOPIC,
+    HAND_GRASP_IMAGE_TOPIC,
+    HAND_GRASP_MASK_LOCK_TOPIC,
+    HAND_GRASP_TOPIC,
+    ROBOT_STATUS_TOPIC,
+)
 from moveit_configs_utils import MoveItConfigsBuilder
 
 
@@ -132,15 +141,13 @@ def generate_launch_description():
                 name="hand_grasp_detection_node",
                 output="screen",
                 parameters=[
-                    moveit_config.to_dict(),
-                    moveit_py_params,
                     {
-                        "color_topic": "/camera/camera/color/image_raw",
-                        "camera_info_topic": "/camera/camera/color/camera_info",
-                        "depth_topic": "/camera/camera/aligned_depth_to_color/image_raw",
-                        "result_topic": "/human_grasped_tool",
-                        "annotated_topic": "/hand_grasp_detection/annotated_image",
-                        "mask_lock_topic": "/hand_grasp_detection/tool_mask_lock",
+                        "color_topic": CAMERA_COLOR_TOPIC,
+                        "camera_info_topic": CAMERA_INFO_TOPIC,
+                        "depth_topic": CAMERA_DEPTH_TOPIC,
+                        "result_topic": HAND_GRASP_TOPIC,
+                        "annotated_topic": HAND_GRASP_IMAGE_TOPIC,
+                        "mask_lock_topic": HAND_GRASP_MASK_LOCK_TOPIC,
                         "use_depth": True,
                         "publish_base_position": False,
                         "position_frame_id": "base_link",
@@ -153,7 +160,7 @@ def generate_launch_description():
                         "max_hands": 2,
                         "depth_diff_threshold_mm": 35.0,
                         "depth_min_contact_landmarks": 4,
-                        "robot_status_topic": "/robot_task_status",
+                        "robot_status_topic": ROBOT_STATUS_TOPIC,
                         "grasp_model": LaunchConfiguration("grasp_model"),
                         "sam_enabled": sam_enabled,
                         "sam_checkpoint": sam_checkpoint,

@@ -19,6 +19,9 @@ from std_msgs.msg import String
 from macgyvbot_config.models import YOLO_MODEL_NAME
 from macgyvbot_config.robot import GROUP_NAME
 from macgyvbot_config.topics import (
+    CAMERA_COLOR_TOPIC,
+    CAMERA_DEPTH_TOPIC,
+    CAMERA_INFO_TOPIC,
     FORCE_TORQUE_TOPIC,
     HAND_GRASP_IMAGE_TOPIC,
     HAND_GRASP_MASK_LOCK_TOPIC,
@@ -159,9 +162,6 @@ class MacGyvBotNode(Node):
         self._create_subscriptions()
         self._log_startup()
 
-    def logger(self):
-        return self.get_logger()
-
     def _base_to_camera_matrix(self):
         return get_ee_matrix(self.robot) @ self.gripper2cam
 
@@ -212,19 +212,19 @@ class MacGyvBotNode(Node):
     def _create_subscriptions(self):
         self.create_subscription(
             CameraInfo,
-            "/camera/camera/color/camera_info",
+            CAMERA_INFO_TOPIC,
             self._cam_info_cb,
             10,
         )
         self.create_subscription(
             Image,
-            "/camera/camera/color/image_raw",
+            CAMERA_COLOR_TOPIC,
             self._color_cb,
             10,
         )
         self.create_subscription(
             Image,
-            "/camera/camera/aligned_depth_to_color/image_raw",
+            CAMERA_DEPTH_TOPIC,
             self._depth_cb,
             10,
         )
@@ -278,6 +278,9 @@ class MacGyvBotNode(Node):
         self.get_logger().info(f"잡기 인식 결과 토픽: {HAND_GRASP_TOPIC}")
         self.get_logger().info(f"잡기 인식 화면 토픽: {HAND_GRASP_IMAGE_TOPIC}")
         self.get_logger().info(f"공구 mask lock 토픽: {HAND_GRASP_MASK_LOCK_TOPIC}")
+        self.get_logger().info(f"RGB 카메라 토픽: {CAMERA_COLOR_TOPIC}")
+        self.get_logger().info(f"Depth 카메라 토픽: {CAMERA_DEPTH_TOPIC}")
+        self.get_logger().info(f"CameraInfo 토픽: {CAMERA_INFO_TOPIC}")
         self.get_logger().info(f"힘/토크 입력 토픽: {self.force_torque_topic}")
 
     def _target_label_cb(self, msg):
@@ -445,9 +448,6 @@ class MacGyvBotNode(Node):
                 break
 
         self.display.close()
-
-    def _latest_camera_state(self):
-        return self.state.color_image, self.state.depth_image, self.state.intrinsics
 
     def _publish_robot_status(
         self,

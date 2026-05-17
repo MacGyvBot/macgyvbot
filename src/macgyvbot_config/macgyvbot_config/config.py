@@ -55,6 +55,9 @@ from macgyvbot_config.robot import (
 )
 from macgyvbot_config.timing import SEQUENCE_WAIT_POLL_SEC
 from macgyvbot_config.topics import (
+    CAMERA_COLOR_TOPIC,
+    CAMERA_DEPTH_TOPIC,
+    CAMERA_INFO_TOPIC,
     FORCE_TORQUE_TOPIC,
     HAND_GRASP_IMAGE_TOPIC,
     HAND_GRASP_MASK_LOCK_TOPIC,

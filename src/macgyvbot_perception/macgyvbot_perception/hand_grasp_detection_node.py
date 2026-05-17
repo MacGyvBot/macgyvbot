@@ -21,7 +21,11 @@ from macgyvbot_config.models import (
     HAND_GRASP_SAM_CHECKPOINT_NAME,
 )
 from macgyvbot_config.topics import (
+    CAMERA_COLOR_TOPIC,
+    CAMERA_DEPTH_TOPIC,
+    HAND_GRASP_IMAGE_TOPIC,
     HAND_GRASP_MASK_LOCK_TOPIC,
+    HAND_GRASP_TOPIC,
     ROBOT_STATUS_TOPIC,
 )
 from macgyvbot_perception.hand_tool_grasp.hand_detector import (
@@ -75,19 +79,19 @@ class HandGraspDetectionNode(Node):
 
         self.color_topic = self.declare_parameter(
             "color_topic",
-            "/camera/camera/color/image_raw",
+            CAMERA_COLOR_TOPIC,
         ).value
         self.depth_topic = self.declare_parameter(
             "depth_topic",
-            "/camera/camera/aligned_depth_to_color/image_raw",
+            CAMERA_DEPTH_TOPIC,
         ).value
         self.result_topic = self.declare_parameter(
             "result_topic",
-            "/human_grasped_tool",
+            HAND_GRASP_TOPIC,
         ).value
         self.annotated_topic = self.declare_parameter(
             "annotated_topic",
-            "/hand_grasp_detection/annotated_image",
+            HAND_GRASP_IMAGE_TOPIC,
         ).value
         self.use_depth = self._as_bool(self.declare_parameter("use_depth", True).value)
         self.publish_annotated = bool(

@@ -15,6 +15,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
 
+from macgyvbot_config.topics import CAMERA_COLOR_TOPIC
 from macgyvbot_command.ui.voice_command_window import (
     QApplication,
     QTimer,
@@ -47,7 +48,7 @@ class CommandInputNode(Node):
         self.declare_parameter('tool_command_topic', '/tool_command')
         self.declare_parameter('command_feedback_topic', '/command_feedback')
         self.declare_parameter('robot_status_topic', '/robot_task_status')
-        self.declare_parameter('camera_status_topic', '/camera/camera/color/image_raw')
+        self.declare_parameter('camera_status_topic', CAMERA_COLOR_TOPIC)
         self.declare_parameter('connection_check_period_sec', 1.0)
         self.declare_parameter('camera_timeout_sec', 3.0)
         self.declare_parameter(
