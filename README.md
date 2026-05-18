@@ -15,6 +15,8 @@ Doosan M0609 제어, OnRobot RG2 그리퍼, hand-tool grasp detection, GUI/STT/T
 - 기본 hand grasp mask lock은 `sam_enabled:=true`입니다.
 - VLM/SAM/ML 모델 파일은 Git에 포함하지 않고 `macgyvbot_resources` 아래에 둡니다.
 - VLM 추론이나 depth 보정이 실패하면 bbox center grasp point로 fallback합니다.
+- API grasp point mode가 실패하면 기본 grasp point mode인 `vlm`으로 fallback하고,
+  그마저 실패할 때만 bbox center로 fallback합니다.
 - 사용자 handoff grasp는 ML grasp, depth contact, locked mask contact가 모두
   통과해야 인정합니다.
 
@@ -233,6 +235,36 @@ VLM 없이 bbox center mode:
 ros2 launch macgyvbot_bringup macgyvbot.launch.py grasp_point_mode:=center
 ```
 
+Gemini API grasp point mode:
+
+```bash
+cp src/macgyvbot_resources/.env.example src/macgyvbot_resources/.env
+nano src/macgyvbot_resources/.env
+ros2 launch macgyvbot_bringup macgyvbot.launch.py \
+  grasp_point_mode:=api \
+  grasp_point_api_model:=gemini-2.5-flash
+```
+
+In `src/macgyvbot_resources/.env`, fill the template like this:
+
+```text
+GEMINI_API_KEY=your_real_key_here
+```
+
+`src/macgyvbot_resources/.env` is ignored by Git. The repository tracks only
+`src/macgyvbot_resources/.env.example` as the empty template.
+
+API mode 주의사항:
+
+- Gemini API grasp point mode는 네트워크 상태, API quota, 모델 응답 형식에 따라
+  local VLM mode보다 성능과 안정성이 떨어질 수 있습니다.
+- 이미지와 프롬프트를 함께 보내기 때문에 입력 토큰 여유가 크지 않습니다. 긴
+  task text나 과도한 프롬프트를 넣으면 응답 실패나 품질 저하가 생길 수 있습니다.
+- 반복 실행 시 토큰/quota가 빠르게 소진될 수 있습니다. 실제 로봇 테스트에서는
+  필요한 경우에만 `grasp_point_mode:=api`를 사용하고, 기본값인 `vlm` mode를
+  우선 사용합니다.
+- API 호출 실패 시에는 자동으로 기본 grasp point mode인 `vlm`으로 fallback합니다.
+
 SAM을 끄고 bbox lock fallback만 사용:
 
 ```bash
@@ -294,7 +326,11 @@ ros2 run macgyvbot_command command_input_node --ros-args \
 
 | Argument | Default | 설명 |
 | --- | --- | --- |
-| `grasp_point_mode` | `vlm` | `vlm` 또는 `center` |
+| `grasp_point_mode` | `vlm` | `vlm`, `center`, or `api` |
+| `grasp_point_api_model` | `gemini-2.5-flash` | Gemini API mode model name |
+| `grasp_point_api_env_file` | `macgyvbot_resources/.env` | Local Gemini `.env` file |
+| `grasp_point_api_base_url` | Gemini API default | Override Gemini API base URL |
+| `grasp_point_api_timeout_sec` | `30.0` | API request timeout |
 | `sam_enabled` | `true` | SAM mask tracking/lock 사용 여부 |
 | `yolo_model` | `macgyvbot_resources/weights/yolov11_best.pt` | YOLO 모델 경로 |
 | `grasp_model` | `macgyvbot_resources/weights/hand_grasp_model.pkl` | ML hand grasp classifier |

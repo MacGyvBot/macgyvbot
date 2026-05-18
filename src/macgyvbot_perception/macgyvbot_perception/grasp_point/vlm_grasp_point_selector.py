@@ -254,13 +254,6 @@ class VLMModel:
 
         model_source = self._resolve_model_source()
         local_dir = self.local_model_root / self.model_id.replace("/", "__")
-        print(
-            "[VLMModel.load] "
-            f"model_id={self.model_id}, "
-            f"resolved_source={model_source}, "
-            f"local_expected={local_dir}, "
-            f"local_exists={local_dir.exists()}"
-        )
 
         if torch is None:
             raise RuntimeError(
@@ -458,12 +451,6 @@ class VLMModel:
                 )
                 if choice is not None:
                     break
-                print(
-                    "[VLMModel.select_grasp_region] "
-                    f"invalid grid choice (rows={rows}, cols={cols}) "
-                    f"retry {attempt}/{retry_limit}, "
-                    f"raw='{result.text[:200]}'"
-                )
 
             if choice is None:
                 continue
@@ -740,12 +727,6 @@ class VLMModel:
 
             if parsed_point is not None and yaw is not None:
                 return parsed_point, self._normalize_angle_deg(yaw)
-
-            print(
-                "[VLMModel._estimate_precise_point_and_yaw] "
-                f"invalid response retry {attempt}/{retry_limit}, "
-                f"raw='{result.text[:220]}'"
-            )
 
         return None
 
