@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import os
 from pathlib import Path
 from urllib import error, request
 
@@ -28,7 +29,7 @@ except ImportError:
     get_package_share_directory = None
 
 
-DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+DEFAULT_GEMINI_MODEL = "gemini-3-flash-preview"
 DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 DEFAULT_ENV_FILENAME = ".env"
 GEMINI_API_KEY_NAME = "GEMINI_API_KEY"
@@ -204,17 +205,22 @@ class GeminiVLMModel(VLMModel):
             raise RuntimeError("Gemini API request timed out") from exc
 
     def _api_key(self) -> str:
-        return self._read_env_key(GEMINI_API_KEY_NAME)
+        key = os.environ.get(GEMINI_API_KEY_NAME, "").strip()
+        if key:
+            return key
 
-    def _read_env_key(self, key_name: str) -> str:
+        self._load_env_file()
+        return os.environ.get(GEMINI_API_KEY_NAME, "").strip()
+
+    def _load_env_file(self):
         path = Path(self.env_file).expanduser()
         if not path.exists() or not path.is_file():
-            return ""
+            return
 
         try:
             lines = path.read_text(encoding="utf-8").splitlines()
         except OSError:
-            return ""
+            return
 
         for raw_line in lines:
             line = raw_line.strip()
@@ -222,12 +228,12 @@ class GeminiVLMModel(VLMModel):
                 continue
 
             key, value = line.split("=", 1)
-            if key.strip() != key_name:
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if not key or not value:
                 continue
 
-            return value.strip().strip('"').strip("'")
-
-        return ""
+            os.environ.setdefault(key, value)
 
     @staticmethod
     def _default_env_file() -> str:
@@ -257,6 +263,10 @@ class GeminiVLMModel(VLMModel):
                 / "macgyvbot_resources"
                 / DEFAULT_ENV_FILENAME
             )
+
+        for candidate in candidates:
+            if candidate.exists() and candidate.is_file():
+                return str(candidate)
 
         for candidate in candidates:
             if candidate.parent.exists():
