@@ -15,7 +15,6 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
 
-from macgyvbot_config.topics import CAMERA_COLOR_TOPIC
 from macgyvbot_command.ui.voice_command_window import (
     QApplication,
     QTimer,
@@ -27,6 +26,9 @@ from macgyvbot_command.input_mapping.command_llm_parser import (
 from macgyvbot_command.stt.speech_to_text import SpeechToTextService
 from macgyvbot_command.tts import TtsService
 
+from macgyvbot_config.topics import (
+    ROBOT_TASK_CONTROL_TOPIC,
+)
 
 class CommandInputNode(Node):
     def __init__(self):
@@ -48,7 +50,7 @@ class CommandInputNode(Node):
         self.declare_parameter('tool_command_topic', '/tool_command')
         self.declare_parameter('command_feedback_topic', '/command_feedback')
         self.declare_parameter('robot_status_topic', '/robot_task_status')
-        self.declare_parameter('camera_status_topic', CAMERA_COLOR_TOPIC)
+        self.declare_parameter('camera_status_topic', '/camera/camera/color/image_raw')
         self.declare_parameter('connection_check_period_sec', 1.0)
         self.declare_parameter('camera_timeout_sec', 3.0)
         self.declare_parameter(
@@ -121,6 +123,9 @@ class CommandInputNode(Node):
         )
         self._tool_command_pub = self.create_publisher(String, tool_command_topic, 10)
         self._feedback_pub = self.create_publisher(String, command_feedback_topic, 10)
+
+        # 로봇 정지 명령을 위한 토픽 퍼블리셔
+        self._task_control_pub = self.create_publisher(String, ROBOT_TASK_CONTROL_TOPIC, 10)
 
         self.create_subscription(String, stt_text_topic, self._text_cb, 10)
         self.create_subscription(String, tool_command_topic, self._tool_command_cb, 10)
@@ -273,7 +278,11 @@ class CommandInputNode(Node):
 
         command = result.get('command')
         if command is not None:
-            self._publish_command(command)
+            action = command.get("action")
+            if action in {"stop", "pause", "resume"}:
+                self._send_task_control_request(action=action, reason=text)
+            else:
+                self._publish_command(command)
 
         for payload in result.get('feedbacks', []):
             self._publish_feedback_payload(payload)
@@ -676,6 +685,31 @@ class CommandInputNode(Node):
         if self._tts_service is not None:
             self._tts_service.stop()
         super().destroy_node()
+
+    #----------------------------------------------------------------------------------------------------
+    # 헬퍼
+
+    def _send_task_control_request(self, action, reason):
+        msg = String()
+        msg.data = json.dumps(
+            {
+                "action": action,
+                "reason": reason,
+                "source": "command_input",
+            },
+            ensure_ascii=False,
+        )
+        self._task_control_pub.publish(msg)
+        self.get_logger().info(f"task control 토픽 발행: action={action}, reason={reason}")
+
+        messages = {
+            "stop": "로봇 작업을 정지합니다.",
+            "pause": "로봇 작업을 일시 중지합니다.",
+            "resume": "로봇 작업을 재개합니다.",
+        }
+        self._append_bot(messages.get(action, "로봇 작업 제어 요청을 보냈습니다."))
+
+    #----------------------------------------------------------------------------------------------------
 
 
 def main(args=None):

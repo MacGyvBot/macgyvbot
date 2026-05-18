@@ -19,20 +19,19 @@ from std_msgs.msg import String
 from macgyvbot_config.models import YOLO_MODEL_NAME
 from macgyvbot_config.robot import GROUP_NAME
 from macgyvbot_config.topics import (
-    CAMERA_COLOR_TOPIC,
-    CAMERA_DEPTH_TOPIC,
-    CAMERA_INFO_TOPIC,
     FORCE_TORQUE_TOPIC,
     HAND_GRASP_IMAGE_TOPIC,
     HAND_GRASP_MASK_LOCK_TOPIC,
     HAND_GRASP_TOPIC,
     ROBOT_STATUS_TOPIC,
     TOOL_COMMAND_TOPIC,
+    ROBOT_TASK_CONTROL_TOPIC,
 )
 from macgyvbot_config.vlm import DEFAULT_GRASP_POINT_MODE
 from macgyvbot_manipulation.moveit_controller import (
     MoveItController,
 )
+from macgyvbot_manipulation.motion_cancel_client import MotionCancelClient
 from macgyvbot_manipulation.onrobot_gripper import RG
 from macgyvbot_manipulation.robot_pose import get_ee_matrix
 from macgyvbot_perception.depth_projection import DepthProjector
@@ -65,6 +64,10 @@ from macgyvbot_task.application.return_flow.return_sequence import (
 from macgyvbot_task.application.robot.robot_home_initializer import (
     RobotHomeInitializer,
 )
+from macgyvbot_task.application.task_control.task_control_coordinator import (
+    TaskControlCoordinator,
+)
+from macgyvbot_task.application.task_control.task_management import TaskManagement
 
 
 class MacGyvBotNode(Node):
@@ -73,6 +76,9 @@ class MacGyvBotNode(Node):
 
         self.bridge = CvBridge()
         self.display = DebugDisplay()
+        self.stop_req = threading.Event()
+        self.pause_req = threading.Event()
+        self.resume_req = threading.Event()
 
         self.grasp_point_mode = self._read_grasp_point_mode()
         self.yolo_model = self._read_yolo_model()
@@ -146,21 +152,50 @@ class MacGyvBotNode(Node):
             self._publish_robot_status,
             self.get_logger(),
         )
+        control_events = {
+            "stop": self.stop_req,
+            "pause": self.pause_req,
+            "resume": self.resume_req,
+        }
         self.pick_runner = PickSequenceRunner(
             self.robot,
             self.motion,
             self.gripper,
             self.state,
+            control_events=control_events,
         )
         self.return_runner = ReturnSequenceRunner(
             self.robot,
             self.motion,
             self.gripper,
             self.state,
+            control_events=control_events,
+        )
+        self.motion_cancel_client = MotionCancelClient(self)
+        self.task_coordinator = TaskControlCoordinator(
+            self.pick_runner,
+            self.return_runner,
+            self.state,
+            self.stop_req,
+            self.pause_req,
+            self.resume_req,
+            self.get_logger,
+        )
+        self.task_management = TaskManagement(
+            self.state,
+            self.task_coordinator,
+            self.motion_cancel_client,
+            self.stop_req,
+            self.pause_req,
+            self.resume_req,
+            self.get_logger,
         )
 
         self._create_subscriptions()
         self._log_startup()
+
+    def logger(self):
+        return self.get_logger()
 
     def _base_to_camera_matrix(self):
         return get_ee_matrix(self.robot) @ self.gripper2cam
@@ -212,19 +247,19 @@ class MacGyvBotNode(Node):
     def _create_subscriptions(self):
         self.create_subscription(
             CameraInfo,
-            CAMERA_INFO_TOPIC,
+            "/camera/camera/color/camera_info",
             self._cam_info_cb,
             10,
         )
         self.create_subscription(
             Image,
-            CAMERA_COLOR_TOPIC,
+            "/camera/camera/color/image_raw",
             self._color_cb,
             10,
         )
         self.create_subscription(
             Image,
-            CAMERA_DEPTH_TOPIC,
+            "/camera/camera/aligned_depth_to_color/image_raw",
             self._depth_cb,
             10,
         )
@@ -265,6 +300,9 @@ class MacGyvBotNode(Node):
             10,
         )
 
+        # 정지용 토픽 수신용
+        self.create_subscription(String, ROBOT_TASK_CONTROL_TOPIC, self._task_control_cb, 10)
+
     def _log_startup(self):
         self.get_logger().info("노드 초기화 완료")
         self.get_logger().info(f"YOLO model: {self.yolo_model}")
@@ -278,10 +316,8 @@ class MacGyvBotNode(Node):
         self.get_logger().info(f"잡기 인식 결과 토픽: {HAND_GRASP_TOPIC}")
         self.get_logger().info(f"잡기 인식 화면 토픽: {HAND_GRASP_IMAGE_TOPIC}")
         self.get_logger().info(f"공구 mask lock 토픽: {HAND_GRASP_MASK_LOCK_TOPIC}")
-        self.get_logger().info(f"RGB 카메라 토픽: {CAMERA_COLOR_TOPIC}")
-        self.get_logger().info(f"Depth 카메라 토픽: {CAMERA_DEPTH_TOPIC}")
-        self.get_logger().info(f"CameraInfo 토픽: {CAMERA_INFO_TOPIC}")
         self.get_logger().info(f"힘/토크 입력 토픽: {self.force_torque_topic}")
+        self.get_logger().info(f"작업 제어 토픽: {ROBOT_TASK_CONTROL_TOPIC}")
 
     def _target_label_cb(self, msg):
         val = msg.data.strip()
@@ -290,6 +326,40 @@ class MacGyvBotNode(Node):
             return
 
         self.task_controller.handle_target_label(val, source="/target_label")
+
+    def _task_control_cb(self, msg):
+        action, reason = self._parse_task_control_payload(msg.data)
+        if action is None:
+            return
+
+        if action == "stop":
+            self.stop_req.set()
+        elif action == "pause":
+            self.pause_req.set()
+        elif action == "resume":
+            self.resume_req.set()
+        else:
+            self.get_logger().warn(f"지원하지 않는 task control action: {action}")
+            return
+
+        self.task_management.handle_control(action, reason=reason)
+
+    def _parse_task_control_payload(self, payload):
+        raw = (payload or "").strip()
+        if not raw:
+            return None, ""
+
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return raw.lower(), raw.lower()
+
+        if not isinstance(data, dict):
+            return None, ""
+
+        action = str(data.get("action", "")).strip().lower()
+        reason = str(data.get("reason", "")).strip()
+        return action or None, reason
 
     def _tool_command_cb(self, msg):
         try:
@@ -376,12 +446,18 @@ class MacGyvBotNode(Node):
             message=f"{self.state.target_label} pick 동작을 시작합니다.",
             command=self.state.current_command,
         )
-        self.state.pending_pick_thread = threading.Thread(
-            target=self.pick_runner.run,
-            args=(bx, by, bz, z_m, vlm_yaw_deg),
-            daemon=True,
-        )
-        self.state.pending_pick_thread.start()
+
+        started = self.task_coordinator.start_pick(bx, by, bz, z_m, vlm_yaw_deg)
+        if not started:
+            self.state.picking = False
+            self._publish_robot_status(
+                "busy",
+                tool_name=self.state.target_label,
+                action="bring",
+                message="이미 작업 큐가 실행 중입니다.",
+                reason="task_queue_busy",
+                command=self.state.current_command,
+            )
 
     def start_return_sequence(self, command):
         if self.state.picking:
@@ -404,12 +480,18 @@ class MacGyvBotNode(Node):
         self.state.picking = True
         self.state.target_label = None
         self.state.current_command = command
-        self.state.pending_return_thread = threading.Thread(
-            target=self.return_runner.run,
-            args=(command,),
-            daemon=True,
-        )
-        self.state.pending_return_thread.start()
+
+        started = self.task_coordinator.start_return(command)
+        if not started:
+            self.state.picking = False
+            self._publish_robot_status(
+                "busy",
+                tool_name=tool_name,
+                action="return",
+                message="이미 작업 큐가 실행 중입니다.",
+                reason="task_queue_busy",
+                command=command,
+            )
 
     def run(self):
         self.home_initializer.initialize()
@@ -448,6 +530,9 @@ class MacGyvBotNode(Node):
                 break
 
         self.display.close()
+
+    def _latest_camera_state(self):
+        return self.state.color_image, self.state.depth_image, self.state.intrinsics
 
     def _publish_robot_status(
         self,

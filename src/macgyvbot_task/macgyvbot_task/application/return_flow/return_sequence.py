@@ -1,4 +1,4 @@
-"""Return sequence orchestration for receiving and storing a user-held tool."""
+"""Return sequence step construction for receiving and storing a user-held tool."""
 
 import time
 
@@ -14,16 +14,25 @@ from macgyvbot_task.application.return_flow.return_home_placement_flow import (
 from macgyvbot_task.application.status.return_status_reporter import (
     ReturnStatusReporter,
 )
+from macgyvbot_task.application.task_control.task_step import TaskStep
 
 
 class ReturnSequenceRunner:
-    """Receive a user-held tool and place it in its configured home pose."""
+    """Build return workflow steps for task-queue execution."""
 
-    def __init__(self, robot, motion_controller, gripper, state):
+    def __init__(
+        self,
+        robot,
+        motion_controller,
+        gripper,
+        state,
+        control_events=None,
+    ):
         self.robot = robot
         self.motion = motion_controller
         self.gripper = gripper
         self.state = state
+        self.control_events = control_events or {}
         self.reporter = ReturnStatusReporter(state)
         self.handoff = ReturnHandoffFlow(
             robot,
@@ -42,64 +51,87 @@ class ReturnSequenceRunner:
             self._cooperative_wait,
         )
 
-    def run(self, command):
-        log = self.state.logger()
-        requested_tool = command.get("tool_name", "unknown")
+    def build_steps(self, command):
+        context = {
+            "command": command,
+            "requested_tool": command.get("tool_name", "unknown"),
+            "tool_name": None,
+            "ori": self.state.home_ori,
+        }
+        return [
+            TaskStep("return/prepare", lambda: self._prepare(context)),
+            TaskStep("return/receive_tool", lambda: self._receive_tool(context)),
+            TaskStep("return/place_home", lambda: self._place_home(context)),
+            TaskStep("return/done", lambda: self._publish_done(context), retry_on_pause=False),
+        ]
+
+    def _prepare(self, context):
+        command = context["command"]
+        requested_tool = context["requested_tool"]
         raw_text = command.get("raw_text", "")
 
-        try:
-            self.state.human_grasped_tool = False
-            self.state.last_grasp_result = None
+        self.state.human_grasped_tool = False
+        self.state.last_grasp_result = None
+        self.reporter.publish(
+            "waiting_return_handoff",
+            requested_tool,
+            "사용자 반납 공구를 받을 준비를 시작합니다.",
+            command,
+        )
+        self.state.logger().info(
+            f"반납 명령 수신: tool={requested_tool}, raw_text='{raw_text}'. "
+            "그리퍼를 열고 사용자 hand-tool grasp 인식을 기다립니다."
+        )
+        self.gripper.open_gripper()
+        self._cooperative_wait(0.5)
+        return True
 
-            self.reporter.publish(
-                "waiting_return_handoff",
-                requested_tool,
-                "사용자 반납 공구를 받을 준비를 시작합니다.",
-                command,
-            )
-            log.info(
-                f"반납 명령 수신: tool={requested_tool}, raw_text='{raw_text}'. "
-                "그리퍼를 열고 사용자 hand-tool grasp 인식을 기다립니다."
-            )
+    def _receive_tool(self, context):
+        command = context["command"]
+        requested_tool = context["requested_tool"]
+        log = self.state.logger()
 
-            ori = self.state.home_ori
-            self.gripper.open_gripper()
-            self._cooperative_wait(0.5)
+        tool_name, receive_failure_reason = self.handoff.receive(
+            requested_tool,
+            command,
+            log,
+        )
+        if tool_name is not None:
+            context["tool_name"] = tool_name
+            return True
 
-            tool_name, receive_failure_reason = self.handoff.receive(
-                requested_tool,
-                command,
-                log,
-            )
-            if tool_name is None:
-                if receive_failure_reason == "return_grasp_failed":
-                    return
+        if self._interrupted() or receive_failure_reason == "return_grasp_failed":
+            return False
 
-                self._recover_to_home(
-                    requested_tool,
-                    command,
-                    log,
-                    reason=receive_failure_reason,
-                )
-                return
+        self._recover_to_home(
+            requested_tool,
+            command,
+            log,
+            reason=receive_failure_reason,
+        )
+        return False
 
-            if not self.placement.place_at_robot_home(
-                tool_name,
-                ori,
-                command,
-                log,
-            ):
-                return
+    def _place_home(self, context):
+        tool_name = context["tool_name"]
+        if tool_name is None:
+            return False
 
-            self.reporter.publish(
-                "done",
-                tool_name,
-                f"{tool_name} 반납 공구를 Home에 배치했습니다.",
-                command,
-            )
+        return self.placement.place_at_robot_home(
+            tool_name,
+            context["ori"],
+            context["command"],
+            self.state.logger(),
+        )
 
-        finally:
-            self._clear_state()
+    def _publish_done(self, context):
+        tool_name = context["tool_name"] or context["requested_tool"]
+        self.reporter.publish(
+            "done",
+            tool_name,
+            f"{tool_name} 반납 공구를 Home에 배치했습니다.",
+            context["command"],
+        )
+        return True
 
     def _recover_to_home(self, tool_name, command, logger, reason):
         self.reporter.publish(
@@ -129,11 +161,14 @@ class ReturnSequenceRunner:
         )
         return False
 
-    def _clear_state(self):
-        self.state.picking = False
-        self.state.target_label = None
-        self.state.human_grasped_tool = False
-        self.state.current_command = None
+    def _interrupted(self):
+        return any(
+            event is not None and event.is_set()
+            for event in (
+                self.control_events.get("stop"),
+                self.control_events.get("pause"),
+            )
+        )
 
     @staticmethod
     def _cooperative_wait(duration_sec):
