@@ -127,7 +127,12 @@ class MacGyvBotNode(Node):
         self.pilz_params.planner_id = "PTP"
         self.pilz_params.max_velocity_scaling_factor = 0.2
 
-        self.motion = MoveItController(self.robot, self.arm, self.pilz_params)
+        self.motion = MoveItController(
+            self.robot,
+            self.arm,
+            self.pilz_params,
+            should_interrupt=self._motion_interrupted,
+        )
         self.home_initializer = RobotHomeInitializer(
             self.robot,
             self.motion,
@@ -342,10 +347,6 @@ class MacGyvBotNode(Node):
         if action is None:
             return
 
-        self.get_logger().info(
-            f"task control 수신: action={action}, reason={reason}"
-        )
-
         if action == "stop":
             self.stop_req.set()
         elif action == "pause":
@@ -356,7 +357,14 @@ class MacGyvBotNode(Node):
             self.get_logger().warn(f"지원하지 않는 task control action: {action}")
             return
 
+        self.get_logger().info(
+            f"task control 수신: action={action}, reason={reason}"
+        )
+
         self.task_management.handle_control(action, reason=reason)
+
+    def _motion_interrupted(self):
+        return self.stop_req.is_set() or self.pause_req.is_set()
 
     def _parse_task_control_payload(self, payload):
         raw = (payload or "").strip()
