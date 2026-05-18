@@ -17,14 +17,14 @@ class GraspPointSelector:
         mode,
         logger,
         api_model="",
-        api_key_env="",
+        api_env_file="",
         api_base_url="",
         api_timeout_sec=30.0,
     ):
         self.mode = mode
         self.logger = logger
         self.api_model = api_model
-        self.api_key_env = api_key_env
+        self.api_env_file = api_env_file
         self.api_base_url = api_base_url
         self.api_timeout_sec = api_timeout_sec
         self.vlm_grasp_point_selector = None
@@ -132,7 +132,7 @@ class GraspPointSelector:
             self.api_grasp_point_selector = APIVLMGraspPointSelector(
                 self.logger,
                 model=self.api_model or None,
-                api_key_env=self.api_key_env or None,
+                env_file=self.api_env_file or None,
                 base_url=self.api_base_url or None,
                 timeout_sec=self.api_timeout_sec,
             )

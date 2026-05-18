@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 import io
 import json
-import os
+from pathlib import Path
 from urllib import error, request
 
 import cv2
@@ -22,10 +22,16 @@ from macgyvbot_perception.grasp_point.vlm_grasp_point_selector import (
     VLMResult,
 )
 
+try:
+    from ament_index_python.packages import get_package_share_directory
+except ImportError:
+    get_package_share_directory = None
+
 
 DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
-DEFAULT_GEMINI_API_KEY_ENV = "GEMINI_API_KEY"
+DEFAULT_ENV_FILENAME = ".env"
+GEMINI_API_KEY_NAME = "GEMINI_API_KEY"
 
 
 class APIVLMGraspPointSelector:
@@ -35,14 +41,14 @@ class APIVLMGraspPointSelector:
         self,
         logger,
         model: str | None = None,
-        api_key_env: str | None = None,
+        env_file: str | None = None,
         base_url: str | None = None,
         timeout_sec: float = 30.0,
     ):
         self.logger = logger
         self.model = GeminiVLMModel(
             model_id=model,
-            api_key_env=api_key_env,
+            env_file=env_file,
             base_url=base_url,
             timeout_sec=timeout_sec,
         )
@@ -111,7 +117,7 @@ class GeminiVLMModel(VLMModel):
         max_image_size: int = DEFAULT_MAX_IMAGE_SIZE,
         max_new_tokens: int = 256,
         timeout_sec: float = 30.0,
-        api_key_env: str | None = None,
+        env_file: str | None = None,
         base_url: str | None = None,
         temperature: float = 0.0,
     ):
@@ -119,14 +125,15 @@ class GeminiVLMModel(VLMModel):
         self.max_image_size = max_image_size
         self.max_new_tokens = max_new_tokens
         self.timeout_sec = float(timeout_sec)
-        self.api_key_env = api_key_env or DEFAULT_GEMINI_API_KEY_ENV
+        self.env_file = env_file or self._default_env_file()
         self.base_url = base_url or DEFAULT_GEMINI_BASE_URL
         self.temperature = float(temperature)
 
     def load(self):
         if not self._api_key():
             raise RuntimeError(
-                f"{self.api_key_env} is not set for Gemini API VLM mode."
+                "Gemini API key is not available. "
+                f"Set {GEMINI_API_KEY_NAME} in {self.env_file}."
             )
 
     def get_runtime_info(self):
@@ -134,7 +141,7 @@ class GeminiVLMModel(VLMModel):
             "provider": "gemini",
             "model": self.model_id,
             "base_url": self.base_url,
-            "api_key_env": self.api_key_env,
+            "env_file": self.env_file,
         }
 
     def unload(self):
@@ -197,7 +204,65 @@ class GeminiVLMModel(VLMModel):
             raise RuntimeError("Gemini API request timed out") from exc
 
     def _api_key(self) -> str:
-        return os.environ.get(self.api_key_env, "").strip()
+        return self._read_env_key(GEMINI_API_KEY_NAME)
+
+    def _read_env_key(self, key_name: str) -> str:
+        path = Path(self.env_file).expanduser()
+        if not path.exists() or not path.is_file():
+            return ""
+
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return ""
+
+        for raw_line in lines:
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+
+            key, value = line.split("=", 1)
+            if key.strip() != key_name:
+                continue
+
+            return value.strip().strip('"').strip("'")
+
+        return ""
+
+    @staticmethod
+    def _default_env_file() -> str:
+        candidates = []
+
+        if get_package_share_directory is not None:
+            try:
+                share_dir = Path(get_package_share_directory("macgyvbot_resources"))
+                candidates.append(share_dir / DEFAULT_ENV_FILENAME)
+            except Exception:
+                pass
+
+        cwd = Path.cwd()
+        candidates.append(cwd / "src" / "macgyvbot_resources" / DEFAULT_ENV_FILENAME)
+        candidates.append(cwd / "macgyvbot_resources" / DEFAULT_ENV_FILENAME)
+
+        current = Path(__file__).resolve()
+        for parent in current.parents:
+            candidates.append(
+                parent
+                / "src"
+                / "macgyvbot_resources"
+                / DEFAULT_ENV_FILENAME
+            )
+            candidates.append(
+                parent
+                / "macgyvbot_resources"
+                / DEFAULT_ENV_FILENAME
+            )
+
+        for candidate in candidates:
+            if candidate.parent.exists():
+                return str(candidate)
+
+        return str(current.parents[0] / DEFAULT_ENV_FILENAME)
 
     @staticmethod
     def _encode_jpeg_base64(image: Image.Image) -> str:

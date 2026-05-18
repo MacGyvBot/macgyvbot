@@ -236,11 +236,21 @@ ros2 launch macgyvbot_bringup macgyvbot.launch.py grasp_point_mode:=center
 Gemini API grasp point mode:
 
 ```bash
-export GEMINI_API_KEY="..."
+cp src/macgyvbot_resources/.env.example src/macgyvbot_resources/.env
+nano src/macgyvbot_resources/.env
 ros2 launch macgyvbot_bringup macgyvbot.launch.py \
   grasp_point_mode:=api \
   grasp_point_api_model:=gemini-2.5-flash
 ```
+
+In `src/macgyvbot_resources/.env`, fill the template like this:
+
+```text
+GEMINI_API_KEY=your_real_key_here
+```
+
+`src/macgyvbot_resources/.env` is ignored by Git. The repository tracks only
+`src/macgyvbot_resources/.env.example` as the empty template.
 
 SAM을 끄고 bbox lock fallback만 사용:
 
@@ -305,7 +315,7 @@ ros2 run macgyvbot_command command_input_node --ros-args \
 | --- | --- | --- |
 | `grasp_point_mode` | `vlm` | `vlm`, `center`, or `api` |
 | `grasp_point_api_model` | `gemini-2.5-flash` | Gemini API mode model name |
-| `grasp_point_api_key_env` | `GEMINI_API_KEY` | Gemini API key env var |
+| `grasp_point_api_env_file` | `macgyvbot_resources/.env` | Local Gemini `.env` file |
 | `grasp_point_api_base_url` | Gemini API default | Override Gemini API base URL |
 | `grasp_point_api_timeout_sec` | `30.0` | API request timeout |
 | `sam_enabled` | `true` | SAM mask tracking/lock 사용 여부 |

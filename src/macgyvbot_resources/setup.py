@@ -40,6 +40,11 @@ setup(
         (f"share/{package_name}", ["package.xml"]),
     ]
     + gather_data_files(
+        "",
+        f"share/{package_name}",
+        [".env.example"],
+    )
+    + gather_data_files(
         "calibration",
         f"share/{package_name}/calibration",
         ["*.npy", "*.md"],

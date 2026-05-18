@@ -44,7 +44,7 @@ def generate_launch_description():
     sam_enabled = LaunchConfiguration("sam_enabled")
     sam_checkpoint = LaunchConfiguration("sam_checkpoint")
     grasp_point_api_model = LaunchConfiguration("grasp_point_api_model")
-    grasp_point_api_key_env = LaunchConfiguration("grasp_point_api_key_env")
+    grasp_point_api_env_file = LaunchConfiguration("grasp_point_api_env_file")
     grasp_point_api_base_url = LaunchConfiguration("grasp_point_api_base_url")
     grasp_point_api_timeout_sec = LaunchConfiguration(
         "grasp_point_api_timeout_sec"
@@ -111,7 +111,7 @@ def generate_launch_description():
                 "grasp_point_api_model",
                 default_value="gemini-2.5-flash",
             ),
-            DeclareLaunchArgument("grasp_point_api_key_env", default_value=""),
+            DeclareLaunchArgument("grasp_point_api_env_file", default_value=""),
             DeclareLaunchArgument("grasp_point_api_base_url", default_value=""),
             DeclareLaunchArgument(
                 "grasp_point_api_timeout_sec",
@@ -146,7 +146,7 @@ def generate_launch_description():
                             "grasp_point_mode"
                         ),
                         "grasp_point_api_model": grasp_point_api_model,
-                        "grasp_point_api_key_env": grasp_point_api_key_env,
+                        "grasp_point_api_env_file": grasp_point_api_env_file,
                         "grasp_point_api_base_url": grasp_point_api_base_url,
                         "grasp_point_api_timeout_sec": grasp_point_api_timeout_sec,
                         "force_torque_topic": LaunchConfiguration(

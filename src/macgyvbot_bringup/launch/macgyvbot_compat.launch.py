@@ -21,7 +21,7 @@ _PASSTHROUGH_ARGS = [
     ("parser_mode", "llm_primary"),
     ("grasp_point_mode", "vlm"),
     ("grasp_point_api_model", "gemini-2.5-flash"),
-    ("grasp_point_api_key_env", ""),
+    ("grasp_point_api_env_file", ""),
     ("grasp_point_api_base_url", ""),
     ("grasp_point_api_timeout_sec", "30.0"),
     ("force_torque_topic", "/force_torque_sensor_broadcaster/wrench"),

@@ -203,15 +203,15 @@ class MacGyvBotNode(Node):
 
     def _read_grasp_point_api_config(self):
         self.declare_parameter("grasp_point_api_model", "gemini-2.5-flash")
-        self.declare_parameter("grasp_point_api_key_env", "")
+        self.declare_parameter("grasp_point_api_env_file", "")
         self.declare_parameter("grasp_point_api_base_url", "")
         self.declare_parameter("grasp_point_api_timeout_sec", 30.0)
         return {
             "api_model": str(
                 self.get_parameter("grasp_point_api_model").value
             ).strip(),
-            "api_key_env": str(
-                self.get_parameter("grasp_point_api_key_env").value
+            "api_env_file": str(
+                self.get_parameter("grasp_point_api_env_file").value
             ).strip(),
             "api_base_url": str(
                 self.get_parameter("grasp_point_api_base_url").value
