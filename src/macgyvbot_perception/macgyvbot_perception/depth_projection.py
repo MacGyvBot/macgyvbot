@@ -13,7 +13,6 @@ def pixel_to_camera_point(
     depth_scale=0.001,
     logger=None,
     source="pixel",
-    depth_m_override=None,
 ):
     """Project an image pixel with depth into the camera frame."""
     height, width = depth_image.shape[:2]
@@ -26,23 +25,13 @@ def pixel_to_camera_point(
             )
         return None
 
-    if depth_m_override is not None:
-        z_m = float(depth_m_override)
-        if not np.isfinite(z_m) or z_m <= 0.0:
-            if logger is not None:
-                logger.warn(
-                    f"{source} override depth is invalid: "
-                    f"u={u}, v={v}, depth_m={z_m}"
-                )
-            return None
-    else:
-        z_raw = float(depth_image[v, u])
-        if not np.isfinite(z_raw) or z_raw <= 0.0:
-            if logger is not None:
-                logger.warn(f"{source} depth is invalid: u={u}, v={v}, depth={z_raw}")
-            return None
+    z_raw = float(depth_image[v, u])
+    if not np.isfinite(z_raw) or z_raw <= 0.0:
+        if logger is not None:
+            logger.warn(f"{source} depth is invalid: u={u}, v={v}, depth={z_raw}")
+        return None
 
-        z_m = z_raw * depth_scale
+    z_m = z_raw * depth_scale
     cam_x = (u - intrinsics["ppx"]) * z_m / intrinsics["fx"]
     cam_y = (v - intrinsics["ppy"]) * z_m / intrinsics["fy"]
     return float(cam_x), float(cam_y), float(z_m)
@@ -70,7 +59,6 @@ class DepthProjector:
         intrinsics,
         logger,
         vlm_rpy_deg=None,
-        depth_m_override=None,
     ):
         camera_point = pixel_to_camera_point(
             u,
@@ -79,7 +67,6 @@ class DepthProjector:
             intrinsics,
             logger=logger,
             source=source,
-            depth_m_override=depth_m_override,
         )
         if camera_point is None:
             return None

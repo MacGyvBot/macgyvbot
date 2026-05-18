@@ -91,7 +91,6 @@ class APIGraspPointSelector:
         u = x1 + int(round(result.point[0]))
         v = y1 + int(round(result.point[1]))
         source = GRASP_POINT_MODE_API
-        depth_m = None
 
         refined = VLMModel.refine_grasp_point_with_depth(
             depth_image,
@@ -100,16 +99,15 @@ class APIGraspPointSelector:
         )
         if refined is not None:
             u, v = refined.point
-            depth_m = refined.depth_m
             source = f"{GRASP_POINT_MODE_API}+depth"
 
         self.logger.info(
             f"API grasp point 선택: pixel=({u}, {v}), "
             f"rpy_deg={result.orientation_rpy_deg}, "
-            f"depth_m={depth_m}, confidence={result.confidence}, source={source}"
+            f"confidence={result.confidence}, source={source}"
         )
 
-        return u, v, source, result.orientation_rpy_deg, depth_m
+        return u, v, source, result.orientation_rpy_deg
 
     @staticmethod
     def _clamp_bbox_to_image(bbox, image):
