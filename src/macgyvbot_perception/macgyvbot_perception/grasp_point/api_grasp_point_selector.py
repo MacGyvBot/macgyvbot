@@ -28,7 +28,6 @@ DEFAULT_GEMINI_MODEL = "gemini-3-flash-preview"
 DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 DEFAULT_ENV_FILENAME = ".env"
 DEFAULT_MAX_IMAGE_SIZE = 640
-DEFAULT_MAX_RETRIES = 3
 GEMINI_API_KEY_NAME = "GEMINI_API_KEY"
 
 
@@ -56,7 +55,6 @@ class APIGraspPointSelector:
     ):
         self.logger = logger
         self.client = GeminiGraspAPIClient(
-            logger=logger,
             model_id=model,
             env_file=env_file,
             base_url=base_url,
@@ -77,11 +75,6 @@ class APIGraspPointSelector:
         if x2 <= x1 or y2 <= y1:
             self.logger.warn("API grasp crop bbox가 비어 있습니다.")
             return None
-
-        self.logger.info(
-            f"API grasp crop 준비: bbox=({x1}, {y1}, {x2}, {y2}), "
-            f"label={label}, target={target_label}"
-        )
 
         crop_bgr = color_image[y1:y2, x1:x2]
         crop_rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
@@ -109,18 +102,11 @@ class APIGraspPointSelector:
         if refined is not None:
             u, v = refined.point
             source = f"{GRASP_POINT_MODE_API}+depth"
-            self.logger.info(
-                f"API grasp depth 보정 적용: pixel=({u}, {v}), "
-                f"depth={refined.depth_m:.4f}m, radius={refined.radius_px}px"
-            )
-        else:
-            self.logger.warn("API grasp depth 보정 결과가 없어 원래 pixel을 사용합니다.")
 
         self.logger.info(
             f"API grasp point 선택: pixel=({u}, {v}), "
             f"rpy_deg={result.orientation_rpy_deg}, "
-            f"confidence={result.confidence}, source={source}, "
-            f"reason={result.reason}"
+            f"confidence={result.confidence}, source={source}"
         )
 
         return u, v, source, result.orientation_rpy_deg
@@ -140,7 +126,6 @@ class GeminiGraspAPIClient:
 
     def __init__(
         self,
-        logger=None,
         model_id: str | None = None,
         max_image_size: int = DEFAULT_MAX_IMAGE_SIZE,
         max_output_tokens: int = 256,
@@ -148,9 +133,7 @@ class GeminiGraspAPIClient:
         env_file: str | None = None,
         base_url: str | None = None,
         temperature: float = 0.0,
-        max_retries: int = DEFAULT_MAX_RETRIES,
     ):
-        self.logger = logger
         self.model_id = model_id or DEFAULT_GEMINI_MODEL
         self.max_image_size = int(max_image_size)
         self.max_output_tokens = int(max_output_tokens)
@@ -158,7 +141,6 @@ class GeminiGraspAPIClient:
         self.env_file = env_file or self._default_env_file()
         self.base_url = base_url or DEFAULT_GEMINI_BASE_URL
         self.temperature = float(temperature)
-        self.max_retries = max(1, int(max_retries))
 
     def select_grasp_pose(
         self,
@@ -175,56 +157,8 @@ class GeminiGraspAPIClient:
             image_size=work_image.size,
         )
 
-        failures = []
-        for attempt in range(1, self.max_retries + 1):
-            try:
-                self._log_info(
-                    f"Gemini API grasp 요청 시도 {attempt}/{self.max_retries}: "
-                    f"model={self.model_id}, object={object_label}, "
-                    f"image={work_width}x{work_height}"
-                )
-                text = self._ask_gemini(work_image, prompt)
-                self._log_info(f"Gemini API raw response:\n{text}")
-                self._log_info(
-                    "Gemini API 응답 수신: "
-                    f"{self._shorten_text(text, max_len=300)}"
-                )
-                data = self._extract_json(text)
-                result = self._result_from_data(
-                    data=data,
-                    text=text,
-                    original_size=(original_width, original_height),
-                    work_size=(work_width, work_height),
-                )
-                self._log_info(
-                    "Gemini API 응답 파싱 성공: "
-                    f"point={result.point}, "
-                    f"rpy={result.orientation_rpy_deg}, "
-                    f"confidence={result.confidence}, reason={result.reason}"
-                )
-                return result
-            except Exception as exc:
-                reason = str(exc)
-                failures.append(f"{attempt}차 실패: {reason}")
-                self._log_warn(
-                    f"Gemini API grasp 시도 {attempt}/{self.max_retries} 실패: "
-                    f"{reason}"
-                )
-
-        raise RuntimeError(
-            f"Gemini API grasp point 추론이 {self.max_retries}회 모두 실패했습니다. "
-            f"실패 이유: {' | '.join(failures)}"
-        )
-
-    def _result_from_data(
-        self,
-        data: dict[str, Any],
-        text: str,
-        original_size: tuple[int, int],
-        work_size: tuple[int, int],
-    ) -> APIGraspResult:
-        original_width, original_height = original_size
-        work_width, work_height = work_size
+        text = self._ask_gemini(work_image, prompt)
+        data = self._extract_json(text)
         x_px = self._as_float(data.get("x_px"))
         y_px = self._as_float(data.get("y_px"))
         roll = self._as_float(data.get("roll_deg"), default=0.0)
@@ -260,25 +194,68 @@ class GeminiGraspAPIClient:
         width, height = image_size
         request_text = user_request or "Pick up the object in a natural way."
         return (
-            "You are selecting a grasp pose for a robot with a two-finger "
+            "You are selecting a precise grasp pose for a robot with a two-finger "
             "parallel gripper.\n"
-            "The image is a crop of one detected object. Choose one precise "
+            "The image is a crop of one detected tool or object. Choose one precise "
             "pixel inside the image as the grasp center and estimate the "
             "end-effector orientation.\n\n"
+
+            "Your goal is to choose a physically stable grasp point, not just the "
+            "visual center of the object. Consider the object's shape, likely center "
+            "of mass, tool-specific functional regions, and safe contact surfaces.\n"
+            "For tools, distinguish between handle, head, blade, tip, shaft, joint, "
+            "hole, grip, and fragile or task-critical parts.\n\n"
+
             "Return strict JSON only. Do not return markdown or code fences.\n"
             "Required keys: x_px, y_px, roll_deg, pitch_deg, yaw_deg, "
             "confidence, reason.\n"
+
             f"Image size: width={width}, height={height}.\n"
-            "Constraints:\n"
+
+            "Grasp selection rules:\n"
+            "- Choose a grasp center near the object's estimated center of mass when possible.\n"
+            "- Prefer thick, rigid, non-sharp, non-fragile regions that can be pinched "
+            "securely by a two-finger parallel gripper.\n"
+            "- For handled tools, prefer the handle or thick body region, especially "
+            "near the balance point between the handle and heavier working head.\n"
+            "- For long thin tools such as screwdrivers, wrenches, pliers, cutters, "
+            "or pens, choose a point on the main body/handle that is not too close "
+            "to either end.\n"
+            "- For head-heavy tools such as hammers, choose a point on the handle "
+            "closer to the head than the far end, so the grasp is more balanced.\n"
+            "- For pliers, scissors, cutters, or articulated tools, avoid the hinge, "
+            "blade, cutting edge, and finger holes; prefer a stable handle region.\n"
+            "- For knives, saws, chisels, or sharp tools, avoid the blade, cutting edge, "
+            "tip, and sharp working surface; prefer the handle.\n"
+            "- Avoid holes, empty spaces, thin tips, sharp tips, slippery ends, "
+            "fragile parts, labels, buttons, switches, and task-critical surfaces.\n"
+            "- Avoid grasp points too close to the image boundary unless the visible "
+            "object region clearly indicates that it is the safest stable grasp point.\n"
+            "- If multiple stable grasp candidates exist, choose the one that best "
+            "balances safety, rigidity, and estimated mass distribution.\n\n"
+
+            "Orientation rules:\n"
+            "- yaw_deg should represent the gripper/end-effector rotation in the image plane.\n"
+            "- Estimate yaw_deg so that the gripper fingers close across the object's "
+            "shorter width, while the gripper approach is aligned with the local "
+            "graspable region.\n"
+            "- For elongated objects, estimate the object's main axis and set yaw_deg "
+            "so the gripper closes perpendicular to that long axis.\n"
+            "- For handles or shafts, align yaw_deg based on the local handle/shaft "
+            "orientation, not necessarily the entire object orientation.\n"
+            "- If the object is roughly horizontal, vertical, or diagonal, reflect "
+            "that in yaw_deg using degrees in [-180, 180].\n"
+            "- If roll or pitch is uncertain from a single RGB crop, use 0.0, but "
+            "still estimate yaw_deg carefully.\n\n"
+
+            "Output constraints:\n"
             f"- x_px must be a number in [0, {width - 1}]\n"
             f"- y_px must be a number in [0, {height - 1}]\n"
             "- roll_deg, pitch_deg, yaw_deg must be degrees in [-180, 180]\n"
-            "- Prefer sturdy, safe, functional grasp regions such as handles "
-            "or thick bodies\n"
-            "- Avoid blades, sharp tips, holes, fragile parts, slippery ends, "
-            "and task-critical surfaces\n"
-            "- If roll or pitch is uncertain, use 0.0, but still estimate "
-            "yaw_deg\n\n"
+            "- confidence must be a number in [0, 1]\n"
+            "- reason must briefly explain why the selected point is stable, safe, "
+            "and suitable for a two-finger grasp.\n\n"
+
             "Example output:\n"
             "{"
             "\"x_px\": 320, "
@@ -287,8 +264,9 @@ class GeminiGraspAPIClient:
             "\"pitch_deg\": 0.0, "
             "\"yaw_deg\": 25.0, "
             "\"confidence\": 0.82, "
-            "\"reason\": \"sturdy handle region suitable for a two-finger grasp\""
+            "\"reason\": \"balanced sturdy handle region near the estimated center of mass, away from sharp or fragile parts\""
             "}\n\n"
+
             f"Object: {object_label}\n"
             f"Robot task: {request_text}\n"
         )
@@ -488,18 +466,3 @@ class GeminiGraspAPIClient:
         while value < -180.0:
             value += 360.0
         return float(value)
-
-    def _log_info(self, message: str):
-        if self.logger is not None:
-            self.logger.info(message)
-
-    def _log_warn(self, message: str):
-        if self.logger is not None:
-            self.logger.warn(message)
-
-    @staticmethod
-    def _shorten_text(text: str, max_len: int) -> str:
-        text = str(text).replace("\n", " ").strip()
-        if len(text) <= max_len:
-            return text
-        return text[: max_len - 3] + "..."
