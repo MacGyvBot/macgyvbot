@@ -1,11 +1,11 @@
-"""Coordinate tool drop monitoring with task status reporting."""
+"""Report tool drop monitor events to task status outputs."""
 
 from __future__ import annotations
 
 from macgyvbot_manipulation.tool_drop_monitor import ToolDropMonitor
 
 
-class ToolDropCoordinator:
+class ToolDropStatusReporter:
     """Own drop monitoring and translate events to application status payloads."""
 
     def __init__(self, gripper, publish_drop_payload, publish_status_payload):

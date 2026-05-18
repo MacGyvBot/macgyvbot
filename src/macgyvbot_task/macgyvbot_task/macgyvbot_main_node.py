@@ -49,7 +49,7 @@ from macgyvbot_task.application import (
     RobotStatusPublisher,
     TaskRuntimeState,
     ToolCommandController,
-    ToolDropCoordinator,
+    ToolDropStatusReporter,
 )
 from macgyvbot_task.application.adapters.hand_grasp_result_adapter import (
     HandGraspResultAdapter,
@@ -135,7 +135,7 @@ class MacGyvBotNode(Node):
             self._publish_status_payload,
             target_label_provider=lambda: self.state.target_label,
         )
-        self.tool_drop = ToolDropCoordinator(
+        self.tool_hold_monitor = ToolDropStatusReporter(
             self.gripper,
             self._publish_tool_drop_payload,
             self._publish_status_payload,
@@ -148,7 +148,7 @@ class MacGyvBotNode(Node):
             clear_target=self._clear_pending_target,
             reset_search_status=self._reset_search_status,
             start_return=self.start_return_sequence,
-            release_gripper=self.tool_drop.release_gripper,
+            release_gripper=self.tool_hold_monitor.release_gripper,
         )
         self.frame_processor = PickFrameProcessor(
             self.state,
@@ -163,14 +163,14 @@ class MacGyvBotNode(Node):
             self.motion,
             self.gripper,
             self.state,
-            self.tool_drop,
+            self.tool_hold_monitor,
         )
         self.return_runner = ReturnSequenceRunner(
             self.robot,
             self.motion,
             self.gripper,
             self.state,
-            self.tool_drop,
+            self.tool_hold_monitor,
         )
 
         self._create_subscriptions()

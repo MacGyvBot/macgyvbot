@@ -32,7 +32,7 @@ class ReturnHandoffFlow:
         state,
         reporter,
         wait_fn,
-        tool_drop=None,
+        tool_hold_monitor=None,
     ):
         self.robot = robot
         self.motion = motion_controller
@@ -40,7 +40,7 @@ class ReturnHandoffFlow:
         self.state = state
         self.reporter = reporter
         self.wait_fn = wait_fn
-        self.tool_drop = tool_drop
+        self.tool_hold_monitor = tool_hold_monitor
         self.grasp_verifier = GraspVerifier(gripper, wait_fn)
 
     def receive(self, requested_tool, command, logger):
@@ -83,8 +83,8 @@ class ReturnHandoffFlow:
             "반납 공구 grasp에 성공했습니다.",
             command,
         )
-        if self.tool_drop is not None:
-            self.tool_drop.start(tool_name, "return", command)
+        if self.tool_hold_monitor is not None:
+            self.tool_hold_monitor.start(tool_name, "return", command)
         return tool_name, ""
 
     def wait_for_user_held_tool(self, tool_name, logger):
