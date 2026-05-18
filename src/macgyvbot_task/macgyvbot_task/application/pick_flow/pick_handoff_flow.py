@@ -27,12 +27,21 @@ from macgyvbot_manipulation.robot_pose import make_safe_pose
 class PickHandoffFlow:
     """Handle user handoff motion, waits, and fallback return motion."""
 
-    def __init__(self, robot, motion_controller, gripper, state, wait_fn):
+    def __init__(
+        self,
+        robot,
+        motion_controller,
+        gripper,
+        state,
+        wait_fn,
+        interrupted=None,
+    ):
         self.robot = robot
         self.motion = motion_controller
         self.gripper = gripper
         self.state = state
         self.wait_fn = wait_fn
+        self.interrupted = interrupted or (lambda: False)
 
     def return_tool_to_original_position(
         self,
@@ -95,11 +104,19 @@ class PickHandoffFlow:
         return True
 
     def move_to_handoff_pose(self, ori, logger):
+        if self.interrupted():
+            logger.info("사용자 전달 이동 시작 전 stop/pause 요청으로 handoff를 중단합니다.")
+            return None, None, None
+
         ok, start_pose = move_to_observation_pose(self.motion, self.robot, logger)
         logger.info(
             "7단계: 사용자 전달 관찰 자세 이동 "
             f"pose=({start_pose.x:.3f},{start_pose.y:.3f},{start_pose.z:.3f})"
         )
+        if self.interrupted():
+            logger.info("관찰 자세 이동 후 stop/pause 요청으로 handoff를 중단합니다.")
+            return None, None, None
+
         if not ok:
             logger.error("사용자 전달 위치 이동 실패. Pick 시퀀스 중단")
             self.state._publish_robot_status(
@@ -115,7 +132,18 @@ class PickHandoffFlow:
             logger,
             timeout_sec=OBSERVATION_TIMEOUT_SEC,
         )
+        while not future.done():
+            if self.interrupted():
+                future.cancel()
+                logger.info("사용자 손 위치 관측 중 stop/pause 요청으로 handoff를 중단합니다.")
+                return None, None, None
+            self.wait_fn(0.1)
+
         candidate = future.result()
+
+        if self.interrupted():
+            logger.info("사용자 손 위치 관측 후 stop/pause 요청으로 handoff를 중단합니다.")
+            return None, None, None
 
         if not candidate.found:
             logger.error("사용자 손 위치를 찾지 못했습니다.")
@@ -148,6 +176,10 @@ class PickHandoffFlow:
             x_offset_m=HANDOVER_HAND_X_OFFSET_M,
             z_offset_m=HANDOVER_HAND_Z_OFFSET_M,
         )
+        if self.interrupted():
+            logger.info("사용자 손 위치 이동 후 stop/pause 요청으로 handoff를 중단합니다.")
+            return None, None, None
+
         logger.info(
             "사용자 손 위치로 전달 이동: "
             f"source={candidate.source}, frame={candidate.frame_id}, "
