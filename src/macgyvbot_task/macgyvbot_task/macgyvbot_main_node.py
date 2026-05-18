@@ -332,6 +332,10 @@ class MacGyvBotNode(Node):
         if action is None:
             return
 
+        self.get_logger().info(
+            f"task control 수신: action={action}, reason={reason}"
+        )
+
         if action == "stop":
             self.stop_req.set()
         elif action == "pause":
