@@ -133,6 +133,7 @@ class GeminiGraspAPIClient:
         env_file: str | None = None,
         base_url: str | None = None,
         temperature: float = 0.0,
+        thinking_budget: int = 0,
     ):
         self.model_id = model_id or DEFAULT_GEMINI_MODEL
         self.max_image_size = int(max_image_size)
@@ -141,6 +142,7 @@ class GeminiGraspAPIClient:
         self.env_file = env_file or self._default_env_file()
         self.base_url = base_url or DEFAULT_GEMINI_BASE_URL
         self.temperature = float(temperature)
+        self.thinking_budget = int(thinking_budget)
 
     def select_grasp_pose(
         self,
@@ -194,79 +196,25 @@ class GeminiGraspAPIClient:
         width, height = image_size
         request_text = user_request or "Pick up the object in a natural way."
         return (
-            "You are selecting a precise grasp pose for a robot with a two-finger "
-            "parallel gripper.\n"
-            "The image is a crop of one detected tool or object. Choose one precise "
-            "pixel inside the image as the grasp center and estimate the "
-            "end-effector orientation.\n\n"
-
-            "Your goal is to choose a physically stable grasp point, not just the "
-            "visual center of the object. Consider the object's shape, likely center "
-            "of mass, tool-specific functional regions, and safe contact surfaces.\n"
-            "For tools, distinguish between handle, head, blade, tip, shaft, joint, "
-            "hole, grip, and fragile or task-critical parts.\n\n"
-
-            "Return strict JSON only. Do not return markdown or code fences.\n"
-            "Required keys: x_px, y_px, roll_deg, pitch_deg, yaw_deg, "
-            "confidence, reason.\n"
-
+            "Select one grasp pose for a robot two-finger parallel gripper. "
+            "The image is a crop of one detected tool or object. Choose the "
+            "best grasp-center pixel inside the crop and estimate end-effector "
+            "orientation.\n\n"
+            "Return strict JSON only. No markdown, code fences, or extra text. "
+            "Schema: {\"x_px\": number, \"y_px\": number, "
+            "\"roll_deg\": number, \"pitch_deg\": number, "
+            "\"yaw_deg\": number, \"confidence\": number, "
+            "\"reason\": string}.\n\n"
             f"Image size: width={width}, height={height}.\n"
-
-            "Grasp selection rules:\n"
-            "- Choose a grasp center near the object's estimated center of mass when possible.\n"
-            "- Prefer thick, rigid, non-sharp, non-fragile regions that can be pinched "
-            "securely by a two-finger parallel gripper.\n"
-            "- For handled tools, prefer the handle or thick body region, especially "
-            "near the balance point between the handle and heavier working head.\n"
-            "- For long thin tools such as screwdrivers, wrenches, pliers, cutters, "
-            "or pens, choose a point on the main body/handle that is not too close "
-            "to either end.\n"
-            "- For head-heavy tools such as hammers, choose a point on the handle "
-            "closer to the head than the far end, so the grasp is more balanced.\n"
-            "- For pliers, scissors, cutters, or articulated tools, avoid the hinge, "
-            "blade, cutting edge, and finger holes; prefer a stable handle region.\n"
-            "- For knives, saws, chisels, or sharp tools, avoid the blade, cutting edge, "
-            "tip, and sharp working surface; prefer the handle.\n"
-            "- Avoid holes, empty spaces, thin tips, sharp tips, slippery ends, "
-            "fragile parts, labels, buttons, switches, and task-critical surfaces.\n"
-            "- Avoid grasp points too close to the image boundary unless the visible "
-            "object region clearly indicates that it is the safest stable grasp point.\n"
-            "- If multiple stable grasp candidates exist, choose the one that best "
-            "balances safety, rigidity, and estimated mass distribution.\n\n"
-
-            "Orientation rules:\n"
-            "- yaw_deg should represent the gripper/end-effector rotation in the image plane.\n"
-            "- Estimate yaw_deg so that the gripper fingers close across the object's "
-            "shorter width, while the gripper approach is aligned with the local "
-            "graspable region.\n"
-            "- For elongated objects, estimate the object's main axis and set yaw_deg "
-            "so the gripper closes perpendicular to that long axis.\n"
-            "- For handles or shafts, align yaw_deg based on the local handle/shaft "
-            "orientation, not necessarily the entire object orientation.\n"
-            "- If the object is roughly horizontal, vertical, or diagonal, reflect "
-            "that in yaw_deg using degrees in [-180, 180].\n"
-            "- If roll or pitch is uncertain from a single RGB crop, use 0.0, but "
-            "still estimate yaw_deg carefully.\n\n"
-
-            "Output constraints:\n"
-            f"- x_px must be a number in [0, {width - 1}]\n"
-            f"- y_px must be a number in [0, {height - 1}]\n"
-            "- roll_deg, pitch_deg, yaw_deg must be degrees in [-180, 180]\n"
-            "- confidence must be a number in [0, 1]\n"
-            "- reason must briefly explain why the selected point is stable, safe, "
-            "and suitable for a two-finger grasp.\n\n"
-
-            "Example output:\n"
-            "{"
-            "\"x_px\": 320, "
-            "\"y_px\": 180, "
-            "\"roll_deg\": 0.0, "
-            "\"pitch_deg\": 0.0, "
-            "\"yaw_deg\": 25.0, "
-            "\"confidence\": 0.82, "
-            "\"reason\": \"balanced sturdy handle region near the estimated center of mass, away from sharp or fragile parts\""
-            "}\n\n"
-
+            f"x_px range: 0 to {width - 1}. "
+            f"y_px range: 0 to {height - 1}. "
+            "Angles must be degrees in [-180, 180]; confidence is [0, 1]. "
+            "Prefer thick, rigid, stable regions near the balance point, such "
+            "as handles or main bodies. Avoid blades, cutting edges, tips, "
+            "holes, hinges, fragile parts, slippery ends, buttons, labels, and "
+            "task-critical surfaces. For elongated objects, set yaw so gripper "
+            "fingers close across the shorter width. If roll or pitch is "
+            "uncertain, use 0.0 but still estimate yaw.\n\n"
             f"Object: {object_label}\n"
             f"Robot task: {request_text}\n"
         )
@@ -299,6 +247,9 @@ class GeminiGraspAPIClient:
             "generationConfig": {
                 "maxOutputTokens": self.max_output_tokens,
                 "temperature": self.temperature,
+                "thinkingConfig": {
+                    "thinkingBudget": self.thinking_budget,
+                },
             },
         }
         body = self._post_json(
@@ -427,7 +378,11 @@ class GeminiGraspAPIClient:
                     parts.append(text)
         text = "\n".join(parts).strip()
         if not text:
-            raise RuntimeError(f"Gemini 응답에 text가 없습니다: {data}")
+            raw_response = json.dumps(data, ensure_ascii=False, indent=2)
+            raise RuntimeError(
+                "Gemini 응답에 text가 없습니다. 전체 응답:\n"
+                f"{raw_response}"
+            )
         return text
 
     @staticmethod
