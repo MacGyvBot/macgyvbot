@@ -31,7 +31,7 @@ else:
             self._node = node
             self.setWindowTitle('MacGyvBot Assistant')
             self.resize(1420, 760)
-            self.setMinimumSize(1180, 660)
+            self.setMinimumSize(1280, 680)
             self._detector_pixmap = None
 
             self._chat_scroll = QScrollArea()
@@ -120,7 +120,7 @@ else:
 
             detector_panel = QFrame()
             detector_panel.setObjectName('detectorPanel')
-            detector_panel.setMinimumWidth(390)
+            detector_panel.setFixedWidth(540)
             detector_panel_layout = QVBoxLayout()
             detector_panel_layout.setContentsMargins(14, 14, 14, 14)
             detector_panel_layout.setSpacing(10)
@@ -129,10 +129,10 @@ else:
             self._detector_image = QLabel('Detector 영상 대기 중')
             self._detector_image.setObjectName('detectorImage')
             self._detector_image.setAlignment(Qt.AlignCenter)
-            self._detector_image.setMinimumSize(360, 270)
+            self._detector_image.setFixedSize(512, 384)
             self._detector_image.setSizePolicy(
-                QSizePolicy.Expanding,
-                QSizePolicy.Expanding,
+                QSizePolicy.Fixed,
+                QSizePolicy.Fixed,
             )
             self._detector_status = QLabel('Detector 상태: 대기 중')
             self._detector_status.setObjectName('detectorStatus')
@@ -229,6 +229,8 @@ else:
             self._detector_status.setStyleSheet(
                 self._detector_status_style(status_text)
             )
+            if self._detector_pixmap is None and status_text == '대기 중':
+                self._detector_image.setText('Detector 영상 대기 중')
             if status_text == '미수신' and self._detector_pixmap is None:
                 self._detector_image.setText('Detector 영상 미수신')
 
