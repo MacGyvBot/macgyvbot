@@ -24,7 +24,7 @@ except ImportError:
     get_package_share_directory = None
 
 
-DEFAULT_GEMINI_MODEL = "gemini-3-flash-preview"
+DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 DEFAULT_ENV_FILENAME = ".env"
 DEFAULT_MAX_IMAGE_SIZE = 640

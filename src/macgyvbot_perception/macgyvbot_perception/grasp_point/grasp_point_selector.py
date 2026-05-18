@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from macgyvbot_config.vlm import (
+    DEFAULT_GRASP_POINT_MODE,
     GRASP_POINT_MODE_API,
     GRASP_POINT_MODE_CENTER,
     GRASP_POINT_MODE_VLM,
@@ -70,7 +71,22 @@ class GraspPointSelector:
                 return api_pixel
 
             self.logger.warn(
-                "API VLM grasp point 선택 실패. bbox center로 대체합니다."
+                "API grasp point 선택 실패. "
+                f"기본 모드({DEFAULT_GRASP_POINT_MODE})로 대체합니다."
+            )
+            default_pixel = self._select_default_grasp_pixel(
+                bbox,
+                label,
+                color_image,
+                depth_image,
+                intrinsics,
+                target_label,
+            )
+            if default_pixel is not None:
+                return default_pixel
+
+            self.logger.warn(
+                "기본 grasp point 모드도 실패했습니다. bbox center로 대체합니다."
             )
 
         return self._select_bbox_center_pixel(bbox)
@@ -81,6 +97,30 @@ class GraspPointSelector:
         u = int((bbox[0] + bbox[2]) / 2)
         v = int((bbox[1] + bbox[3]) / 2)
         return u, v, GRASP_POINT_MODE_CENTER, None
+
+    def _select_default_grasp_pixel(
+        self,
+        bbox,
+        label,
+        color_image,
+        depth_image,
+        intrinsics,
+        target_label,
+    ):
+        if DEFAULT_GRASP_POINT_MODE == GRASP_POINT_MODE_VLM:
+            return self._select_vlm_grasp_pixel(
+                bbox,
+                label,
+                color_image,
+                depth_image,
+                intrinsics,
+                target_label,
+            )
+
+        if DEFAULT_GRASP_POINT_MODE == GRASP_POINT_MODE_CENTER:
+            return self._select_bbox_center_pixel(bbox)
+
+        return None
 
     def _select_vlm_grasp_pixel(
         self,

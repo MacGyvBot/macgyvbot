@@ -202,7 +202,7 @@ class MacGyvBotNode(Node):
         ) or YOLO_MODEL_NAME
 
     def _read_grasp_point_api_config(self):
-        self.declare_parameter("grasp_point_api_model", "gemini-3-flash-preview")
+        self.declare_parameter("grasp_point_api_model", "gemini-2.5-flash")
         self.declare_parameter("grasp_point_api_env_file", "")
         self.declare_parameter("grasp_point_api_base_url", "")
         self.declare_parameter("grasp_point_api_timeout_sec", 30.0)
