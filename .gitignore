@@ -21,6 +21,7 @@ log/
 # Large model and dataset artifacts
 *.pt
 *.pth
+*.pkl
 *.onnx
 *.engine
 *.bag
@@ -35,8 +36,6 @@ log/
 !.env.example
 
 
-# Weights
-weights/*
-!weights/.gitkeep
-!weights/download_vlm_weights.py
-!weights/download_sam_weights.py
+# Local VLM model cache under the workspace resource package
+src/macgyvbot_resources/weights/vlm/*
+!src/macgyvbot_resources/weights/vlm/.gitkeep

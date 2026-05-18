@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>macgyvbot_perception</name>
+  <version>0.0.0</version>
+  <description>Camera, detection, depth projection, and hand-grasp perception for MacGyvBot.</description>
+  <maintainer email="todo@example.com">MacGyvBot Team</maintainer>
+  <license>TODO</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>cv_bridge</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>macgyvbot_config</exec_depend>
+  <exec_depend>macgyvbot_domain</exec_depend>
+  <exec_depend>macgyvbot_resources</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

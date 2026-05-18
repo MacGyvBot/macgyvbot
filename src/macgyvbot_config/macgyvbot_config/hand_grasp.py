@@ -1,0 +1,6 @@
+"""Human hand grasp detection constants."""
+
+HAND_GRASP_LOCK_ON_STATUS = "grasp_success"
+HAND_GRASP_MASK_LOCK_TIMEOUT_SEC = 3.0
+HAND_GRASP_TIMEOUT_SEC = 20.0
+HAND_GRASP_ML_CONFIDENCE = 0.85

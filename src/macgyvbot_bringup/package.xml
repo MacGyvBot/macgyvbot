@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>macgyvbot_bringup</name>
+  <version>0.0.0</version>
+  <description>Launch and configuration package for MacGyvBot.</description>
+  <maintainer email="todo@example.com">MacGyvBot Team</maintainer>
+  <license>TODO</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>macgyvbot_task</exec_depend>
+  <exec_depend>macgyvbot_perception</exec_depend>
+  <exec_depend>macgyvbot_command</exec_depend>
+  <exec_depend>macgyvbot_config</exec_depend>
+  <exec_depend>macgyvbot_domain</exec_depend>
+  <exec_depend>macgyvbot_resources</exec_depend>
+  <exec_depend>moveit_configs_utils</exec_depend>
+  <exec_depend>dsr_moveit_config_m0609</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
