@@ -10,6 +10,8 @@ from macgyvbot_manipulation.robot_safezone import (
 )
 
 from macgyvbot_config.robot import (
+    DRAWER_CLOSED_JOINTS,
+    DRAWER_OPEN_JOINTS,
     EE_LINK,
     GROUP_NAME,
     HOME_JOINTS,
@@ -95,6 +97,24 @@ class MoveItController:
         state_goal.update()
 
         logger.info("Home joint pose로 복귀합니다.")
+        return self.plan_and_execute(logger, state_goal=state_goal)
+
+    def move_to_drawer_closed_joints(self, logger):
+        """Move to the configured drawer closed-handle joint pose."""
+        state_goal = RobotState(self.robot.get_robot_model())
+        state_goal.joint_positions = DRAWER_CLOSED_JOINTS
+        state_goal.update()
+
+        logger.info("서랍 손잡이(닫힌) joint pose로 이동합니다.")
+        return self.plan_and_execute(logger, state_goal=state_goal)
+
+    def move_to_drawer_open_joints(self, logger):
+        """Move to the configured drawer open-handle joint pose."""
+        state_goal = RobotState(self.robot.get_robot_model())
+        state_goal.joint_positions = DRAWER_OPEN_JOINTS
+        state_goal.update()
+
+        logger.info("서랍 손잡이(열린) joint pose로 이동합니다.")
         return self.plan_and_execute(logger, state_goal=state_goal)
 
     def rotate_wrist_by_yaw_deg(self, yaw_deg, logger):

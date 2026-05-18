@@ -6,14 +6,10 @@ from __future__ import annotations
 class ReturnStatusReporter:
     """Build and publish return workflow status payloads."""
 
-    def __init__(self, state):
-        self.state = state
+    def __init__(self, publish_payload):
+        self._publish_payload = publish_payload
 
     def publish(self, status, tool_name, message, command, reason=""):
-        publish_payload = getattr(self.state, "_publish_status_payload", None)
-        if publish_payload is None:
-            return
-
         payload = {
             "status": status,
             "task": "return_tool",
@@ -24,7 +20,7 @@ class ReturnStatusReporter:
         }
         if reason:
             payload["reason"] = reason
-        publish_payload(payload)
+        self._publish_payload(payload)
 
     def fail(self, tool_name, message, reason, command, logger):
         logger.error(message)

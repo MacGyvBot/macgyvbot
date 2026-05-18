@@ -29,11 +29,9 @@ class TaskRuntimeState:
     latest_wrench: Any = None
     home_xyz: tuple | None = None
     home_ori: dict | None = None
+    drawer_handle_motion: Any = None
     current_command: dict | None = None
     _last_search_status_target: str | None = field(default=None, repr=False)
-
-    def logger(self):
-        return self.logger_provider()
 
     def get_logger(self):
         return self.logger_provider()

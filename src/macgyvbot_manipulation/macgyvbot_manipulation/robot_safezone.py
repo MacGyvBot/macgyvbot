@@ -1,9 +1,8 @@
 """Safety helpers for robot workspace limits."""
 
-SAFE_X_MIN = 0.0
-SAFE_Y_MIN = -0.3
-SAFE_Y_MAX = 0.3
-SAFE_Z_MIN = 0.24
+from macgyvbot_config.robot import SAFE_X_MIN, SAFE_Y_MIN, SAFE_Y_MAX, SAFE_Z_MIN
+
+__all__ = ["SAFE_X_MIN", "SAFE_Y_MIN", "SAFE_Y_MAX", "SAFE_Z_MIN", "clamp_to_safe_workspace"]
 
 
 def clamp_to_safe_workspace(x: float, y: float, z: float, logger):

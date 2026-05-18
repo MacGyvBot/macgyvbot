@@ -1,25 +1,11 @@
 """Pick sequence orchestration."""
 
-import time
-
-import rclpy
-
-from macgyvbot_config.drawer import (
-    DRAWER_LABEL,
-    # DRAWER_HANDLE_LABEL,  # 하드코딩 손잡이 DetectedTarget 사용 시 필요
-    DRAWER_FIXED_X,
-    DRAWER_FIXED_Y,
-    DRAWER_FIXED_Z,
-    # DRAWER_HANDLE_CLOSED_X,  # 하드코딩 손잡이 DetectedTarget 사용 시 필요
-    # DRAWER_HANDLE_CLOSED_Y,
-    # DRAWER_HANDLE_CLOSED_Z,
-)
-from macgyvbot_config.timing import SEQUENCE_WAIT_POLL_SEC
+from macgyvbot_config.drawer import DRAWER_LABEL
+from macgyvbot_config.timing import GRIPPER_OPEN_WAIT_SEC
+from macgyvbot_domain import DetectedTarget
+from macgyvbot_manipulation.grasp_verifier import cooperative_wait
 from macgyvbot_manipulation.handover_targeting import move_to_observation_pose
-from macgyvbot_task.application.drawer_flow.drawer_sequence import (
-    DetectedTarget,
-    DrawerInteraction,
-)
+from macgyvbot_task.application.drawer_flow.drawer_sequence import DrawerInteraction
 from macgyvbot_task.application.pick_flow.pick_grasp_flow import PickGraspFlow
 from macgyvbot_task.application.pick_flow.pick_handoff_flow import PickHandoffFlow
 from macgyvbot_task.application.pick_flow.pick_target_planner import PickTargetPlanner
@@ -55,12 +41,12 @@ class PickSequenceRunner:
             motion_controller,
             gripper,
             state,
-            self.cooperative_wait,
+            cooperative_wait,
         )
         self.grasp = PickGraspFlow(
             gripper,
             state,
-            self.cooperative_wait,
+            cooperative_wait,
         )
 
     def run_drawer_pick(self, requested_tool):
@@ -69,7 +55,7 @@ class PickSequenceRunner:
         self.state.tool_mask_locked = False
         self.state.last_tool_mask_lock_result = None
 
-        log = self.state.logger()
+        log = self.state.get_logger()
         drawer = DrawerInteraction(
             robot=self.robot,
             motion_controller=self.motion,
@@ -79,7 +65,7 @@ class PickSequenceRunner:
             drawer_detector=self.drawer_detector,
             depth_projector=self.depth_projector,
             grasp_point_selector=self.grasp_point_selector,
-            wait_fn=self.cooperative_wait,
+            wait_fn=cooperative_wait,
         )
 
         try:
@@ -134,50 +120,24 @@ class PickSequenceRunner:
             # )
             # -----------------------------------------------------------
 
-            drawer_target = DetectedTarget(
-                label=DRAWER_LABEL,
-                x=DRAWER_FIXED_X,
-                y=DRAWER_FIXED_Y,
-                z=DRAWER_FIXED_Z,
-                depth_m=0.0,
-            )
-
             self.state._publish_robot_status(
                 "moving_to_drawer",
                 tool_name=requested_tool,
                 action="bring",
-                message="공구함으로 이동 중입니다.",
+                message="서랍 손잡이 joint 위치로 이동 중입니다.",
                 command=self.state.current_command,
             )
-            if not drawer.move_to_drawer_view(drawer_target, log):
+            motion = drawer.build_motion_from_joints(log)
+            if motion is None:
                 self.state._publish_robot_status(
                     "failed",
                     tool_name=requested_tool,
                     action="bring",
-                    message="공구함으로 이동하지 못했습니다.",
-                    reason="drawer_move_failed",
+                    message="서랍 손잡이 joint 이동에 실패했습니다.",
+                    reason="drawer_joint_move_failed",
                     command=self.state.current_command,
                 )
                 return
-
-            # --- YOLO 손잡이 탐지 + 하드코딩 DetectedTarget (추후 활성화 가능) ---
-            # self.state._publish_robot_status(
-            #     "searching_drawer_handle",
-            #     tool_name=requested_tool,
-            #     action="bring",
-            #     message="서랍 손잡이를 찾는 중입니다.",
-            #     command=self.state.current_command,
-            # )
-            # handle_target = DetectedTarget(
-            #     label=DRAWER_HANDLE_LABEL,
-            #     x=DRAWER_HANDLE_CLOSED_X,
-            #     y=DRAWER_HANDLE_CLOSED_Y,
-            #     z=DRAWER_HANDLE_CLOSED_Z,
-            #     depth_m=drawer_target.depth_m,
-            # )
-            # -----------------------------------------------------------
-
-            motion = drawer.build_hardcoded_motion()
 
             self.state._publish_robot_status(
                 "opening_drawer",
@@ -241,7 +201,7 @@ class PickSequenceRunner:
         self.state.tool_mask_locked = False
         self.state.last_tool_mask_lock_result = None
 
-        log = self.state.logger()
+        log = self.state.get_logger()
         drawer = DrawerInteraction(
             robot=self.robot,
             motion_controller=self.motion,
@@ -251,9 +211,12 @@ class PickSequenceRunner:
             drawer_detector=self.drawer_detector,
             depth_projector=self.depth_projector,
             grasp_point_selector=self.grasp_point_selector,
-            wait_fn=self.cooperative_wait,
+            wait_fn=cooperative_wait,
         )
-        close_motion = drawer.build_hardcoded_motion()
+        close_motion = self.state.drawer_handle_motion
+        if close_motion is None:
+            log.error("서랍 손잡이 위치 정보 없음. startup에서 서랍이 열리지 않았습니다.")
+            return
 
         try:
             self.state._publish_robot_status(
@@ -292,15 +255,9 @@ class PickSequenceRunner:
                 message="공구 전달 완료. 서랍을 닫는 중입니다.",
                 command=self.state.current_command,
             )
-            drawer_target = DetectedTarget(
-                label=DRAWER_LABEL,
-                x=DRAWER_FIXED_X,
-                y=DRAWER_FIXED_Y,
-                z=DRAWER_FIXED_Z,
-                depth_m=0.0,
-            )
-            if not drawer.move_to_drawer_view(drawer_target, log):
-                log.error("서랍 닫기 전 이동 실패")
+            ok, _ = move_to_observation_pose(self.motion, self.robot, log)
+            if not ok:
+                log.error("서랍 닫기 전 관찰 자세 이동 실패")
                 return
             if not drawer.close_drawer(close_motion, log):
                 log.error("서랍 닫기 실패")
@@ -317,7 +274,7 @@ class PickSequenceRunner:
         self.state.tool_mask_locked = False
         self.state.last_tool_mask_lock_result = None
 
-        log = self.state.logger()
+        log = self.state.get_logger()
         ori = self.state.home_ori
 
         plan = self.target_planner.plan(bx, by, bz, log)
@@ -333,7 +290,7 @@ class PickSequenceRunner:
             )
 
             self.gripper.open_gripper()
-            self.cooperative_wait(0.5)
+            cooperative_wait(GRIPPER_OPEN_WAIT_SEC)
 
             log.info("1단계: 안전 이동 높이 확보")
             ok = self.motion.plan_and_execute(
@@ -559,9 +516,3 @@ class PickSequenceRunner:
             self.state.human_grasped_tool = False
             self.state.current_command = None
 
-    @staticmethod
-    def cooperative_wait(duration_sec):
-        end_time = time.monotonic() + max(0.0, float(duration_sec))
-        while rclpy.ok() and time.monotonic() < end_time:
-            remaining = end_time - time.monotonic()
-            time.sleep(min(SEQUENCE_WAIT_POLL_SEC, max(0.0, remaining)))

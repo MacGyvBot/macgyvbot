@@ -7,8 +7,8 @@ from macgyvbot_config.pick import (
     OBJECT_Z_HEIGHT_BIAS_M,
     SAFE_Z,
 )
+from macgyvbot_config.robot import SAFE_Z_MIN
 from macgyvbot_manipulation.robot_pose import get_ee_matrix
-from macgyvbot_manipulation.robot_safezone import SAFE_Z_MIN
 from macgyvbot_domain.pick_models import PickMotionPlan
 
 

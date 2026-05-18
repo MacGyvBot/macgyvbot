@@ -1,10 +1,7 @@
 """Return sequence orchestration for receiving and storing a user-held tool."""
 
-import time
-
-import rclpy
-
-from macgyvbot_config.timing import SEQUENCE_WAIT_POLL_SEC
+from macgyvbot_config.timing import GRIPPER_OPEN_WAIT_SEC
+from macgyvbot_manipulation.grasp_verifier import cooperative_wait
 from macgyvbot_task.application.return_flow.return_handoff_flow import (
     ReturnHandoffFlow,
 )
@@ -24,14 +21,14 @@ class ReturnSequenceRunner:
         self.motion = motion_controller
         self.gripper = gripper
         self.state = state
-        self.reporter = ReturnStatusReporter(state)
+        self.reporter = ReturnStatusReporter(state._publish_status_payload)
         self.handoff = ReturnHandoffFlow(
             robot,
             motion_controller,
             gripper,
             state,
             self.reporter,
-            self._cooperative_wait,
+            cooperative_wait,
         )
         self.placement = ReturnHomePlacementFlow(
             robot,
@@ -39,11 +36,11 @@ class ReturnSequenceRunner:
             gripper,
             state,
             self.reporter,
-            self._cooperative_wait,
+            cooperative_wait,
         )
 
     def run(self, command):
-        log = self.state.logger()
+        log = self.state.get_logger()
         requested_tool = command.get("tool_name", "unknown")
         raw_text = command.get("raw_text", "")
 
@@ -64,7 +61,7 @@ class ReturnSequenceRunner:
 
             ori = self.state.home_ori
             self.gripper.open_gripper()
-            self._cooperative_wait(0.5)
+            cooperative_wait(GRIPPER_OPEN_WAIT_SEC)
 
             tool_name, receive_failure_reason = self.handoff.receive(
                 requested_tool,
@@ -135,9 +132,3 @@ class ReturnSequenceRunner:
         self.state.human_grasped_tool = False
         self.state.current_command = None
 
-    @staticmethod
-    def _cooperative_wait(duration_sec):
-        end_time = time.monotonic() + max(0.0, float(duration_sec))
-        while rclpy.ok() and time.monotonic() < end_time:
-            remaining = end_time - time.monotonic()
-            time.sleep(min(SEQUENCE_WAIT_POLL_SEC, max(0.0, remaining)))

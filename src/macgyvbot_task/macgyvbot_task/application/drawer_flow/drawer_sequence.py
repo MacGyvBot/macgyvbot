@@ -9,6 +9,7 @@ import rclpy
 
 from macgyvbot_config.drawer import (
     DRAWER_APPROACH_Z_OFFSET,
+    DRAWER_DETECTION_POLL_SEC,
     DRAWER_DETECTION_TIMEOUT_SEC,
     DRAWER_LABEL,
     DRAWER_HANDLE_APPROACH_Z_OFFSET,
@@ -23,27 +24,20 @@ from macgyvbot_config.drawer import (
     DRAWER_TOOL_PLACE_Z_OFFSET,
 )
 from macgyvbot_config.pick import SAFE_Z
-from macgyvbot_config.timing import SEQUENCE_WAIT_POLL_SEC
+from macgyvbot_config.robot import SAFE_Z_MIN
+from macgyvbot_config.timing import (
+    GRIPPER_GRASP_WAIT_SEC,
+    GRIPPER_OPEN_WAIT_SEC,
+    SEQUENCE_WAIT_POLL_SEC,
+)
+from scipy.spatial.transform import Rotation
+
+from macgyvbot_domain import DetectedTarget
+from macgyvbot_manipulation.grasp_verifier import cooperative_wait
 from macgyvbot_manipulation.robot_pose import (
     get_ee_matrix,
     make_safe_pose,
 )
-from macgyvbot_manipulation.robot_safezone import SAFE_Z_MIN
-
-
-@dataclass(frozen=True)
-class DetectedTarget:
-    """Projected YOLO target in robot base coordinates."""
-
-    label: str
-    x: float
-    y: float
-    z: float
-    depth_m: float
-    pixel_u: int | None = None
-    pixel_v: int | None = None
-    source: str = "center"
-    yaw_deg: float | None = None
 
 
 @dataclass(frozen=True)
@@ -108,7 +102,7 @@ class DrawerInteraction:
                 )
                 return None
 
-            self.wait(0.2)
+            self.wait(DRAWER_DETECTION_POLL_SEC)
 
         return None
 
@@ -208,29 +202,65 @@ class DrawerInteraction:
             ),
         )
 
-    def build_hardcoded_motion(self):
-        """닫힌/열린 손잡이 위치 상수로 DrawerHandleMotion 직접 생성."""
-        from macgyvbot_config.drawer import (
-            DRAWER_HANDLE_CLOSED_X,
-            DRAWER_HANDLE_CLOSED_Y,
-            DRAWER_HANDLE_CLOSED_Z,
-            DRAWER_HANDLE_OPEN_X,
+    def build_motion_from_joints(self, logger):
+        """DRAWER_CLOSED_JOINTS로 이동 후 FK로 손잡이 XYZ를 읽어 DrawerHandleMotion 생성."""
+        if not self.motion.move_to_drawer_closed_joints(logger):
+            logger.error("서랍 손잡이 joint 이동 실패")
+            return None
+
+        transform = get_ee_matrix(self.robot)
+        x = float(transform[0, 3])
+        y = float(transform[1, 3])
+        z = float(transform[2, 3])
+        qx, qy, qz, qw = Rotation.from_matrix(transform[:3, :3]).as_quat()
+        drawer_ori = {
+            "x": float(qx),
+            "y": float(qy),
+            "z": float(qz),
+            "w": float(qw),
+        }
+        logger.info(
+            f"서랍 손잡이 FK 위치: x={x:.3f}, y={y:.3f}, z={z:.3f}"
         )
-        z = DRAWER_HANDLE_CLOSED_Z
+
+        open_x = x + DRAWER_OPEN_DIRECTION_X * DRAWER_PULL_DISTANCE_M
         travel_z = self._travel_z(z)
         approach_z = max(z + DRAWER_HANDLE_APPROACH_Z_OFFSET, SAFE_Z_MIN)
         grasp_z = max(z + DRAWER_HANDLE_GRASP_Z_OFFSET, SAFE_Z_MIN)
         if approach_z < grasp_z:
             approach_z = grasp_z
-        return DrawerHandleMotion(
-            closed_x=DRAWER_HANDLE_CLOSED_X,
-            open_x=DRAWER_HANDLE_OPEN_X,
-            y=DRAWER_HANDLE_CLOSED_Y,
+
+        motion = DrawerHandleMotion(
+            closed_x=x,
+            open_x=open_x,
+            y=y,
             travel_z=travel_z,
             approach_z=approach_z,
             grasp_z=grasp_z,
-            ori=self.state.home_ori,
+            ori=drawer_ori,
         )
+        self.state.drawer_handle_motion = motion
+        return motion
+
+    def open_drawer_from_handle(self, motion, logger):
+        """이미 핸들 위치에 있을 때(gripper 열린 상태) 바로 파지하고 당기기.
+
+        build_motion_from_joints() 직후 호출 전용:
+        파지 → DRAWER_OPEN_JOINTS로 joint 이동 → 그리퍼 열기.
+        Cartesian IK 대신 사전 기록된 joint 목표를 사용해 안정적으로 이동.
+        """
+        logger.info("서랍 열기 1단계: 손잡이 파지")
+        self.gripper.close_gripper()
+        self.wait(GRIPPER_GRASP_WAIT_SEC)
+
+        logger.info("서랍 열기 2단계: DRAWER_OPEN_JOINTS로 이동")
+        if not self.motion.move_to_drawer_open_joints(logger):
+            logger.error("서랍 열기 joint 이동 실패")
+            return None
+
+        self.gripper.open_gripper()
+        self.wait(GRIPPER_OPEN_WAIT_SEC)
+        return motion
 
     def open_drawer(self, handle_target_or_motion, logger):
         if isinstance(handle_target_or_motion, DrawerHandleMotion):
@@ -243,7 +273,7 @@ class DrawerInteraction:
             f"x={motion.closed_x:.3f}, y={motion.y:.3f}, z={motion.approach_z:.3f}"
         )
         self.gripper.open_gripper()
-        self.wait(0.5)
+        self.wait(GRIPPER_OPEN_WAIT_SEC)
         if not self._move_handle_pose(
             motion.closed_x,
             motion.y,
@@ -267,7 +297,7 @@ class DrawerInteraction:
 
         logger.info("서랍 열기 3단계: 손잡이 파지")
         self.gripper.close_gripper()
-        self.wait(0.8)
+        self.wait(GRIPPER_GRASP_WAIT_SEC)
 
         logger.info(
             "서랍 열기 4단계: 손잡이를 당겨 서랍 열기 "
@@ -295,13 +325,13 @@ class DrawerInteraction:
             return None
 
         self.gripper.open_gripper()
-        self.wait(0.5)
+        self.wait(GRIPPER_OPEN_WAIT_SEC)
         return motion
 
     def close_drawer(self, motion, logger):
         logger.info("서랍 닫기 1단계: 열린 손잡이 상단 접근")
         self.gripper.open_gripper()
-        self.wait(0.5)
+        self.wait(GRIPPER_OPEN_WAIT_SEC)
         if not self._move_handle_pose(
             motion.open_x,
             motion.y,
@@ -325,7 +355,7 @@ class DrawerInteraction:
 
         logger.info("서랍 닫기 3단계: 손잡이 파지")
         self.gripper.close_gripper()
-        self.wait(0.8)
+        self.wait(GRIPPER_GRASP_WAIT_SEC)
 
         logger.info(
             "서랍 닫기 4단계: 손잡이를 밀어 서랍 닫기 "
@@ -343,7 +373,7 @@ class DrawerInteraction:
 
         logger.info("서랍 닫기 5단계: 손잡이를 놓고 안전 높이로 복귀")
         self.gripper.open_gripper()
-        self.wait(0.5)
+        self.wait(GRIPPER_OPEN_WAIT_SEC)
         return self._move_handle_pose(
             motion.closed_x,
             motion.y,
@@ -385,7 +415,7 @@ class DrawerInteraction:
 
         logger.info("서랍 보관 3단계: 공구 놓기")
         self.gripper.open_gripper()
-        self.wait(0.8)
+        self.wait(GRIPPER_GRASP_WAIT_SEC)
 
         logger.info("서랍 보관 4단계: 공구를 놓은 뒤 안전 높이로 복귀")
         return self.motion.plan_and_execute(
@@ -413,6 +443,26 @@ class DrawerInteraction:
             grasp_z=grasp_z,
             ori=self.state.home_ori,
         )
+
+    def _pull_handle(self, motion, logger, steps=4):
+        """서랍 당기기: steps번에 나눠 점진적으로 이동.
+
+        한 번에 목표까지 IK를 풀면 workspace 한계 초과로 실패하므로
+        작은 스텝으로 나눠 매 스텝마다 현재 상태 기준으로 IK를 풀어 이동.
+        """
+        x_start = motion.closed_x
+        x_end = motion.open_x
+        step = (x_end - x_start) / steps
+
+        for i in range(1, steps + 1):
+            x_target = x_start + step * i
+            logger.info(f"서랍 당기기 {i}/{steps}: x={x_target:.3f}")
+            if not self._move_handle_pose(
+                x_target, motion.y, motion.grasp_z, motion.ori, logger
+            ):
+                logger.error(f"서랍 당기기 {i}/{steps} 실패 (x={x_target:.3f})")
+                return False
+        return True
 
     def _move_handle_pose(self, x, y, z, ori, logger):
         return self.motion.plan_and_execute(
@@ -495,10 +545,3 @@ class DrawerInteraction:
                 return float(box.conf[0])
             except (AttributeError, IndexError, TypeError, ValueError):
                 return 0.0
-
-
-def cooperative_wait(duration_sec):
-    end_time = time.monotonic() + max(0.0, float(duration_sec))
-    while rclpy.ok() and time.monotonic() < end_time:
-        remaining = end_time - time.monotonic()
-        time.sleep(min(SEQUENCE_WAIT_POLL_SEC, max(0.0, remaining)))

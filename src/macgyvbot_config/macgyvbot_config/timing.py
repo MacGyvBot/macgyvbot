@@ -1,3 +1,6 @@
 """Shared workflow timing constants."""
 
 SEQUENCE_WAIT_POLL_SEC = 0.03
+GRIPPER_OPEN_WAIT_SEC = 0.5
+GRIPPER_GRASP_WAIT_SEC = 0.8
+HANDOFF_POLL_SEC = 0.1

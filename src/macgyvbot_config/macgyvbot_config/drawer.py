@@ -1,5 +1,7 @@
 """Drawer interaction configuration constants."""
 
+DRAWER_DETECTION_POLL_SEC = 0.2
+
 DRAWER_YOLO_MODEL_NAME = "yolov11n_drawer.pt"
 DRAWER_LABEL = "drawer"
 DRAWER_HANDLE_LABEL = "drawer_handle"
@@ -16,16 +18,3 @@ DRAWER_OPEN_DIRECTION_X = 1.0
 DRAWER_TOOL_PLACE_APPROACH_Z_OFFSET = 0.16
 DRAWER_TOOL_PLACE_Z_OFFSET = 0.04
 
-# Hardcoded drawer position for pipeline testing
-DRAWER_FIXED_X = 0.652
-DRAWER_FIXED_Y = 0.030
-DRAWER_FIXED_Z = 0.274
-
-# Hardcoded handle position — closed state
-DRAWER_HANDLE_CLOSED_X = 0.652
-DRAWER_HANDLE_CLOSED_Y = 0.030
-DRAWER_HANDLE_CLOSED_Z = 0.274
-
-# Hardcoded handle position — open state X only (Y, Z same as closed)
-# = DRAWER_HANDLE_CLOSED_X + DRAWER_PULL_DISTANCE_M (0.18) in DRAWER_OPEN_DIRECTION_X (+1.0)
-DRAWER_HANDLE_OPEN_X = 0.832

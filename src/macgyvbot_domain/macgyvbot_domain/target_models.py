@@ -18,3 +18,18 @@ class PickTarget:
     yaw_deg: Optional[float]
     reason: str = ""
     source: str = ""
+
+
+@dataclass(frozen=True)
+class DetectedTarget:
+    """Projected YOLO target in robot base coordinates."""
+
+    label: str
+    x: float
+    y: float
+    z: float
+    depth_m: float
+    pixel_u: Optional[int] = None
+    pixel_v: Optional[int] = None
+    source: str = "center"
+    yaw_deg: Optional[float] = None
