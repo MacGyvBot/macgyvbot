@@ -109,7 +109,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "grasp_point_api_model",
-                default_value="gemini-2.5-flash",
+                default_value="gemini-3-flash-preview",
             ),
             DeclareLaunchArgument("grasp_point_api_env_file", default_value=""),
             DeclareLaunchArgument("grasp_point_api_base_url", default_value=""),

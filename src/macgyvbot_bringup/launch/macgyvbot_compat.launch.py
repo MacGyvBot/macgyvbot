@@ -20,7 +20,7 @@ _PASSTHROUGH_ARGS = [
     ("llm_timeout_sec", "25.0"),
     ("parser_mode", "llm_primary"),
     ("grasp_point_mode", "vlm"),
-    ("grasp_point_api_model", "gemini-2.5-flash"),
+    ("grasp_point_api_model", "gemini-3-flash-preview"),
     ("grasp_point_api_env_file", ""),
     ("grasp_point_api_base_url", ""),
     ("grasp_point_api_timeout_sec", "30.0"),

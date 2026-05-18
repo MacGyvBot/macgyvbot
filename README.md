@@ -240,7 +240,7 @@ cp src/macgyvbot_resources/.env.example src/macgyvbot_resources/.env
 nano src/macgyvbot_resources/.env
 ros2 launch macgyvbot_bringup macgyvbot.launch.py \
   grasp_point_mode:=api \
-  grasp_point_api_model:=gemini-2.5-flash
+  grasp_point_api_model:=gemini-3-flash-preview
 ```
 
 In `src/macgyvbot_resources/.env`, fill the template like this:
@@ -314,7 +314,7 @@ ros2 run macgyvbot_command command_input_node --ros-args \
 | Argument | Default | 설명 |
 | --- | --- | --- |
 | `grasp_point_mode` | `vlm` | `vlm`, `center`, or `api` |
-| `grasp_point_api_model` | `gemini-2.5-flash` | Gemini API mode model name |
+| `grasp_point_api_model` | `gemini-3-flash-preview` | Gemini API mode model name |
 | `grasp_point_api_env_file` | `macgyvbot_resources/.env` | Local Gemini `.env` file |
 | `grasp_point_api_base_url` | Gemini API default | Override Gemini API base URL |
 | `grasp_point_api_timeout_sec` | `30.0` | API request timeout |
