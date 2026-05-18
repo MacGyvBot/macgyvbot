@@ -15,7 +15,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
 
-from macgyvbot_config.topics import CAMERA_COLOR_TOPIC
+from macgyvbot_config.topics import CAMERA_COLOR_TOPIC, HAND_GRASP_IMAGE_TOPIC
 from macgyvbot_command.ui.voice_command_window import (
     QApplication,
     QTimer,
@@ -49,8 +49,10 @@ class CommandInputNode(Node):
         self.declare_parameter('command_feedback_topic', '/command_feedback')
         self.declare_parameter('robot_status_topic', '/robot_task_status')
         self.declare_parameter('camera_status_topic', CAMERA_COLOR_TOPIC)
+        self.declare_parameter('detector_image_topic', HAND_GRASP_IMAGE_TOPIC)
         self.declare_parameter('connection_check_period_sec', 1.0)
         self.declare_parameter('camera_timeout_sec', 3.0)
+        self.declare_parameter('detector_timeout_sec', 3.0)
         self.declare_parameter(
             'robot_node_names',
             'macgyvbot_main_node,macgyvbot',
@@ -97,11 +99,13 @@ class CommandInputNode(Node):
         command_feedback_topic = self.get_parameter('command_feedback_topic').value
         robot_status_topic = self.get_parameter('robot_status_topic').value
         camera_status_topic = self.get_parameter('camera_status_topic').value
+        detector_image_topic = self.get_parameter('detector_image_topic').value
 
         self.window = None
         self._last_gui_text = ''
         self._last_target_label = ''
         self._last_camera_stamp_ns = None
+        self._last_detector_stamp_ns = None
         self._last_connection_text = ''
         self._last_robot_status_key = None
         self._robot_node_names = {
@@ -111,6 +115,9 @@ class CommandInputNode(Node):
         }
         self._camera_timeout_ns = int(
             float(self.get_parameter('camera_timeout_sec').value) * 1_000_000_000
+        )
+        self._detector_timeout_ns = int(
+            float(self.get_parameter('detector_timeout_sec').value) * 1_000_000_000
         )
 
         self._stt_pub = self.create_publisher(String, stt_text_topic, 10)
@@ -127,6 +134,12 @@ class CommandInputNode(Node):
         self.create_subscription(String, command_feedback_topic, self._feedback_cb, 10)
         self.create_subscription(String, robot_status_topic, self._robot_status_cb, 10)
         self.create_subscription(Image, camera_status_topic, self._camera_status_cb, 10)
+        self.create_subscription(
+            Image,
+            detector_image_topic,
+            self._detector_image_cb,
+            10,
+        )
         self.create_timer(
             float(self.get_parameter('connection_check_period_sec').value),
             self._update_connection_status,
@@ -386,20 +399,34 @@ class CommandInputNode(Node):
     def _camera_status_cb(self, _msg):
         self._last_camera_stamp_ns = self.get_clock().now().nanoseconds
 
+    def _detector_image_cb(self, msg):
+        self._last_detector_stamp_ns = self.get_clock().now().nanoseconds
+        if self.window is not None and hasattr(self.window, 'set_detector_image'):
+            try:
+                self.window.set_detector_image(msg)
+            except ValueError as exc:
+                self.get_logger().warn(f'detector image 표시 실패: {exc}')
+
     def _update_connection_status(self):
         if self.window is None:
             return
 
         robot_text = self._robot_connection_text()
         camera_text = self._camera_connection_text()
-        connection_text = f'{robot_text}|{camera_text}|연결됨'
+        detector_text = self._detector_connection_text()
+        connection_text = f'{robot_text}|{camera_text}|{detector_text}|연결됨'
 
         if connection_text == self._last_connection_text:
             return
 
         self._last_connection_text = connection_text
         if hasattr(self.window, 'set_connection_status'):
-            self.window.set_connection_status(robot_text, camera_text)
+            self.window.set_connection_status(
+                robot_text,
+                camera_text,
+                gui_text='연결됨',
+                detector_text=detector_text,
+            )
 
     def _robot_connection_text(self):
         node_names = set(self.get_node_names())
@@ -417,6 +444,15 @@ class CommandInputNode(Node):
         elapsed_ns = self.get_clock().now().nanoseconds - self._last_camera_stamp_ns
         if elapsed_ns <= self._camera_timeout_ns:
             return '연결됨'
+        return '미수신'
+
+    def _detector_connection_text(self):
+        if self._last_detector_stamp_ns is None:
+            return '대기 중'
+
+        elapsed_ns = self.get_clock().now().nanoseconds - self._last_detector_stamp_ns
+        if elapsed_ns <= self._detector_timeout_ns:
+            return '수신 중'
         return '미수신'
 
     def _build_rejected_message(self, reason, message):

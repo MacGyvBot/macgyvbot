@@ -41,6 +41,7 @@ def generate_launch_description():
     llm_model = LaunchConfiguration("llm_model")
     llm_timeout_sec = LaunchConfiguration("llm_timeout_sec")
     parser_mode = LaunchConfiguration("parser_mode")
+    detector_image_topic = LaunchConfiguration("detector_image_topic")
     sam_enabled = LaunchConfiguration("sam_enabled")
     sam_checkpoint = LaunchConfiguration("sam_checkpoint")
 
@@ -96,6 +97,11 @@ def generate_launch_description():
             DeclareLaunchArgument("llm_model", default_value="gemma3:1b"),
             DeclareLaunchArgument("llm_timeout_sec", default_value="25.0"),
             DeclareLaunchArgument("parser_mode", default_value="llm_primary"),
+            DeclareLaunchArgument(
+                "detector_image_topic",
+                default_value=HAND_GRASP_IMAGE_TOPIC,
+                description="Annotated detector image topic shown in the GUI.",
+            ),
             DeclareLaunchArgument(
                 "grasp_point_mode",
                 default_value="vlm",
@@ -195,6 +201,7 @@ def generate_launch_description():
                         "use_local_parser": True,
                         "use_llm_fallback": True,
                         "parser_mode": parser_mode,
+                        "detector_image_topic": detector_image_topic,
                         "timeout_sec": llm_timeout_sec,
                         "min_confidence": 0.55,
                     },
