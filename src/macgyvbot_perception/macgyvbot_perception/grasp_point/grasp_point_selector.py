@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from macgyvbot_config.vlm import (
+    GRASP_POINT_MODE_API,
     GRASP_POINT_MODE_CENTER,
     GRASP_POINT_MODE_VLM,
 )
@@ -11,10 +12,23 @@ from macgyvbot_config.vlm import (
 class GraspPointSelector:
     """Select an image-space grasp point from detector output."""
 
-    def __init__(self, mode, logger):
+    def __init__(
+        self,
+        mode,
+        logger,
+        api_model="",
+        api_key_env="",
+        api_base_url="",
+        api_timeout_sec=30.0,
+    ):
         self.mode = mode
         self.logger = logger
+        self.api_model = api_model
+        self.api_key_env = api_key_env
+        self.api_base_url = api_base_url
+        self.api_timeout_sec = api_timeout_sec
         self.vlm_grasp_point_selector = None
+        self.api_grasp_point_selector = None
 
     def select(
         self,
@@ -39,7 +53,25 @@ class GraspPointSelector:
             if vlm_pixel is not None:
                 return vlm_pixel
 
-            self.logger.warn("VLM grasp point 실패. box 중심점으로 대체합니다.")
+            self.logger.warn(
+                "VLM grasp point failed. Falling back to bbox center."
+            )
+
+        if self.mode == GRASP_POINT_MODE_API:
+            api_pixel = self._select_api_grasp_pixel(
+                bbox,
+                label,
+                color_image,
+                depth_image,
+                intrinsics,
+                target_label,
+            )
+            if api_pixel is not None:
+                return api_pixel
+
+            self.logger.warn(
+                "API VLM grasp point failed. Falling back to bbox center."
+            )
 
         return self._select_bbox_center_pixel(bbox)
 
@@ -64,7 +96,7 @@ class GraspPointSelector:
                 VLMGraspPointSelector,
             )
         except ImportError as exc:
-            self.logger.warn(f"VLM grasp 모듈 import 실패: {exc}")
+            self.logger.warn(f"VLM grasp module import failed: {exc}")
             return None
 
         if self.vlm_grasp_point_selector is None:
@@ -79,14 +111,53 @@ class GraspPointSelector:
             target_label,
         )
 
+    def _select_api_grasp_pixel(
+        self,
+        bbox,
+        label,
+        color_image,
+        depth_image,
+        intrinsics,
+        target_label,
+    ):
+        try:
+            from macgyvbot_perception.grasp_point.api_vlm_grasp_point_selector import (
+                APIVLMGraspPointSelector,
+            )
+        except ImportError as exc:
+            self.logger.warn(f"API VLM grasp module import failed: {exc}")
+            return None
+
+        if self.api_grasp_point_selector is None:
+            self.api_grasp_point_selector = APIVLMGraspPointSelector(
+                self.logger,
+                model=self.api_model or None,
+                api_key_env=self.api_key_env or None,
+                base_url=self.api_base_url or None,
+                timeout_sec=self.api_timeout_sec,
+            )
+
+        return self.api_grasp_point_selector.select_grasp_pixel(
+            bbox,
+            label,
+            color_image,
+            depth_image,
+            intrinsics,
+            target_label,
+        )
+
 
 def normalize_grasp_point_mode(mode, logger):
     """Return a supported grasp point mode, falling back to center."""
-    if mode in (GRASP_POINT_MODE_CENTER, GRASP_POINT_MODE_VLM):
+    if mode in (
+        GRASP_POINT_MODE_CENTER,
+        GRASP_POINT_MODE_VLM,
+        GRASP_POINT_MODE_API,
+    ):
         return mode
 
     logger.warn(
-        f"알 수 없는 grasp_point_mode '{mode}'. "
-        f"'{GRASP_POINT_MODE_CENTER}'로 대체합니다."
+        f"Unknown grasp_point_mode '{mode}'. "
+        f"Falling back to '{GRASP_POINT_MODE_CENTER}'."
     )
     return GRASP_POINT_MODE_CENTER

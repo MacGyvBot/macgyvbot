@@ -91,6 +91,7 @@ class MacGyvBotNode(Node):
         self.grasp_point_selector = GraspPointSelector(
             self.grasp_point_mode,
             self.get_logger(),
+            **self._read_grasp_point_api_config(),
         )
 
         calib_file = self._resolve_calibration_file("T_gripper2camera.npy")
@@ -199,6 +200,26 @@ class MacGyvBotNode(Node):
             .string_value
             .strip()
         ) or YOLO_MODEL_NAME
+
+    def _read_grasp_point_api_config(self):
+        self.declare_parameter("grasp_point_api_model", "gemini-2.5-flash")
+        self.declare_parameter("grasp_point_api_key_env", "")
+        self.declare_parameter("grasp_point_api_base_url", "")
+        self.declare_parameter("grasp_point_api_timeout_sec", 30.0)
+        return {
+            "api_model": str(
+                self.get_parameter("grasp_point_api_model").value
+            ).strip(),
+            "api_key_env": str(
+                self.get_parameter("grasp_point_api_key_env").value
+            ).strip(),
+            "api_base_url": str(
+                self.get_parameter("grasp_point_api_base_url").value
+            ).strip(),
+            "api_timeout_sec": float(
+                self.get_parameter("grasp_point_api_timeout_sec").value
+            ),
+        }
 
     def _read_force_torque_topic(self):
         self.declare_parameter("force_torque_topic", FORCE_TORQUE_TOPIC)

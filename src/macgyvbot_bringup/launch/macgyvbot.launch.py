@@ -43,6 +43,12 @@ def generate_launch_description():
     parser_mode = LaunchConfiguration("parser_mode")
     sam_enabled = LaunchConfiguration("sam_enabled")
     sam_checkpoint = LaunchConfiguration("sam_checkpoint")
+    grasp_point_api_model = LaunchConfiguration("grasp_point_api_model")
+    grasp_point_api_key_env = LaunchConfiguration("grasp_point_api_key_env")
+    grasp_point_api_base_url = LaunchConfiguration("grasp_point_api_base_url")
+    grasp_point_api_timeout_sec = LaunchConfiguration(
+        "grasp_point_api_timeout_sec"
+    )
 
     moveit_config = (
         MoveItConfigsBuilder(
@@ -99,7 +105,17 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "grasp_point_mode",
                 default_value="vlm",
-                description="Grasp point selection mode: center or vlm",
+                description="Grasp point selection mode: center, vlm, or api",
+            ),
+            DeclareLaunchArgument(
+                "grasp_point_api_model",
+                default_value="gemini-2.5-flash",
+            ),
+            DeclareLaunchArgument("grasp_point_api_key_env", default_value=""),
+            DeclareLaunchArgument("grasp_point_api_base_url", default_value=""),
+            DeclareLaunchArgument(
+                "grasp_point_api_timeout_sec",
+                default_value="30.0",
             ),
             DeclareLaunchArgument(
                 "force_torque_topic",
@@ -129,6 +145,10 @@ def generate_launch_description():
                         "grasp_point_mode": LaunchConfiguration(
                             "grasp_point_mode"
                         ),
+                        "grasp_point_api_model": grasp_point_api_model,
+                        "grasp_point_api_key_env": grasp_point_api_key_env,
+                        "grasp_point_api_base_url": grasp_point_api_base_url,
+                        "grasp_point_api_timeout_sec": grasp_point_api_timeout_sec,
                         "force_torque_topic": LaunchConfiguration(
                             "force_torque_topic"
                         ),

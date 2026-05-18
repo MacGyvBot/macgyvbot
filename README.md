@@ -233,6 +233,15 @@ VLM 없이 bbox center mode:
 ros2 launch macgyvbot_bringup macgyvbot.launch.py grasp_point_mode:=center
 ```
 
+Gemini API grasp point mode:
+
+```bash
+export GEMINI_API_KEY="..."
+ros2 launch macgyvbot_bringup macgyvbot.launch.py \
+  grasp_point_mode:=api \
+  grasp_point_api_model:=gemini-2.5-flash
+```
+
 SAM을 끄고 bbox lock fallback만 사용:
 
 ```bash
@@ -294,7 +303,11 @@ ros2 run macgyvbot_command command_input_node --ros-args \
 
 | Argument | Default | 설명 |
 | --- | --- | --- |
-| `grasp_point_mode` | `vlm` | `vlm` 또는 `center` |
+| `grasp_point_mode` | `vlm` | `vlm`, `center`, or `api` |
+| `grasp_point_api_model` | `gemini-2.5-flash` | Gemini API mode model name |
+| `grasp_point_api_key_env` | `GEMINI_API_KEY` | Gemini API key env var |
+| `grasp_point_api_base_url` | Gemini API default | Override Gemini API base URL |
+| `grasp_point_api_timeout_sec` | `30.0` | API request timeout |
 | `sam_enabled` | `true` | SAM mask tracking/lock 사용 여부 |
 | `yolo_model` | `macgyvbot_resources/weights/yolov11_best.pt` | YOLO 모델 경로 |
 | `grasp_model` | `macgyvbot_resources/weights/hand_grasp_model.pkl` | ML hand grasp classifier |
