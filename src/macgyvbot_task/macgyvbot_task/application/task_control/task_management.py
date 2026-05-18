@@ -41,8 +41,8 @@ class TaskManagement:
         self.stop_event.set()
         self.pause_event.clear()
         self.resume_event.clear()
-        self._cancel_motion("stop")
         self._clear_task_queue()
+        self._cancel_motion("stop")
         self.state._publish_robot_status(
             "cancelled",
             message="사용자 요청으로 작업을 중단합니다.",
@@ -57,13 +57,13 @@ class TaskManagement:
 
         self.pause_event.set()
         self.resume_event.clear()
-        self._cancel_motion("pause")
         self.state._publish_robot_status(
             "paused",
             message="사용자 요청으로 작업을 일시정지합니다.",
             reason=reason or "pause_requested",
             command=self.state.current_command,
         )
+        self._cancel_motion("pause")
         return True
 
     def _handle_resume(self, reason):
