@@ -1,9 +1,10 @@
 # MacGyvBot
 
 MacGyvBot은 음성 또는 GUI 명령으로 공구를 가져오고 반납하는 ROS 2 기반
-로봇팔 어시스턴트입니다. RealSense 카메라, YOLO/VLM perception, MoveItPy 기반
-Doosan M0609 제어, OnRobot RG2 그리퍼, hand-tool grasp detection, GUI/STT/TTS
-명령 입력을 하나의 데모 파이프라인으로 묶습니다.
+로봇팔 어시스턴트입니다. RealSense 카메라, YOLO/VLM perception, MoveItPy
+planning, FollowJointTrajectory 기반 Doosan M0609 실행 제어, OnRobot RG2
+그리퍼, hand-tool grasp detection, GUI/STT/TTS 명령 입력을 하나의 데모
+파이프라인으로 묶습니다.
 
 현재 저장소는 `src/` 아래의 다중 ROS 패키지 구조를 기준으로 실행합니다.
 저장소 루트는 colcon workspace root이며, runtime 패키지는 모두 `src/` 아래에
@@ -17,6 +18,10 @@ Doosan M0609 제어, OnRobot RG2 그리퍼, hand-tool grasp detection, GUI/STT/T
 - 기본 hand grasp mask lock은 `sam_enabled:=true`입니다.
 - 사용자 handoff grasp는 ML grasp, depth contact, locked mask contact가 모두
   통과해야 인정합니다.
+- pick/return은 `TaskStep` queue로 실행되며, `stop/pause/resume`은
+  `/robot_task_control`을 통해 처리합니다.
+- motion cancel은 main node가 현재 보유한
+  `/dsr_moveit_controller/follow_joint_trajectory` goal handle에 직접 요청합니다.
 - runtime topic payload는 현재 JSON over `std_msgs/String`입니다.
   `macgyvbot_interfaces`의 typed messages는 점진적 마이그레이션 대상입니다.
 - 모델 파일은 Git에 포함하지 않고 `macgyvbot_resources` 아래에 둡니다.
@@ -40,10 +45,11 @@ src/
 주요 역할:
 
 - `macgyvbot_bringup`: `macgyvbot.launch.py` 기본 실행 entrypoint
-- `macgyvbot_task`: `macgyvbot` executable과 pick/return orchestration
+- `macgyvbot_task`: `macgyvbot` executable, pick/return orchestration, task queue
 - `macgyvbot_command`: GUI, STT, TTS, command parser, `/tool_command` 발행
 - `macgyvbot_perception`: object detection, grasp point selection, hand grasp detection
-- `macgyvbot_manipulation`: robot motion, gripper, force sensing adapter
+- `macgyvbot_manipulation`: MoveIt planning adapter, trajectory action execution,
+  gripper, force sensing adapter
 - `macgyvbot_resources`: calibration, YOLO, VLM, SAM, `.pkl` 모델 설치 경로
 
 ## Pipeline
@@ -83,11 +89,17 @@ Pick flow 요약:
 2. task node가 target tool을 찾고 YOLO bbox를 선택합니다.
 3. 기본 `vlm` mode에서 VLM이 grasp point/yaw를 선택하고 depth로 base pose를
    계산합니다.
-4. MoveItPy로 접근, 하강, gripper close를 수행합니다.
+4. MoveItPy로 trajectory를 plan하고 FollowJointTrajectory action으로 접근,
+   하강 motion을 실행한 뒤 gripper close를 수행합니다.
 5. gripper grasp 성공 후 `status=grasp_success`를 발행합니다.
 6. hand grasp node가 최신 SAM mask 또는 bbox ROI를 lock하고 ack를 발행합니다.
 7. task node는 mask lock ack 이후에만 lift/handoff 이동을 계속합니다.
 8. 사용자가 공구를 잡으면 gripper를 열고 Home으로 복귀합니다.
+
+Pick은 내부적으로 `pick/open_gripper`, `pick/travel_z`, `pick/xy_move`,
+`pick/approach`, `pick/grasp_tool`, `pick/lift`, `pick/move_to_handoff`,
+`pick/wait_human_grasp`, `pick/release_to_human`, `pick/home_after_handoff` 같은
+`TaskStep`으로 분리되어 queue에서 하나씩 실행됩니다.
 
 Return flow 요약:
 
@@ -96,6 +108,39 @@ Return flow 요약:
 3. 손/공구 위치로 이동해 gripper close 후 grasp 성공을 확인합니다.
 4. Home joint pose로 이동하고 force feedback으로 Z 하강을 멈춘 뒤 공구를 놓습니다.
 5. Home으로 복귀하고 완료 상태를 발행합니다.
+
+Return도 `return/prepare`, `return/receive_tool`, `return/place_home`,
+`return/done` step queue로 실행되며 pick과 같은 stop/pause/resume 제어 계약을
+따릅니다.
+
+Task control 요약:
+
+```text
+stop  -> current FollowJointTrajectory goal cancel
+         pending queue clear
+         worker 종료
+
+pause -> current FollowJointTrajectory goal cancel
+         pending queue 유지
+         실행 중이던 step이 pause로 실패하면 queue front에 재삽입
+
+resume -> pause_event clear
+          queue front부터 재실행
+```
+
+task control 명령은 JSON 또는 plain string으로 `/robot_task_control`에 보낼 수
+있습니다.
+
+```bash
+ros2 topic pub --once /robot_task_control std_msgs/msg/String \
+  "{data: '{\"action\":\"stop\",\"reason\":\"operator_request\"}'}"
+
+ros2 topic pub --once /robot_task_control std_msgs/msg/String \
+  "{data: '{\"action\":\"pause\",\"reason\":\"operator_request\"}'}"
+
+ros2 topic pub --once /robot_task_control std_msgs/msg/String \
+  "{data: '{\"action\":\"resume\",\"reason\":\"operator_request\"}'}"
+```
 
 ## 실행 환경
 

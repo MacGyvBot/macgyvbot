@@ -10,7 +10,6 @@ class TaskManagement:
         self,
         state,
         coordinator,
-        motion_cancel_client,
         stop_event,
         pause_event,
         resume_event,
@@ -18,7 +17,6 @@ class TaskManagement:
     ):
         self.state = state
         self.coordinator = coordinator
-        self.motion_cancel_client = motion_cancel_client
         self.stop_event = stop_event
         self.pause_event = pause_event
         self.resume_event = resume_event
@@ -42,7 +40,6 @@ class TaskManagement:
         self.pause_event.clear()
         self.resume_event.clear()
         self._clear_task_queue()
-        self._cancel_motion("stop")
         self.state._publish_robot_status(
             "cancelled",
             message="사용자 요청으로 작업을 중단합니다.",
@@ -63,7 +60,6 @@ class TaskManagement:
             reason=reason or "pause_requested",
             command=self.state.current_command,
         )
-        self._cancel_motion("pause")
         return True
 
     def _handle_resume(self, reason):
@@ -76,12 +72,6 @@ class TaskManagement:
             command=self.state.current_command,
         )
         return True
-
-    def _cancel_motion(self, action):
-        if self.motion_cancel_client is None:
-            self.logger().warn(f"{action}: motion cancel client가 없습니다.")
-            return False
-        return self.motion_cancel_client.cancel_all_goals(reason=action)
 
     def _clear_task_queue(self):
         self.coordinator.clear_queue()

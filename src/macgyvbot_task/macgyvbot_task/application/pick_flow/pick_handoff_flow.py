@@ -176,6 +176,7 @@ class PickHandoffFlow:
             logger,
             x_offset_m=HANDOVER_HAND_X_OFFSET_M,
             z_offset_m=HANDOVER_HAND_Z_OFFSET_M,
+            should_interrupt=self.interrupted,
         )
         if self.interrupted():
             logger.info("사용자 손 위치 이동 후 stop/pause 요청으로 handoff를 중단합니다.")

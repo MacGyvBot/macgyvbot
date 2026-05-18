@@ -233,6 +233,7 @@ def move_to_candidate_with_offset(
     logger,
     x_offset_m: float,
     z_offset_m: float,
+    should_interrupt=None,
 ) -> tuple[bool, SearchStartPose, str]:
     """
     Move to the final handover pose derived from a candidate.
@@ -269,6 +270,10 @@ def move_to_candidate_with_offset(
 
     last_pose = SearchStartPose(*attempts[0])
     for attempt_index, (target_x, target_y, target_z) in enumerate(attempts, start=1):
+        if should_interrupt is not None and should_interrupt():
+            logger.info("stop/pause 요청으로 사용자 손 위치 이동을 중단합니다.")
+            return False, last_pose, "interrupted"
+
         logger.info(
             "사용자 손 위치 전달 플래닝 시도: "
             f"{attempt_index}/{len(attempts)}, "
@@ -286,6 +291,10 @@ def move_to_candidate_with_offset(
         )
         if ok:
             return True, last_pose, ""
+
+        if should_interrupt is not None and should_interrupt():
+            logger.info("사용자 손 위치 이동 중 stop/pause 요청을 확인했습니다.")
+            return False, last_pose, "interrupted"
 
         if attempt_index < len(attempts):
             logger.warn(

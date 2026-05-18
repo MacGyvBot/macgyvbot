@@ -4,7 +4,7 @@ from __future__ import annotations
 
 
 class ToolCommandController:
-    """Route parsed tool commands to pick, return, release, or stop actions."""
+    """Route parsed tool commands to pick, return, or release actions."""
 
     def __init__(
         self,
@@ -80,10 +80,6 @@ class ToolCommandController:
             self._handle_release(tool_name, action, command)
             return
 
-        if action == "stop":
-            self._handle_stop(tool_name, action, command)
-            return
-
         self.logger.warn(f"지원하지 않는 action: {action}")
         self.status.publish(
             "rejected",
@@ -114,30 +110,5 @@ class ToolCommandController:
             tool_name=tool_name,
             action=action,
             message="그리퍼를 열었습니다.",
-            command=command,
-        )
-
-    def _handle_stop(self, tool_name, action, command):
-        self.logger.warn("stop 명령 수신")
-        if self.is_busy():
-            self.status.publish(
-                "busy",
-                tool_name=tool_name,
-                action=action,
-                message=(
-                    "이미 실행 중인 MoveIt 동작은 안전 중단을 지원하지 않아 "
-                    "완료를 기다립니다."
-                ),
-                reason="active_motion_not_interruptible",
-                command=command,
-            )
-            return
-
-        self.clear_target()
-        self.status.publish(
-            "cancelled",
-            tool_name=tool_name,
-            action=action,
-            message="대기 중인 pick 요청을 취소했습니다.",
             command=command,
         )

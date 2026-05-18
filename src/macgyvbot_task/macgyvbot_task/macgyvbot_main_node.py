@@ -33,7 +33,6 @@ from macgyvbot_config.vlm import DEFAULT_GRASP_POINT_MODE
 from macgyvbot_manipulation.moveit_controller import (
     MoveItController,
 )
-from macgyvbot_manipulation.motion_cancel_client import MotionCancelClient
 from macgyvbot_manipulation.onrobot_gripper import RG
 from macgyvbot_manipulation.robot_pose import get_ee_matrix
 from macgyvbot_perception.depth_projection import DepthProjector
@@ -180,7 +179,6 @@ class MacGyvBotNode(Node):
             self.state,
             control_events=control_events,
         )
-        self.motion_cancel_client = MotionCancelClient(self)
         self.task_coordinator = TaskControlCoordinator(
             self.pick_runner,
             self.return_runner,
@@ -193,7 +191,6 @@ class MacGyvBotNode(Node):
         self.task_management = TaskManagement(
             self.state,
             self.task_coordinator,
-            self.motion_cancel_client,
             self.stop_req,
             self.pause_req,
             self.resume_req,

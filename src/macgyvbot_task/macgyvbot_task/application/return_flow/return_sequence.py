@@ -41,6 +41,7 @@ class ReturnSequenceRunner:
             state,
             self.reporter,
             self._cooperative_wait,
+            interrupted=self._interrupted,
         )
         self.placement = ReturnHomePlacementFlow(
             robot,
@@ -49,6 +50,7 @@ class ReturnSequenceRunner:
             state,
             self.reporter,
             self._cooperative_wait,
+            interrupted=self._interrupted,
         )
 
     def build_steps(self, command):
@@ -151,6 +153,10 @@ class ReturnSequenceRunner:
                 reason=reason,
             )
             return True
+
+        if self._interrupted():
+            logger.info("실패 후 Home 복귀 중 stop/pause 요청으로 중단합니다.")
+            return False
 
         self.reporter.publish(
             "failed",
