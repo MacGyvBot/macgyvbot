@@ -121,15 +121,15 @@ class GraspPointSelector:
         target_label,
     ):
         try:
-            from macgyvbot_perception.grasp_point.api_vlm_grasp_point_selector import (
-                APIVLMGraspPointSelector,
+            from macgyvbot_perception.grasp_point.api_grasp_point_selector import (
+                APIGraspPointSelector,
             )
         except ImportError as exc:
-            self.logger.warn(f"API VLM grasp 모듈 import 실패: {exc}")
+            self.logger.warn(f"API grasp 모듈 import 실패: {exc}")
             return None
 
         if self.api_grasp_point_selector is None:
-            self.api_grasp_point_selector = APIVLMGraspPointSelector(
+            self.api_grasp_point_selector = APIGraspPointSelector(
                 self.logger,
                 model=self.api_model or None,
                 env_file=self.api_env_file or None,

@@ -1,27 +1,22 @@
-"""Gemini API-backed VLM grasp point selection."""
+"""Gemini API-based grasp point selection."""
 
 from __future__ import annotations
 
 import base64
 import io
 import json
+import math
 import os
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from urllib import error, request
 
 import cv2
 from PIL import Image
 
-from macgyvbot_config.vlm import (
-    GRASP_POINT_MODE_API,
-    VLM_GRASP_GRID_SIZES,
-)
-from macgyvbot_perception.grasp_point.vlm_grasp_point_selector import (
-    DEFAULT_MAX_IMAGE_SIZE,
-    VLMGraspPointSelector,
-    VLMModel,
-    VLMResult,
-)
+from macgyvbot_config.vlm import GRASP_POINT_MODE_API
+from macgyvbot_perception.grasp_point.vlm_grasp_point_selector import VLMModel
 
 try:
     from ament_index_python.packages import get_package_share_directory
@@ -32,11 +27,23 @@ except ImportError:
 DEFAULT_GEMINI_MODEL = "gemini-3-flash-preview"
 DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 DEFAULT_ENV_FILENAME = ".env"
+DEFAULT_MAX_IMAGE_SIZE = 640
 GEMINI_API_KEY_NAME = "GEMINI_API_KEY"
 
 
-class APIVLMGraspPointSelector:
-    """Select grasp pixels using the Gemini vision API."""
+@dataclass(frozen=True)
+class APIGraspResult:
+    """A single API-selected grasp pose in crop-image coordinates."""
+
+    point: tuple[float, float]
+    orientation_rpy_deg: tuple[float, float, float]
+    confidence: float | None
+    reason: str
+    raw_text: str
+
+
+class APIGraspPointSelector:
+    """Select grasp pixels using one Gemini API prompt."""
 
     def __init__(
         self,
@@ -47,7 +54,7 @@ class APIVLMGraspPointSelector:
         timeout_sec: float = 30.0,
     ):
         self.logger = logger
-        self.model = GeminiVLMModel(
+        self.client = GeminiGraspAPIClient(
             model_id=model,
             env_file=env_file,
             base_url=base_url,
@@ -63,13 +70,10 @@ class APIVLMGraspPointSelector:
         intrinsics,
         target_label,
     ):
-        x1, y1, x2, y2 = VLMGraspPointSelector.clamp_bbox_to_image(
-            bbox,
-            color_image,
-        )
+        x1, y1, x2, y2 = self._clamp_bbox_to_image(bbox, color_image)
 
         if x2 <= x1 or y2 <= y1:
-            self.logger.warn("Gemini VLM crop bbox가 비어 있습니다.")
+            self.logger.warn("API grasp crop bbox가 비어 있습니다.")
             return None
 
         crop_bgr = color_image[y1:y2, x1:x2]
@@ -77,14 +81,13 @@ class APIVLMGraspPointSelector:
         crop_image = Image.fromarray(crop_rgb)
 
         try:
-            result = self.model.select_grasp_region(
+            result = self.client.select_grasp_pose(
                 crop_image,
                 object_label=label,
                 user_request=target_label,
-                grid_sizes=VLM_GRASP_GRID_SIZES,
             )
         except Exception as exc:
-            self.logger.warn(f"Gemini VLM grasp point 추론 실패: {exc}")
+            self.logger.warn(f"API grasp point 추론 실패: {exc}")
             return None
 
         u = x1 + int(round(result.point[0]))
@@ -101,61 +104,128 @@ class APIVLMGraspPointSelector:
             source = f"{GRASP_POINT_MODE_API}+depth"
 
         self.logger.info(
-            f"Gemini VLM grasp point 선택: pixel=({u}, {v}), "
-            f"angle={result.angle_deg:.1f}deg, "
-            f"rpy_deg={result.orientation_rpy_deg}, source={source}"
+            f"API grasp point 선택: pixel=({u}, {v}), "
+            f"rpy_deg={result.orientation_rpy_deg}, "
+            f"confidence={result.confidence}, source={source}"
         )
 
         return u, v, source, result.orientation_rpy_deg
 
+    @staticmethod
+    def _clamp_bbox_to_image(bbox, image):
+        height, width = image.shape[:2]
+        x1 = max(0, min(width - 1, int(math.floor(bbox[0]))))
+        y1 = max(0, min(height - 1, int(math.floor(bbox[1]))))
+        x2 = max(0, min(width, int(math.ceil(bbox[2]))))
+        y2 = max(0, min(height, int(math.ceil(bbox[3]))))
+        return x1, y1, x2, y2
 
-class GeminiVLMModel(VLMModel):
-    """Gemini implementation of the VLMModel ask() interface."""
+
+class GeminiGraspAPIClient:
+    """Small Gemini client dedicated to one-shot grasp pose prediction."""
 
     def __init__(
         self,
         model_id: str | None = None,
         max_image_size: int = DEFAULT_MAX_IMAGE_SIZE,
-        max_new_tokens: int = 256,
+        max_output_tokens: int = 256,
         timeout_sec: float = 30.0,
         env_file: str | None = None,
         base_url: str | None = None,
         temperature: float = 0.0,
     ):
         self.model_id = model_id or DEFAULT_GEMINI_MODEL
-        self.max_image_size = max_image_size
-        self.max_new_tokens = max_new_tokens
+        self.max_image_size = int(max_image_size)
+        self.max_output_tokens = int(max_output_tokens)
         self.timeout_sec = float(timeout_sec)
         self.env_file = env_file or self._default_env_file()
         self.base_url = base_url or DEFAULT_GEMINI_BASE_URL
         self.temperature = float(temperature)
 
-    def load(self):
-        if not self._api_key():
+    def select_grasp_pose(
+        self,
+        image: Image.Image,
+        object_label: str,
+        user_request: str | None = None,
+    ) -> APIGraspResult:
+        original_width, original_height = image.size
+        work_image = self._prepare_image(image)
+        work_width, work_height = work_image.size
+        prompt = self._build_grasp_prompt(
+            object_label=object_label,
+            user_request=user_request,
+            image_size=work_image.size,
+        )
+
+        text = self._ask_gemini(work_image, prompt)
+        data = self._extract_json(text)
+        x_px = self._as_float(data.get("x_px"))
+        y_px = self._as_float(data.get("y_px"))
+        roll = self._as_float(data.get("roll_deg"), default=0.0)
+        pitch = self._as_float(data.get("pitch_deg"), default=0.0)
+        yaw = self._as_float(data.get("yaw_deg"), default=0.0)
+
+        if x_px is None or y_px is None:
+            raise RuntimeError(f"API 응답에 grasp pixel이 없습니다: {text}")
+
+        x_px = min(max(float(x_px), 0.0), float(work_width - 1))
+        y_px = min(max(float(y_px), 0.0), float(work_height - 1))
+        scale_x = original_width / float(work_width)
+        scale_y = original_height / float(work_height)
+
+        return APIGraspResult(
+            point=(x_px * scale_x, y_px * scale_y),
+            orientation_rpy_deg=(
+                self._normalize_angle_deg(roll),
+                self._normalize_angle_deg(pitch),
+                self._normalize_angle_deg(yaw),
+            ),
+            confidence=self._as_float(data.get("confidence")),
+            reason=str(data.get("reason", "")),
+            raw_text=text,
+        )
+
+    @staticmethod
+    def _build_grasp_prompt(
+        object_label: str,
+        user_request: str | None,
+        image_size: tuple[int, int],
+    ) -> str:
+        width, height = image_size
+        request_text = user_request or "Pick up the object in a natural way."
+        return (
+            "You are selecting a grasp pose for a robot with a two-finger "
+            "parallel gripper.\n"
+            "The image is a crop of one detected object. Choose one precise "
+            "pixel inside the image as the grasp center and estimate the "
+            "end-effector orientation.\n\n"
+            "Return strict JSON only. Do not return markdown or code fences.\n"
+            "Required keys: x_px, y_px, roll_deg, pitch_deg, yaw_deg, "
+            "confidence, reason.\n"
+            f"Image size: width={width}, height={height}.\n"
+            "Constraints:\n"
+            f"- x_px must be a number in [0, {width - 1}]\n"
+            f"- y_px must be a number in [0, {height - 1}]\n"
+            "- roll_deg, pitch_deg, yaw_deg must be degrees in [-180, 180]\n"
+            "- Prefer sturdy, safe, functional grasp regions such as handles "
+            "or thick bodies\n"
+            "- Avoid blades, sharp tips, holes, fragile parts, slippery ends, "
+            "and task-critical surfaces\n"
+            "- If roll or pitch is uncertain, use 0.0, but still estimate "
+            "yaw_deg\n\n"
+            f"Object: {object_label}\n"
+            f"Robot task: {request_text}\n"
+        )
+
+    def _ask_gemini(self, image: Image.Image, prompt: str) -> str:
+        api_key = self._api_key()
+        if not api_key:
             raise RuntimeError(
                 "Gemini API key를 찾을 수 없습니다. "
                 f"{self.env_file} 파일에 {GEMINI_API_KEY_NAME}를 설정하세요."
             )
 
-    def get_runtime_info(self):
-        return {
-            "provider": "gemini",
-            "model": self.model_id,
-            "base_url": self.base_url,
-            "env_file": self.env_file,
-        }
-
-    def unload(self):
-        return None
-
-    def ask(self, image: Image.Image, prompt: str) -> VLMResult:
-        self.load()
-        image = self._prepare_image(image)
         image_b64 = self._encode_jpeg_base64(image)
-        text = self._ask_gemini(image_b64, prompt)
-        return VLMResult(text=text, data=self._try_parse_json(text))
-
-    def _ask_gemini(self, image_b64: str, prompt: str) -> str:
         base_url = self.base_url.rstrip("/")
         url = f"{base_url}/models/{self.model_id}:generateContent"
         payload = {
@@ -173,7 +243,7 @@ class GeminiVLMModel(VLMModel):
                 }
             ],
             "generationConfig": {
-                "maxOutputTokens": self.max_new_tokens,
+                "maxOutputTokens": self.max_output_tokens,
                 "temperature": self.temperature,
             },
         }
@@ -181,7 +251,7 @@ class GeminiVLMModel(VLMModel):
             url,
             payload,
             {
-                "x-goog-api-key": self._api_key(),
+                "x-goog-api-key": api_key,
                 "Content-Type": "application/json",
             },
         )
@@ -274,6 +344,18 @@ class GeminiVLMModel(VLMModel):
 
         return str(current.parents[0] / DEFAULT_ENV_FILENAME)
 
+    def _prepare_image(self, image: Image.Image) -> Image.Image:
+        image = image.convert("RGB")
+        width, height = image.size
+        longest = max(width, height)
+
+        if longest <= self.max_image_size:
+            return image
+
+        scale = self.max_image_size / float(longest)
+        new_size = (int(width * scale), int(height * scale))
+        return image.resize(new_size, Image.Resampling.LANCZOS)
+
     @staticmethod
     def _encode_jpeg_base64(image: Image.Image) -> str:
         buffer = io.BytesIO()
@@ -293,3 +375,40 @@ class GeminiVLMModel(VLMModel):
         if not text:
             raise RuntimeError(f"Gemini 응답에 text가 없습니다: {data}")
         return text
+
+    @staticmethod
+    def _extract_json(text: str) -> dict[str, Any]:
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            start = text.find("{")
+            end = text.rfind("}")
+            if start == -1 or end == -1 or end <= start:
+                raise RuntimeError(f"API 응답 JSON 파싱 실패: {text}") from None
+            try:
+                data = json.loads(text[start : end + 1])
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(f"API 응답 JSON 파싱 실패: {text}") from exc
+
+        if not isinstance(data, dict):
+            raise RuntimeError(f"API 응답 JSON object가 아닙니다: {text}")
+        return data
+
+    @staticmethod
+    def _as_float(value, default=None) -> float | None:
+        if value is None:
+            return default
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _normalize_angle_deg(value: float) -> float:
+        if value is None or not math.isfinite(value):
+            return 0.0
+        while value > 180.0:
+            value -= 360.0
+        while value < -180.0:
+            value += 360.0
+        return float(value)
