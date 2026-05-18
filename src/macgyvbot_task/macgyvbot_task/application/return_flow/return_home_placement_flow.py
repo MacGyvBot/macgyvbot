@@ -17,7 +17,7 @@ class ReturnHomePlacementFlow:
         state,
         reporter,
         wait_fn,
-        drop_monitor=None,
+        tool_drop=None,
     ):
         self.robot = robot
         self.motion = motion_controller
@@ -25,7 +25,7 @@ class ReturnHomePlacementFlow:
         self.state = state
         self.reporter = reporter
         self.wait_fn = wait_fn
-        self.drop_monitor = drop_monitor
+        self.tool_drop = tool_drop
         self.force_detector = ForceReactionDetector(
             motion_controller,
             state,
@@ -81,8 +81,8 @@ class ReturnHomePlacementFlow:
             return False
 
         logger.info(f"반납 4단계: {tool_name} Home 위치에 놓기")
-        if self.drop_monitor is not None:
-            self.drop_monitor.stop("return_home_release")
+        if self.tool_drop is not None:
+            self.tool_drop.stop("return_home_release")
         self.gripper.open_gripper()
         self.wait_fn(0.8)
 

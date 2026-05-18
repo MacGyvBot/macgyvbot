@@ -1,4 +1,4 @@
-"""Application-level coordination for tool drop monitoring and reporting."""
+"""Coordinate tool drop monitoring with task status reporting."""
 
 from __future__ import annotations
 
