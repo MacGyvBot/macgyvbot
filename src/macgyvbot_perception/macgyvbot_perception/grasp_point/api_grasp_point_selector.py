@@ -184,6 +184,7 @@ class GeminiGraspAPIClient:
                     f"image={work_width}x{work_height}"
                 )
                 text = self._ask_gemini(work_image, prompt)
+                self._log_info(f"Gemini API raw response:\n{text}")
                 self._log_info(
                     "Gemini API 응답 수신: "
                     f"{self._shorten_text(text, max_len=300)}"
