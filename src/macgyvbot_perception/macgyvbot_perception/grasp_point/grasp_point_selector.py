@@ -70,7 +70,7 @@ class GraspPointSelector:
                 return api_pixel
 
             self.logger.warn(
-                "API VLM grasp point failed. Falling back to bbox center."
+                "API VLM grasp point 선택 실패. bbox center로 대체합니다."
             )
 
         return self._select_bbox_center_pixel(bbox)
@@ -125,7 +125,7 @@ class GraspPointSelector:
                 APIVLMGraspPointSelector,
             )
         except ImportError as exc:
-            self.logger.warn(f"API VLM grasp module import failed: {exc}")
+            self.logger.warn(f"API VLM grasp 모듈 import 실패: {exc}")
             return None
 
         if self.api_grasp_point_selector is None:

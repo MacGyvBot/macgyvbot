@@ -69,7 +69,7 @@ class APIVLMGraspPointSelector:
         )
 
         if x2 <= x1 or y2 <= y1:
-            self.logger.warn("Gemini VLM crop bbox is empty.")
+            self.logger.warn("Gemini VLM crop bbox가 비어 있습니다.")
             return None
 
         crop_bgr = color_image[y1:y2, x1:x2]
@@ -84,7 +84,7 @@ class APIVLMGraspPointSelector:
                 grid_sizes=VLM_GRASP_GRID_SIZES,
             )
         except Exception as exc:
-            self.logger.warn(f"Gemini VLM grasp point inference failed: {exc}")
+            self.logger.warn(f"Gemini VLM grasp point 추론 실패: {exc}")
             return None
 
         u = x1 + int(round(result.point[0]))
@@ -101,7 +101,7 @@ class APIVLMGraspPointSelector:
             source = f"{GRASP_POINT_MODE_API}+depth"
 
         self.logger.info(
-            f"Gemini VLM grasp point selected: pixel=({u}, {v}), "
+            f"Gemini VLM grasp point 선택: pixel=({u}, {v}), "
             f"angle={result.angle_deg:.1f}deg, "
             f"rpy_deg={result.orientation_rpy_deg}, source={source}"
         )
@@ -133,8 +133,8 @@ class GeminiVLMModel(VLMModel):
     def load(self):
         if not self._api_key():
             raise RuntimeError(
-                "Gemini API key is not available. "
-                f"Set {GEMINI_API_KEY_NAME} in {self.env_file}."
+                "Gemini API key를 찾을 수 없습니다. "
+                f"{self.env_file} 파일에 {GEMINI_API_KEY_NAME}를 설정하세요."
             )
 
     def get_runtime_info(self):
@@ -196,13 +196,13 @@ class GeminiVLMModel(VLMModel):
         except error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             raise RuntimeError(
-                "Gemini API request failed: "
+                "Gemini API 요청 실패: "
                 f"status={exc.code}, detail={detail[:500]}"
             ) from exc
         except error.URLError as exc:
-            raise RuntimeError(f"Gemini API request failed: {exc}") from exc
+            raise RuntimeError(f"Gemini API 요청 실패: {exc}") from exc
         except TimeoutError as exc:
-            raise RuntimeError("Gemini API request timed out") from exc
+            raise RuntimeError("Gemini API 요청 timeout") from exc
 
     def _api_key(self) -> str:
         key = os.environ.get(GEMINI_API_KEY_NAME, "").strip()
@@ -291,5 +291,5 @@ class GeminiVLMModel(VLMModel):
                     parts.append(text)
         text = "\n".join(parts).strip()
         if not text:
-            raise RuntimeError(f"Gemini response did not contain text: {data}")
+            raise RuntimeError(f"Gemini 응답에 text가 없습니다: {data}")
         return text
