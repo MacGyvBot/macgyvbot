@@ -9,13 +9,23 @@ from macgyvbot_manipulation.robot_pose import get_ee_matrix, make_safe_pose
 class ReturnHomePlacementFlow:
     """Move to Home, descend with force feedback, release, and retreat."""
 
-    def __init__(self, robot, motion_controller, gripper, state, reporter, wait_fn):
+    def __init__(
+        self,
+        robot,
+        motion_controller,
+        gripper,
+        state,
+        reporter,
+        wait_fn,
+        tool_hold_monitor=None,
+    ):
         self.robot = robot
         self.motion = motion_controller
         self.gripper = gripper
         self.state = state
         self.reporter = reporter
         self.wait_fn = wait_fn
+        self.tool_hold_monitor = tool_hold_monitor
         self.force_detector = ForceReactionDetector(
             motion_controller,
             state,
@@ -71,6 +81,8 @@ class ReturnHomePlacementFlow:
             return False
 
         logger.info(f"반납 4단계: {tool_name} Home 위치에 놓기")
+        if self.tool_hold_monitor is not None:
+            self.tool_hold_monitor.stop("return_home_release")
         self.gripper.open_gripper()
         self.wait_fn(0.8)
 

@@ -19,11 +19,19 @@ from macgyvbot_task.application.status.return_status_reporter import (
 class ReturnSequenceRunner:
     """Receive a user-held tool and place it in its configured home pose."""
 
-    def __init__(self, robot, motion_controller, gripper, state):
+    def __init__(
+        self,
+        robot,
+        motion_controller,
+        gripper,
+        state,
+        tool_hold_monitor=None,
+    ):
         self.robot = robot
         self.motion = motion_controller
         self.gripper = gripper
         self.state = state
+        self.tool_hold_monitor = tool_hold_monitor
         self.reporter = ReturnStatusReporter(state)
         self.handoff = ReturnHandoffFlow(
             robot,
@@ -32,6 +40,7 @@ class ReturnSequenceRunner:
             state,
             self.reporter,
             self._cooperative_wait,
+            tool_hold_monitor,
         )
         self.placement = ReturnHomePlacementFlow(
             robot,
@@ -40,6 +49,7 @@ class ReturnSequenceRunner:
             state,
             self.reporter,
             self._cooperative_wait,
+            tool_hold_monitor,
         )
 
     def run(self, command):
@@ -99,6 +109,8 @@ class ReturnSequenceRunner:
             )
 
         finally:
+            if self.tool_hold_monitor is not None:
+                self.tool_hold_monitor.stop("return_sequence_finished")
             self._clear_state()
 
     def _recover_to_home(self, tool_name, command, logger, reason):

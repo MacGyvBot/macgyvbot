@@ -21,11 +21,13 @@ class PickSequenceRunner:
         motion_controller,
         gripper,
         state,
+        tool_hold_monitor=None,
     ):
         self.robot = robot
         self.motion = motion_controller
         self.gripper = gripper
         self.state = state
+        self.tool_hold_monitor = tool_hold_monitor
         self.target_planner = PickTargetPlanner(robot)
         self.handoff = PickHandoffFlow(
             robot,
@@ -33,6 +35,7 @@ class PickSequenceRunner:
             gripper,
             state,
             self.cooperative_wait,
+            tool_hold_monitor,
         )
         self.grasp = PickGraspFlow(
             gripper,
@@ -180,6 +183,12 @@ class PickSequenceRunner:
                 message="공구 grasp에 성공했습니다.",
                 command=self.state.current_command,
             )
+            if self.tool_hold_monitor is not None:
+                self.tool_hold_monitor.start(
+                    self.state.target_label,
+                    "bring",
+                    self.state.current_command,
+                )
 
             log.info("6단계: 공구 mask lock 완료 대기")
             if not self.handoff.wait_for_tool_mask_lock(log):
@@ -267,6 +276,8 @@ class PickSequenceRunner:
                 return
 
             log.info("10단계: 사용자 잡기 확인 후 그리퍼 오픈(놓기)")
+            if self.tool_hold_monitor is not None:
+                self.tool_hold_monitor.stop("handoff_release")
             self.gripper.open_gripper()
             self.cooperative_wait(0.8)
 
@@ -283,6 +294,8 @@ class PickSequenceRunner:
             )
 
         finally:
+            if self.tool_hold_monitor is not None:
+                self.tool_hold_monitor.stop("pick_sequence_finished")
             self.state.picking = False
             self.state.target_label = None
             self.state.human_grasped_tool = False

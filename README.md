@@ -312,6 +312,7 @@ ros2 run macgyvbot_command command_input_node --ros-args \
 | --- | --- | --- | --- |
 | `/tool_command` | command -> task | `std_msgs/String` JSON | bring/return/release/stop 명령 |
 | `/robot_task_status` | task -> command/perception | `std_msgs/String` JSON | 작업 상태, GUI/TTS, mask lock trigger |
+| `/tool_drop_detected` | task -> monitor/UI | `std_msgs/String` JSON | grasp 성공 후 의도치 않은 공구 drop 감지 이벤트 |
 | `/target_label` | manual -> task | `std_msgs/String` | 수동 pick target label |
 | `/human_grasped_tool` | perception -> task | `std_msgs/String` JSON | 사용자 hand-tool grasp 결과 |
 | `/hand_grasp_detection/annotated_image` | perception -> debug | `sensor_msgs/Image` | hand grasp overlay |
