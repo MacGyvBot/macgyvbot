@@ -23,6 +23,9 @@ def generate_launch_description():
     default_yolo_model = PathJoinSubstitution(
         [resources_share, "weights", "yolov11_best.pt"]
     )
+    default_drawer_yolo_model = PathJoinSubstitution(
+        [resources_share, "weights", "yolov11n_drawer.pt"]
+    )
     default_grasp_model = PathJoinSubstitution(
         [resources_share, "weights", "hand_grasp_model.pkl"]
     )
@@ -71,6 +74,14 @@ def generate_launch_description():
                 description=(
                     "YOLO model path. Defaults to installed "
                     "macgyvbot_resources package share."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "drawer_yolo_model",
+                default_value=default_drawer_yolo_model,
+                description=(
+                    "YOLO model path for drawer/handle detection. "
+                    "Defaults to installed macgyvbot_resources package share."
                 ),
             ),
             DeclareLaunchArgument(
@@ -126,6 +137,7 @@ def generate_launch_description():
                     moveit_py_params,
                     {
                         "yolo_model": LaunchConfiguration("yolo_model"),
+                        "drawer_yolo_model": LaunchConfiguration("drawer_yolo_model"),
                         "grasp_point_mode": LaunchConfiguration(
                             "grasp_point_mode"
                         ),

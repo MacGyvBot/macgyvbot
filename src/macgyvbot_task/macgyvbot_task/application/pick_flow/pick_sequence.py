@@ -4,7 +4,14 @@ import time
 
 import rclpy
 
+from macgyvbot_config.drawer import (
+    DRAWER_LABEL,
+    DRAWER_HANDLE_LABEL,
+    USE_DRAWER_HANDLE_OFFSET_FALLBACK,
+)
 from macgyvbot_config.timing import SEQUENCE_WAIT_POLL_SEC
+from macgyvbot_manipulation.handover_targeting import move_to_observation_pose
+from macgyvbot_task.application.drawer_flow.drawer_sequence import DrawerInteraction
 from macgyvbot_task.application.pick_flow.pick_grasp_flow import PickGraspFlow
 from macgyvbot_task.application.pick_flow.pick_handoff_flow import PickHandoffFlow
 from macgyvbot_task.application.pick_flow.pick_target_planner import PickTargetPlanner
@@ -21,11 +28,19 @@ class PickSequenceRunner:
         motion_controller,
         gripper,
         state,
+        detector=None,
+        drawer_detector=None,
+        depth_projector=None,
+        grasp_point_selector=None,
     ):
         self.robot = robot
         self.motion = motion_controller
         self.gripper = gripper
         self.state = state
+        self.detector = detector
+        self.drawer_detector = drawer_detector
+        self.depth_projector = depth_projector
+        self.grasp_point_selector = grasp_point_selector
         self.target_planner = PickTargetPlanner(robot)
         self.handoff = PickHandoffFlow(
             robot,
@@ -39,6 +54,166 @@ class PickSequenceRunner:
             state,
             self.cooperative_wait,
         )
+
+    def run_drawer_pick(self, requested_tool):
+        self.state.human_grasped_tool = False
+        self.state.last_grasp_result = None
+        self.state.tool_mask_locked = False
+        self.state.last_tool_mask_lock_result = None
+
+        log = self.state.logger()
+        drawer = DrawerInteraction(
+            robot=self.robot,
+            motion_controller=self.motion,
+            gripper=self.gripper,
+            state=self.state,
+            detector=self.detector,
+            drawer_detector=self.drawer_detector,
+            depth_projector=self.depth_projector,
+            grasp_point_selector=self.grasp_point_selector,
+            wait_fn=self.cooperative_wait,
+        )
+
+        try:
+            self.state._publish_robot_status(
+                "moving_to_observation",
+                tool_name=requested_tool,
+                action="bring",
+                message="서랍 탐지를 위해 관찰 자세로 이동 중입니다.",
+                command=self.state.current_command,
+            )
+            ok, start_pose = move_to_observation_pose(self.motion, self.robot, log)
+            log.info(
+                "서랍 탐지 관찰 자세 이동 "
+                f"pose=({start_pose.x:.3f},{start_pose.y:.3f},{start_pose.z:.3f})"
+            )
+            if not ok:
+                self.state._publish_robot_status(
+                    "failed",
+                    tool_name=requested_tool,
+                    action="bring",
+                    message="서랍 탐지 관찰 자세로 이동하지 못했습니다.",
+                    reason="drawer_observation_pose_failed",
+                    command=self.state.current_command,
+                )
+                return
+
+            self.state._publish_robot_status(
+                "searching_drawer",
+                tool_name=requested_tool,
+                action="bring",
+                message=f"{requested_tool}를 꺼낼 공구함 찾기 중입니다.",
+                command=self.state.current_command,
+            )
+            drawer_target = drawer.wait_for_target(DRAWER_LABEL, log)
+            if drawer_target is None:
+                self.state._publish_robot_status(
+                    "failed",
+                    tool_name=requested_tool,
+                    action="bring",
+                    message="관찰 자세에서 공구함을 찾지 못했습니다.",
+                    reason="drawer_not_found",
+                    command=self.state.current_command,
+                )
+                return
+
+            self.state._publish_robot_status(
+                "moving_to_drawer",
+                tool_name=requested_tool,
+                action="bring",
+                message="공구함으로 이동 중입니다.",
+                command=self.state.current_command,
+            )
+            if not drawer.move_to_drawer_view(drawer_target, log):
+                self.state._publish_robot_status(
+                    "failed",
+                    tool_name=requested_tool,
+                    action="bring",
+                    message="공구함으로 이동하지 못했습니다.",
+                    reason="drawer_move_failed",
+                    command=self.state.current_command,
+                )
+                return
+
+            self.state._publish_robot_status(
+                "searching_drawer_handle",
+                tool_name=requested_tool,
+                action="bring",
+                message="서랍 손잡이를 찾는 중입니다.",
+                command=self.state.current_command,
+            )
+            if USE_DRAWER_HANDLE_OFFSET_FALLBACK:
+                handle_target = drawer.handle_target_from_drawer_offset(
+                    drawer_target,
+                    log,
+                )
+            else:
+                handle_target = drawer.wait_for_target(DRAWER_HANDLE_LABEL, log)
+            if handle_target is None:
+                self.state._publish_robot_status(
+                    "failed",
+                    tool_name=requested_tool,
+                    action="bring",
+                    message="서랍 손잡이를 찾지 못했습니다.",
+                    reason="drawer_handle_not_found",
+                    command=self.state.current_command,
+                )
+                return
+
+            self.state._publish_robot_status(
+                "opening_drawer",
+                tool_name=requested_tool,
+                action="bring",
+                message="서랍 손잡이를 당겨 여는 중입니다.",
+                command=self.state.current_command,
+            )
+            if drawer.open_drawer(handle_target, log) is None:
+                self.state._publish_robot_status(
+                    "failed",
+                    tool_name=requested_tool,
+                    action="bring",
+                    message="서랍을 열지 못했습니다.",
+                    reason="drawer_open_failed",
+                    command=self.state.current_command,
+                )
+                return
+
+            self.state._publish_robot_status(
+                "searching",
+                tool_name=requested_tool,
+                action="bring",
+                message=f"열린 서랍 안에서 {requested_tool} 탐색 중입니다.",
+                command=self.state.current_command,
+            )
+            tool_target = drawer.wait_for_target(
+                requested_tool,
+                log,
+                use_grasp_selector=True,
+            )
+            if tool_target is None:
+                self.state._publish_robot_status(
+                    "failed",
+                    tool_name=requested_tool,
+                    action="bring",
+                    message=f"열린 서랍 안에서 {requested_tool}를 찾지 못했습니다.",
+                    reason="tool_not_found_in_drawer",
+                    command=self.state.current_command,
+                )
+                return
+
+            self.run(
+                tool_target.x,
+                tool_target.y,
+                tool_target.z,
+                tool_target.depth_m,
+                tool_target.yaw_deg,
+            )
+        finally:
+            if self.state.picking and self.state.target_label == requested_tool:
+                self.state.picking = False
+                self.state.target_label = None
+                self.state.human_grasped_tool = False
+                self.state.current_command = None
 
     def run(self, bx, by, bz, z_m, vlm_yaw_deg=None):
         self.state.human_grasped_tool = False

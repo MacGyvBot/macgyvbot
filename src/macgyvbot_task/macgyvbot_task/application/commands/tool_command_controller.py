@@ -16,6 +16,7 @@ class ToolCommandController:
         reset_search_status,
         start_return,
         release_gripper,
+        start_drawer_pick=None,
     ):
         self.logger = logger
         self.status = status_publisher
@@ -25,6 +26,7 @@ class ToolCommandController:
         self.reset_search_status = reset_search_status
         self.start_return = start_return
         self.release_gripper = release_gripper
+        self.start_drawer_pick = start_drawer_pick
 
     def handle_target_label(self, tool_name, source="/target_label", command=None):
         val = (tool_name or "").strip()
@@ -69,7 +71,24 @@ class ToolCommandController:
         tool_name = command.get("tool_name", "unknown")
 
         if action == "bring":
-            self.handle_target_label(tool_name, source="/tool_command", command=command)
+            if self.start_drawer_pick is not None:
+                if self.is_busy():
+                    self.logger.warn(
+                        f"현재 동작 중이라 새 bring 요청 '{tool_name}'을 무시합니다."
+                    )
+                    self.status.publish(
+                        "busy",
+                        tool_name=tool_name,
+                        action=action,
+                        message=f"현재 동작 중이라 새 bring 요청 '{tool_name}'을 무시합니다.",
+                        reason="already_picking",
+                        command=command,
+                    )
+                    return
+                self.set_target(tool_name, command)
+                self.start_drawer_pick(tool_name, command)
+            else:
+                self.handle_target_label(tool_name, source="/tool_command", command=command)
             return
 
         if action == "return":

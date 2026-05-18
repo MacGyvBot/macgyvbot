@@ -16,6 +16,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import String
 
+from macgyvbot_config.drawer import DRAWER_YOLO_MODEL_NAME
 from macgyvbot_config.models import YOLO_MODEL_NAME
 from macgyvbot_config.robot import GROUP_NAME
 from macgyvbot_config.topics import (
@@ -76,6 +77,7 @@ class MacGyvBotNode(Node):
 
         self.grasp_point_mode = self._read_grasp_point_mode()
         self.yolo_model = self._read_yolo_model()
+        self.drawer_yolo_model = self._read_drawer_yolo_model()
         self.force_torque_topic = self._read_force_torque_topic()
         self.robot_status_pub = self.create_publisher(
             String,
@@ -88,6 +90,7 @@ class MacGyvBotNode(Node):
             publish_status_payload=self._publish_status_payload,
         )
         self.detector = YoloDetector(self.yolo_model)
+        self.drawer_detector = YoloDetector(self.drawer_yolo_model)
         self.grasp_point_selector = GraspPointSelector(
             self.grasp_point_mode,
             self.get_logger(),
@@ -137,6 +140,7 @@ class MacGyvBotNode(Node):
             reset_search_status=self._reset_search_status,
             start_return=self.start_return_sequence,
             release_gripper=self.gripper.open_gripper,
+            start_drawer_pick=self.start_drawer_pick_sequence,
         )
         self.frame_processor = PickFrameProcessor(
             self.state,
@@ -151,6 +155,10 @@ class MacGyvBotNode(Node):
             self.motion,
             self.gripper,
             self.state,
+            detector=self.detector,
+            drawer_detector=self.drawer_detector,
+            depth_projector=self.depth_projector,
+            grasp_point_selector=self.grasp_point_selector,
         )
         self.return_runner = ReturnSequenceRunner(
             self.robot,
@@ -199,6 +207,15 @@ class MacGyvBotNode(Node):
             .string_value
             .strip()
         ) or YOLO_MODEL_NAME
+
+    def _read_drawer_yolo_model(self):
+        self.declare_parameter("drawer_yolo_model", DRAWER_YOLO_MODEL_NAME)
+        return (
+            self.get_parameter("drawer_yolo_model")
+            .get_parameter_value()
+            .string_value
+            .strip()
+        ) or DRAWER_YOLO_MODEL_NAME
 
     def _read_force_torque_topic(self):
         self.declare_parameter("force_torque_topic", FORCE_TORQUE_TOPIC)
@@ -268,6 +285,7 @@ class MacGyvBotNode(Node):
     def _log_startup(self):
         self.get_logger().info("노드 초기화 완료")
         self.get_logger().info(f"YOLO model: {self.yolo_model}")
+        self.get_logger().info(f"Drawer YOLO model: {self.drawer_yolo_model}")
         self.get_logger().info(f"grasp point mode: {self.grasp_point_mode}")
         self.get_logger().info(
             "객체 입력 예시: ros2 topic pub --once /target_label "
@@ -379,6 +397,28 @@ class MacGyvBotNode(Node):
         self.state.pending_pick_thread = threading.Thread(
             target=self.pick_runner.run,
             args=(bx, by, bz, z_m, vlm_yaw_deg),
+            daemon=True,
+        )
+        self.state.pending_pick_thread.start()
+
+    def start_drawer_pick_sequence(self, tool_name, command=None):
+        if self.state.picking:
+            self.get_logger().warn(
+                "이미 pick 동작 중이라 새 drawer pick 요청을 무시합니다."
+            )
+            return
+
+        self.state.picking = True
+        self._publish_robot_status(
+            "picking",
+            tool_name=tool_name,
+            action="bring",
+            message=f"{tool_name} 서랍 pick 동작을 시작합니다.",
+            command=command,
+        )
+        self.state.pending_pick_thread = threading.Thread(
+            target=self.pick_runner.run_drawer_pick,
+            args=(tool_name,),
             daemon=True,
         )
         self.state.pending_pick_thread.start()
