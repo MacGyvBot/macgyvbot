@@ -38,6 +38,7 @@ class PickSequenceRunner:
             gripper,
             state,
             self.cooperative_wait,
+            interrupted=self._interrupted,
         )
         self.grasp = PickGraspFlow(
             gripper,
