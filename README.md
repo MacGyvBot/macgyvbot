@@ -405,6 +405,16 @@ sudo apt install ffmpeg espeak-ng
 - `tts_pitch`: 기본 `+35Hz`
 - `tts_timeout_sec`: 기본 `20.0`
 
+## 수동 초기화 명령어
+
+로봇 실행 전 또는 테스트 중 초기 상태를 다시 맞추고 싶을 때 아래 명령어를 사용합니다.
+
+이 명령은 M0609 로봇팔을 Home joint pose로 이동시킨 뒤, OnRobot RG2 그리퍼를 open합니다.
+
+```bash
+source /opt/ros/humble/setup.bash && source ~/macgyvbot/install/setup.bash && ros2 action send_goal /dsr_moveit_controller/follow_joint_trajectory control_msgs/action/FollowJointTrajectory "{trajectory: {joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6], points: [{positions: [0.0, 0.0, 1.57079632679, 0.0, 1.57079632679, 1.57079632679], time_from_start: {sec: 4}}]}}" && sleep 1 && python3 -c 'from macgyvbot_manipulation.onrobot_gripper import RG; g=RG("rg2","192.168.1.1",502); g.open_gripper(); g.close_connection()'
+```
+
 ## 테스트
 
 전체 패키지 테스트:
