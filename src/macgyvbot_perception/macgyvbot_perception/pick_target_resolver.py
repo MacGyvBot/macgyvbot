@@ -47,7 +47,9 @@ class PickTargetResolver:
                 intrinsics,
                 target_label,
             )
-            u, v, source, vlm_rpy_deg = selected
+            u, v, source, vlm_rpy_deg, selected_depth_m = self._unpack_selected(
+                selected
+            )
             target = self.depth_projector.pixel_to_base_target(
                 u,
                 v,
@@ -57,6 +59,7 @@ class PickTargetResolver:
                 intrinsics,
                 self.logger,
                 vlm_rpy_deg,
+                selected_depth_m,
             )
             if target is None:
                 continue
@@ -106,3 +109,11 @@ class PickTargetResolver:
             return float(vlm_rpy_deg[2])
         except (TypeError, ValueError):
             return None
+
+    @staticmethod
+    def _unpack_selected(selected):
+        if len(selected) == 5:
+            return selected
+
+        u, v, source, vlm_rpy_deg = selected
+        return u, v, source, vlm_rpy_deg, None

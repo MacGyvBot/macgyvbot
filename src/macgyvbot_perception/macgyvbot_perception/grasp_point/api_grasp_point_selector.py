@@ -93,6 +93,7 @@ class APIGraspPointSelector:
         u = x1 + int(round(result.point[0]))
         v = y1 + int(round(result.point[1]))
         source = GRASP_POINT_MODE_API
+        depth_m = None
 
         refined = VLMModel.refine_grasp_point_with_depth(
             depth_image,
@@ -101,15 +102,16 @@ class APIGraspPointSelector:
         )
         if refined is not None:
             u, v = refined.point
+            depth_m = refined.depth_m
             source = f"{GRASP_POINT_MODE_API}+depth"
 
         self.logger.info(
             f"API grasp point 선택: pixel=({u}, {v}), "
             f"rpy_deg={result.orientation_rpy_deg}, "
-            f"confidence={result.confidence}, source={source}"
+            f"depth_m={depth_m}, confidence={result.confidence}, source={source}"
         )
 
-        return u, v, source, result.orientation_rpy_deg
+        return u, v, source, result.orientation_rpy_deg, depth_m
 
     @staticmethod
     def _clamp_bbox_to_image(bbox, image):
@@ -180,7 +182,7 @@ class GeminiGraspAPIClient:
             orientation_rpy_deg=(
                 self._normalize_angle_deg(roll),
                 self._normalize_angle_deg(pitch),
-                self._normalize_angle_deg(yaw),
+                self._normalize_yaw_0_to_90_deg(yaw),
             ),
             confidence=self._as_float(data.get("confidence")),
             reason=str(data.get("reason", "")),
@@ -208,12 +210,14 @@ class GeminiGraspAPIClient:
             f"Image size: width={width}, height={height}.\n"
             f"x_px range: 0 to {width - 1}. "
             f"y_px range: 0 to {height - 1}. "
-            "Angles must be degrees in [-180, 180]; confidence is [0, 1]. "
+            "roll_deg and pitch_deg must be degrees in [-180, 180]. "
+            "yaw_deg must be a gripper rotation in [0, 90]. "
+            "confidence is [0, 1]. "
             "Prefer thick, rigid, stable regions near the balance point, such "
             "as handles or main bodies. Avoid blades, cutting edges, tips, "
             "holes, hinges, fragile parts, slippery ends, buttons, labels, and "
-            "task-critical surfaces. For elongated objects, set yaw so gripper "
-            "fingers close across the shorter width. If roll or pitch is "
+            "task-critical surfaces. For elongated objects, set yaw_deg so gripper "
+            "fingers close across the shorter width, using only 0 to 90 degrees. If roll or pitch is "
             "uncertain, use 0.0 but still estimate yaw.\n\n"
             f"Object: {object_label}\n"
             f"Robot task: {request_text}\n"
@@ -421,3 +425,13 @@ class GeminiGraspAPIClient:
         while value < -180.0:
             value += 360.0
         return float(value)
+
+    @staticmethod
+    def _normalize_yaw_0_to_90_deg(value: float) -> float:
+        if value is None or not math.isfinite(value):
+            return 0.0
+
+        yaw = float(value) % 180.0
+        if yaw > 90.0:
+            yaw = 180.0 - yaw
+        return min(max(yaw, 0.0), 90.0)
