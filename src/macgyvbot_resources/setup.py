@@ -1,5 +1,3 @@
-from glob import glob
-import os
 from pathlib import Path
 
 from setuptools import find_packages, setup
@@ -14,16 +12,22 @@ def gather_data_files(source_dir: str, install_prefix: str, patterns: list[str])
     if not root.exists():
         return entries
 
-    files = []
+    grouped: dict[str, list[str]] = {}
+    matched_files = set()
     for pattern in patterns:
-        files.extend(glob(str(root / pattern), recursive=True))
-    files = sorted(
-        os.path.relpath(path, package_dir)
-        for path in files
-        if Path(path).is_file()
-    )
-    if files:
-        entries.append((install_prefix, files))
+        for path in root.glob(pattern):
+            if not path.is_file():
+                continue
+            matched_files.add(path)
+
+    for path in sorted(matched_files):
+        rel_parent = path.parent.relative_to(root)
+        dest = Path(install_prefix) / rel_parent
+        rel_path = path.relative_to(package_dir)
+        grouped.setdefault(str(dest), []).append(str(rel_path))
+
+    for dest, files in sorted(grouped.items()):
+        entries.append((dest, files))
     return entries
 
 

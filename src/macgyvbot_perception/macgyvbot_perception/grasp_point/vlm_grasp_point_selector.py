@@ -33,7 +33,7 @@ from macgyvbot_config.vlm import (
     VLM_GRASP_GRID_SIZES,
 )
 
-DEFAULT_VLM_MODEL = "HuggingFaceTB/SmolVLM2-2.2B-Instruct"
+DEFAULT_VLM_MODEL = "HuggingFaceTB__SmolVLM2-2.2B-Instruct"
 DEFAULT_MAX_IMAGE_SIZE = 640
 DEFAULT_GRID_SIZES = ((3, 3), (4, 4), (5, 5))
 
