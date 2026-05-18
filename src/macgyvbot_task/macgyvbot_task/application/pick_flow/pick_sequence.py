@@ -6,12 +6,20 @@ import rclpy
 
 from macgyvbot_config.drawer import (
     DRAWER_LABEL,
-    DRAWER_HANDLE_LABEL,
-    USE_DRAWER_HANDLE_OFFSET_FALLBACK,
+    # DRAWER_HANDLE_LABEL,  # 하드코딩 손잡이 DetectedTarget 사용 시 필요
+    DRAWER_FIXED_X,
+    DRAWER_FIXED_Y,
+    DRAWER_FIXED_Z,
+    # DRAWER_HANDLE_CLOSED_X,  # 하드코딩 손잡이 DetectedTarget 사용 시 필요
+    # DRAWER_HANDLE_CLOSED_Y,
+    # DRAWER_HANDLE_CLOSED_Z,
 )
 from macgyvbot_config.timing import SEQUENCE_WAIT_POLL_SEC
 from macgyvbot_manipulation.handover_targeting import move_to_observation_pose
-from macgyvbot_task.application.drawer_flow.drawer_sequence import DrawerInteraction
+from macgyvbot_task.application.drawer_flow.drawer_sequence import (
+    DetectedTarget,
+    DrawerInteraction,
+)
 from macgyvbot_task.application.pick_flow.pick_grasp_flow import PickGraspFlow
 from macgyvbot_task.application.pick_flow.pick_handoff_flow import PickHandoffFlow
 from macgyvbot_task.application.pick_flow.pick_target_planner import PickTargetPlanner
@@ -98,24 +106,41 @@ class PickSequenceRunner:
                 )
                 return
 
-            self.state._publish_robot_status(
-                "searching_drawer",
-                tool_name=requested_tool,
-                action="bring",
-                message=f"{requested_tool}를 꺼낼 공구함 찾기 중입니다.",
-                command=self.state.current_command,
+            # --- YOLO 서랍 탐지 (하드코딩 이동 시 불필요, 추후 활성화 가능) ---
+            # self.state._publish_robot_status(
+            #     "searching_drawer",
+            #     tool_name=requested_tool,
+            #     action="bring",
+            #     message=f"{requested_tool}를 꺼낼 공구함 찾기 중입니다.",
+            #     command=self.state.current_command,
+            # )
+            # drawer_target = drawer.wait_for_target(DRAWER_LABEL, log)
+            # if drawer_target is None:
+            #     self.state._publish_robot_status(
+            #         "failed",
+            #         tool_name=requested_tool,
+            #         action="bring",
+            #         message="관찰 자세에서 공구함을 찾지 못했습니다.",
+            #         reason="drawer_not_found",
+            #         command=self.state.current_command,
+            #     )
+            #     return
+            # drawer_target = DetectedTarget(
+            #     label=DRAWER_LABEL,
+            #     x=DRAWER_FIXED_X,
+            #     y=DRAWER_FIXED_Y,
+            #     z=DRAWER_FIXED_Z,
+            #     depth_m=drawer_target.depth_m,
+            # )
+            # -----------------------------------------------------------
+
+            drawer_target = DetectedTarget(
+                label=DRAWER_LABEL,
+                x=DRAWER_FIXED_X,
+                y=DRAWER_FIXED_Y,
+                z=DRAWER_FIXED_Z,
+                depth_m=0.0,
             )
-            drawer_target = drawer.wait_for_target(DRAWER_LABEL, log)
-            if drawer_target is None:
-                self.state._publish_robot_status(
-                    "failed",
-                    tool_name=requested_tool,
-                    action="bring",
-                    message="관찰 자세에서 공구함을 찾지 못했습니다.",
-                    reason="drawer_not_found",
-                    command=self.state.current_command,
-                )
-                return
 
             self.state._publish_robot_status(
                 "moving_to_drawer",
@@ -135,30 +160,24 @@ class PickSequenceRunner:
                 )
                 return
 
-            self.state._publish_robot_status(
-                "searching_drawer_handle",
-                tool_name=requested_tool,
-                action="bring",
-                message="서랍 손잡이를 찾는 중입니다.",
-                command=self.state.current_command,
-            )
-            if USE_DRAWER_HANDLE_OFFSET_FALLBACK:
-                handle_target = drawer.handle_target_from_drawer_offset(
-                    drawer_target,
-                    log,
-                )
-            else:
-                handle_target = drawer.wait_for_target(DRAWER_HANDLE_LABEL, log)
-            if handle_target is None:
-                self.state._publish_robot_status(
-                    "failed",
-                    tool_name=requested_tool,
-                    action="bring",
-                    message="서랍 손잡이를 찾지 못했습니다.",
-                    reason="drawer_handle_not_found",
-                    command=self.state.current_command,
-                )
-                return
+            # --- YOLO 손잡이 탐지 + 하드코딩 DetectedTarget (추후 활성화 가능) ---
+            # self.state._publish_robot_status(
+            #     "searching_drawer_handle",
+            #     tool_name=requested_tool,
+            #     action="bring",
+            #     message="서랍 손잡이를 찾는 중입니다.",
+            #     command=self.state.current_command,
+            # )
+            # handle_target = DetectedTarget(
+            #     label=DRAWER_HANDLE_LABEL,
+            #     x=DRAWER_HANDLE_CLOSED_X,
+            #     y=DRAWER_HANDLE_CLOSED_Y,
+            #     z=DRAWER_HANDLE_CLOSED_Z,
+            #     depth_m=drawer_target.depth_m,
+            # )
+            # -----------------------------------------------------------
+
+            motion = drawer.build_hardcoded_motion()
 
             self.state._publish_robot_status(
                 "opening_drawer",
@@ -167,7 +186,7 @@ class PickSequenceRunner:
                 message="서랍 손잡이를 당겨 여는 중입니다.",
                 command=self.state.current_command,
             )
-            if drawer.open_drawer(handle_target, log) is None:
+            if drawer.open_drawer(motion, log) is None:
                 self.state._publish_robot_status(
                     "failed",
                     tool_name=requested_tool,
@@ -208,6 +227,83 @@ class PickSequenceRunner:
                 tool_target.depth_m,
                 tool_target.yaw_deg,
             )
+        finally:
+            if self.state.picking and self.state.target_label == requested_tool:
+                self.state.picking = False
+                self.state.target_label = None
+                self.state.human_grasped_tool = False
+                self.state.current_command = None
+
+    def run_pick_from_open_drawer(self, requested_tool):
+        """서랍이 이미 열려 있는 상태에서 공구 탐지 → pick + handoff → 서랍 닫기."""
+        self.state.human_grasped_tool = False
+        self.state.last_grasp_result = None
+        self.state.tool_mask_locked = False
+        self.state.last_tool_mask_lock_result = None
+
+        log = self.state.logger()
+        drawer = DrawerInteraction(
+            robot=self.robot,
+            motion_controller=self.motion,
+            gripper=self.gripper,
+            state=self.state,
+            detector=self.detector,
+            drawer_detector=self.drawer_detector,
+            depth_projector=self.depth_projector,
+            grasp_point_selector=self.grasp_point_selector,
+            wait_fn=self.cooperative_wait,
+        )
+        close_motion = drawer.build_hardcoded_motion()
+
+        try:
+            self.state._publish_robot_status(
+                "searching",
+                tool_name=requested_tool,
+                action="bring",
+                message=f"열린 서랍 안에서 {requested_tool} 탐색 중입니다.",
+                command=self.state.current_command,
+            )
+            tool_target = drawer.wait_for_target(
+                requested_tool, log, use_grasp_selector=True
+            )
+            if tool_target is None:
+                self.state._publish_robot_status(
+                    "failed",
+                    tool_name=requested_tool,
+                    action="bring",
+                    message=f"열린 서랍 안에서 {requested_tool}를 찾지 못했습니다.",
+                    reason="tool_not_found_in_drawer",
+                    command=self.state.current_command,
+                )
+                return
+
+            self.run(
+                tool_target.x,
+                tool_target.y,
+                tool_target.z,
+                tool_target.depth_m,
+                tool_target.yaw_deg,
+            )
+
+            self.state._publish_robot_status(
+                "closing_drawer",
+                tool_name=requested_tool,
+                action="bring",
+                message="공구 전달 완료. 서랍을 닫는 중입니다.",
+                command=self.state.current_command,
+            )
+            drawer_target = DetectedTarget(
+                label=DRAWER_LABEL,
+                x=DRAWER_FIXED_X,
+                y=DRAWER_FIXED_Y,
+                z=DRAWER_FIXED_Z,
+                depth_m=0.0,
+            )
+            if not drawer.move_to_drawer_view(drawer_target, log):
+                log.error("서랍 닫기 전 이동 실패")
+                return
+            if not drawer.close_drawer(close_motion, log):
+                log.error("서랍 닫기 실패")
         finally:
             if self.state.picking and self.state.target_label == requested_tool:
                 self.state.picking = False

@@ -208,8 +208,35 @@ class DrawerInteraction:
             ),
         )
 
-    def open_drawer(self, handle_target, logger):
-        motion = self._handle_motion(handle_target)
+    def build_hardcoded_motion(self):
+        """닫힌/열린 손잡이 위치 상수로 DrawerHandleMotion 직접 생성."""
+        from macgyvbot_config.drawer import (
+            DRAWER_HANDLE_CLOSED_X,
+            DRAWER_HANDLE_CLOSED_Y,
+            DRAWER_HANDLE_CLOSED_Z,
+            DRAWER_HANDLE_OPEN_X,
+        )
+        z = DRAWER_HANDLE_CLOSED_Z
+        travel_z = self._travel_z(z)
+        approach_z = max(z + DRAWER_HANDLE_APPROACH_Z_OFFSET, SAFE_Z_MIN)
+        grasp_z = max(z + DRAWER_HANDLE_GRASP_Z_OFFSET, SAFE_Z_MIN)
+        if approach_z < grasp_z:
+            approach_z = grasp_z
+        return DrawerHandleMotion(
+            closed_x=DRAWER_HANDLE_CLOSED_X,
+            open_x=DRAWER_HANDLE_OPEN_X,
+            y=DRAWER_HANDLE_CLOSED_Y,
+            travel_z=travel_z,
+            approach_z=approach_z,
+            grasp_z=grasp_z,
+            ori=self.state.home_ori,
+        )
+
+    def open_drawer(self, handle_target_or_motion, logger):
+        if isinstance(handle_target_or_motion, DrawerHandleMotion):
+            motion = handle_target_or_motion
+        else:
+            motion = self._handle_motion(handle_target_or_motion)
 
         logger.info(
             "서랍 열기 1단계: 손잡이 상단 접근 "
@@ -335,7 +362,6 @@ class DrawerInteraction:
         approach_z = max(
             place_z + DRAWER_TOOL_PLACE_APPROACH_Z_OFFSET,
             SAFE_Z,
-            self.state.home_xyz[2],
         )
 
         logger.info(
@@ -397,7 +423,6 @@ class DrawerInteraction:
     def _travel_z(self, target_z):
         return max(
             target_z + DRAWER_APPROACH_Z_OFFSET,
-            self.state.home_xyz[2],
             SAFE_Z,
         )
 

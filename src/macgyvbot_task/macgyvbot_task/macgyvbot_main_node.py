@@ -16,7 +16,13 @@ from rclpy.node import Node
 from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import String
 
-from macgyvbot_config.drawer import DRAWER_YOLO_MODEL_NAME
+from macgyvbot_config.drawer import (
+    DRAWER_YOLO_MODEL_NAME,
+    DRAWER_FIXED_X,
+    DRAWER_FIXED_Y,
+    DRAWER_FIXED_Z,
+    DRAWER_LABEL,
+)
 from macgyvbot_config.models import YOLO_MODEL_NAME
 from macgyvbot_config.robot import GROUP_NAME
 from macgyvbot_config.topics import (
@@ -59,6 +65,10 @@ from macgyvbot_task.application.pick_flow.pick_frame_processor import (
 )
 from macgyvbot_task.application.pick_flow.pick_sequence import (
     PickSequenceRunner,
+)
+from macgyvbot_task.application.drawer_flow.drawer_sequence import (
+    DetectedTarget,
+    DrawerInteraction,
 )
 from macgyvbot_task.application.return_flow.return_sequence import (
     ReturnSequenceRunner,
@@ -121,7 +131,13 @@ class MacGyvBotNode(Node):
         self.pilz_params.planner_id = "PTP"
         self.pilz_params.max_velocity_scaling_factor = 0.2
 
-        self.motion = MoveItController(self.robot, self.arm, self.pilz_params)
+        self.ompl_params = PlanRequestParameters(self.robot)
+        self.ompl_params.planning_pipeline = "ompl"
+        self.ompl_params.planner_id = "RRTConnectkConfigDefault"
+        self.ompl_params.max_velocity_scaling_factor = 0.2
+        self.ompl_params.max_acceleration_scaling_factor = 0.2
+
+        self.motion = MoveItController(self.robot, self.arm, self.pilz_params, fallback_params=self.ompl_params)
         self.home_initializer = RobotHomeInitializer(
             self.robot,
             self.motion,
@@ -417,7 +433,7 @@ class MacGyvBotNode(Node):
             command=command,
         )
         self.state.pending_pick_thread = threading.Thread(
-            target=self.pick_runner.run_drawer_pick,
+            target=self.pick_runner.run_pick_from_open_drawer,
             args=(tool_name,),
             daemon=True,
         )
@@ -451,8 +467,45 @@ class MacGyvBotNode(Node):
         )
         self.state.pending_return_thread.start()
 
+    def _open_drawer_startup(self):
+        """프로그램 시작 시 하드코딩 좌표로 서랍을 이동해 연다."""
+        log = self.get_logger()
+        drawer = DrawerInteraction(
+            robot=self.robot,
+            motion_controller=self.motion,
+            gripper=self.gripper,
+            state=self.state,
+            detector=self.detector,
+            drawer_detector=self.drawer_detector,
+            depth_projector=self.depth_projector,
+            grasp_point_selector=self.grasp_point_selector,
+        )
+        drawer_target = DetectedTarget(
+            label=DRAWER_LABEL,
+            x=DRAWER_FIXED_X,
+            y=DRAWER_FIXED_Y,
+            z=DRAWER_FIXED_Z,
+            depth_m=0.0,
+        )
+        log.info(
+            f"시작 서랍 이동: x={DRAWER_FIXED_X:.3f}, "
+            f"y={DRAWER_FIXED_Y:.3f}, z={DRAWER_FIXED_Z:.3f}"
+        )
+        if not drawer.move_to_drawer_view(drawer_target, log):
+            log.error("시작 서랍 이동 실패")
+            return
+
+        motion = drawer.build_hardcoded_motion()
+        log.info(
+            f"시작 서랍 열기: closed_x={motion.closed_x:.3f}, "
+            f"open_x={motion.open_x:.3f}, y={motion.y:.3f}"
+        )
+        if drawer.open_drawer(motion, log) is None:
+            log.error("시작 서랍 열기 실패")
+
     def run(self):
         self.home_initializer.initialize()
+        self._open_drawer_startup()
         self._process_frames()
 
     def _process_frames(self):

@@ -61,13 +61,14 @@ def plan_and_execute(
 class MoveItController:
     """Thin adapter around MoveItPy for reusable robot-arm operations."""
 
-    def __init__(self, robot, arm, params):
+    def __init__(self, robot, arm, params, fallback_params=None):
         self.robot = robot
         self.arm = arm
         self.params = params
+        self.fallback_params = fallback_params
 
     def plan_and_execute(self, logger, pose_goal=None, state_goal=None):
-        return plan_and_execute(
+        ok = plan_and_execute(
             self.robot,
             self.arm,
             logger,
@@ -75,6 +76,17 @@ class MoveItController:
             state_goal=state_goal,
             params=self.params,
         )
+        if not ok and self.fallback_params is not None:
+            logger.warn("기본 플래너 실패, OMPL 폴백 시도")
+            ok = plan_and_execute(
+                self.robot,
+                self.arm,
+                logger,
+                pose_goal=pose_goal,
+                state_goal=state_goal,
+                params=self.fallback_params,
+            )
+        return ok
 
     def move_to_home_joints(self, logger):
         """Move to the configured Home joint pose."""
