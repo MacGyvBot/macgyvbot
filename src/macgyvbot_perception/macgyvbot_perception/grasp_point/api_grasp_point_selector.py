@@ -38,8 +38,6 @@ class APIGraspResult:
     point: tuple[float, float]
     orientation_rpy_deg: tuple[float, float, float]
     confidence: float | None
-    reason: str
-    raw_text: str
 
 
 class APIGraspPointSelector:
@@ -185,8 +183,6 @@ class GeminiGraspAPIClient:
                 self._normalize_yaw_0_to_90_deg(yaw),
             ),
             confidence=self._as_float(data.get("confidence")),
-            reason=str(data.get("reason", "")),
-            raw_text=text,
         )
 
     @staticmethod
