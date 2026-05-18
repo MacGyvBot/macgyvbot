@@ -19,9 +19,9 @@ _PASSTHROUGH_ARGS = [
     ("llm_model", "gemma3:1b"),
     ("llm_timeout_sec", "25.0"),
     ("parser_mode", "llm_primary"),
-    ("grasp_point_mode", "center"),
+    ("grasp_point_mode", "vlm"),
     ("force_torque_topic", "/force_torque_sensor_broadcaster/wrench"),
-    ("sam_enabled", "false"),
+    ("sam_enabled", "true"),
 ]
 
 

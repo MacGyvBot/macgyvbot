@@ -98,7 +98,7 @@ def generate_launch_description():
             DeclareLaunchArgument("parser_mode", default_value="llm_primary"),
             DeclareLaunchArgument(
                 "grasp_point_mode",
-                default_value="center",
+                default_value="vlm",
                 description="Grasp point selection mode: center or vlm",
             ),
             DeclareLaunchArgument(
@@ -111,7 +111,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "sam_enabled",
-                default_value="false",
+                default_value="true",
             ),
             DeclareLaunchArgument(
                 "sam_checkpoint",
