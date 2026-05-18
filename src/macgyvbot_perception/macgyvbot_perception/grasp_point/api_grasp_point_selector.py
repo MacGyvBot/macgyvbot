@@ -83,6 +83,7 @@ class APIGraspPointSelector:
                 crop_image,
                 object_label=label,
                 user_request=target_label,
+                bbox_xyxy=(x1, y1, x2, y2),
             )
         except Exception as exc:
             self.logger.warn(f"API grasp point 추론 실패: {exc}")
@@ -147,6 +148,7 @@ class GeminiGraspAPIClient:
         image: Image.Image,
         object_label: str,
         user_request: str | None = None,
+        bbox_xyxy: tuple[int, int, int, int] | None = None,
     ) -> APIGraspResult:
         original_width, original_height = image.size
         work_image = self._prepare_image(image)
@@ -155,6 +157,7 @@ class GeminiGraspAPIClient:
             object_label=object_label,
             user_request=user_request,
             image_size=work_image.size,
+            bbox_xyxy=bbox_xyxy,
         )
 
         text = self._ask_gemini(work_image, prompt)
@@ -178,7 +181,7 @@ class GeminiGraspAPIClient:
             orientation_rpy_deg=(
                 self._normalize_angle_deg(roll),
                 self._normalize_angle_deg(pitch),
-                self._normalize_yaw_0_to_90_deg(yaw),
+                self._clamp_yaw_delta_deg(yaw),
             ),
             confidence=self._as_float(data.get("confidence")),
         )
@@ -188,9 +191,15 @@ class GeminiGraspAPIClient:
         object_label: str,
         user_request: str | None,
         image_size: tuple[int, int],
+        bbox_xyxy: tuple[int, int, int, int] | None = None,
     ) -> str:
         width, height = image_size
         request_text = user_request or "Pick up the object in a natural way."
+        bbox_text = (
+            f"Original image bbox xyxy: {bbox_xyxy}.\n"
+            if bbox_xyxy is not None
+            else ""
+        )
         return (
             "Select one grasp pose for a robot two-finger parallel gripper. "
             "The image is a crop of one detected tool or object. Choose the "
@@ -202,16 +211,19 @@ class GeminiGraspAPIClient:
             "\"yaw_deg\": number, \"confidence\": number, "
             "\"reason\": string}.\n\n"
             f"Image size: width={width}, height={height}.\n"
+            f"{bbox_text}"
             f"x_px range: 0 to {width - 1}. "
             f"y_px range: 0 to {height - 1}. "
             "roll_deg and pitch_deg must be degrees in [-180, 180]. "
-            "yaw_deg must be a gripper rotation in [0, 90]. "
+            "yaw_deg is an additional wrist rotation from the current pose in [-90, 90]. "
+            "The gripper fingers approach from the left and right sides of the viewed image "
+            "and close horizontally along the image x-axis. "
             "confidence is [0, 1]. "
             "Prefer thick, rigid, stable regions near the balance point, such "
             "as handles or main bodies. Avoid blades, cutting edges, tips, "
             "holes, hinges, fragile parts, slippery ends, buttons, labels, and "
             "task-critical surfaces. For elongated objects, set yaw_deg so gripper "
-            "fingers close across the shorter width, using only 0 to 90 degrees. If roll or pitch is "
+            "fingers close across the shorter width. If roll or pitch is "
             "uncertain, use 0.0 but still estimate yaw.\n\n"
             f"Object: {object_label}\n"
             f"Robot task: {request_text}\n"
@@ -421,11 +433,9 @@ class GeminiGraspAPIClient:
         return float(value)
 
     @staticmethod
-    def _normalize_yaw_0_to_90_deg(value: float) -> float:
+    def _clamp_yaw_delta_deg(value: float) -> float:
         if value is None or not math.isfinite(value):
             return 0.0
 
-        yaw = float(value) % 180.0
-        if yaw > 90.0:
-            yaw = 180.0 - yaw
-        return min(max(yaw, 0.0), 90.0)
+        yaw = ((float(value) + 90.0) % 180.0) - 90.0
+        return 90.0 if yaw == -90.0 and float(value) > 0.0 else yaw
