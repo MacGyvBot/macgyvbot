@@ -28,6 +28,7 @@ DEFAULT_GEMINI_MODEL = "gemini-3-flash-preview"
 DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 DEFAULT_ENV_FILENAME = ".env"
 DEFAULT_MAX_IMAGE_SIZE = 640
+DEFAULT_MAX_RETRIES = 3
 GEMINI_API_KEY_NAME = "GEMINI_API_KEY"
 
 
@@ -55,6 +56,7 @@ class APIGraspPointSelector:
     ):
         self.logger = logger
         self.client = GeminiGraspAPIClient(
+            logger=logger,
             model_id=model,
             env_file=env_file,
             base_url=base_url,
@@ -75,6 +77,11 @@ class APIGraspPointSelector:
         if x2 <= x1 or y2 <= y1:
             self.logger.warn("API grasp crop bbox가 비어 있습니다.")
             return None
+
+        self.logger.info(
+            f"API grasp crop 준비: bbox=({x1}, {y1}, {x2}, {y2}), "
+            f"label={label}, target={target_label}"
+        )
 
         crop_bgr = color_image[y1:y2, x1:x2]
         crop_rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
@@ -102,11 +109,18 @@ class APIGraspPointSelector:
         if refined is not None:
             u, v = refined.point
             source = f"{GRASP_POINT_MODE_API}+depth"
+            self.logger.info(
+                f"API grasp depth 보정 적용: pixel=({u}, {v}), "
+                f"depth={refined.depth_m:.4f}m, radius={refined.radius_px}px"
+            )
+        else:
+            self.logger.warn("API grasp depth 보정 결과가 없어 원래 pixel을 사용합니다.")
 
         self.logger.info(
             f"API grasp point 선택: pixel=({u}, {v}), "
             f"rpy_deg={result.orientation_rpy_deg}, "
-            f"confidence={result.confidence}, source={source}"
+            f"confidence={result.confidence}, source={source}, "
+            f"reason={result.reason}"
         )
 
         return u, v, source, result.orientation_rpy_deg
@@ -126,6 +140,7 @@ class GeminiGraspAPIClient:
 
     def __init__(
         self,
+        logger=None,
         model_id: str | None = None,
         max_image_size: int = DEFAULT_MAX_IMAGE_SIZE,
         max_output_tokens: int = 256,
@@ -133,7 +148,9 @@ class GeminiGraspAPIClient:
         env_file: str | None = None,
         base_url: str | None = None,
         temperature: float = 0.0,
+        max_retries: int = DEFAULT_MAX_RETRIES,
     ):
+        self.logger = logger
         self.model_id = model_id or DEFAULT_GEMINI_MODEL
         self.max_image_size = int(max_image_size)
         self.max_output_tokens = int(max_output_tokens)
@@ -141,6 +158,7 @@ class GeminiGraspAPIClient:
         self.env_file = env_file or self._default_env_file()
         self.base_url = base_url or DEFAULT_GEMINI_BASE_URL
         self.temperature = float(temperature)
+        self.max_retries = max(1, int(max_retries))
 
     def select_grasp_pose(
         self,
@@ -157,8 +175,55 @@ class GeminiGraspAPIClient:
             image_size=work_image.size,
         )
 
-        text = self._ask_gemini(work_image, prompt)
-        data = self._extract_json(text)
+        failures = []
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                self._log_info(
+                    f"Gemini API grasp 요청 시도 {attempt}/{self.max_retries}: "
+                    f"model={self.model_id}, object={object_label}, "
+                    f"image={work_width}x{work_height}"
+                )
+                text = self._ask_gemini(work_image, prompt)
+                self._log_info(
+                    "Gemini API 응답 수신: "
+                    f"{self._shorten_text(text, max_len=300)}"
+                )
+                data = self._extract_json(text)
+                result = self._result_from_data(
+                    data=data,
+                    text=text,
+                    original_size=(original_width, original_height),
+                    work_size=(work_width, work_height),
+                )
+                self._log_info(
+                    "Gemini API 응답 파싱 성공: "
+                    f"point={result.point}, "
+                    f"rpy={result.orientation_rpy_deg}, "
+                    f"confidence={result.confidence}, reason={result.reason}"
+                )
+                return result
+            except Exception as exc:
+                reason = str(exc)
+                failures.append(f"{attempt}차 실패: {reason}")
+                self._log_warn(
+                    f"Gemini API grasp 시도 {attempt}/{self.max_retries} 실패: "
+                    f"{reason}"
+                )
+
+        raise RuntimeError(
+            f"Gemini API grasp point 추론이 {self.max_retries}회 모두 실패했습니다. "
+            f"실패 이유: {' | '.join(failures)}"
+        )
+
+    def _result_from_data(
+        self,
+        data: dict[str, Any],
+        text: str,
+        original_size: tuple[int, int],
+        work_size: tuple[int, int],
+    ) -> APIGraspResult:
+        original_width, original_height = original_size
+        work_width, work_height = work_size
         x_px = self._as_float(data.get("x_px"))
         y_px = self._as_float(data.get("y_px"))
         roll = self._as_float(data.get("roll_deg"), default=0.0)
@@ -213,6 +278,16 @@ class GeminiGraspAPIClient:
             "and task-critical surfaces\n"
             "- If roll or pitch is uncertain, use 0.0, but still estimate "
             "yaw_deg\n\n"
+            "Example output:\n"
+            "{"
+            "\"x_px\": 320, "
+            "\"y_px\": 180, "
+            "\"roll_deg\": 0.0, "
+            "\"pitch_deg\": 0.0, "
+            "\"yaw_deg\": 25.0, "
+            "\"confidence\": 0.82, "
+            "\"reason\": \"sturdy handle region suitable for a two-finger grasp\""
+            "}\n\n"
             f"Object: {object_label}\n"
             f"Robot task: {request_text}\n"
         )
@@ -412,3 +487,18 @@ class GeminiGraspAPIClient:
         while value < -180.0:
             value += 360.0
         return float(value)
+
+    def _log_info(self, message: str):
+        if self.logger is not None:
+            self.logger.info(message)
+
+    def _log_warn(self, message: str):
+        if self.logger is not None:
+            self.logger.warn(message)
+
+    @staticmethod
+    def _shorten_text(text: str, max_len: int) -> str:
+        text = str(text).replace("\n", " ").strip()
+        if len(text) <= max_len:
+            return text
+        return text[: max_len - 3] + "..."
