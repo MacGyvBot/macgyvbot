@@ -25,7 +25,12 @@ def plan_and_execute(
     pose_goal=None,
     state_goal=None,
     params=None,
+    should_interrupt=None,
 ):
+    if should_interrupt is not None and should_interrupt():
+        logger.info("중단 요청으로 planning/execution을 시작하지 않습니다.")
+        return False
+
     arm.set_start_state_to_current_state()
 
     if pose_goal:
@@ -47,6 +52,10 @@ def plan_and_execute(
     plan_result = arm.plan(parameters=params) if params else arm.plan()
 
     if plan_result:
+        if should_interrupt is not None and should_interrupt():
+            logger.info("중단 요청으로 trajectory execution을 시작하지 않습니다.")
+            return False
+
         robot.execute(
             GROUP_NAME,
             plan_result.trajectory,
@@ -61,10 +70,11 @@ def plan_and_execute(
 class MoveItController:
     """Thin adapter around MoveItPy for reusable robot-arm operations."""
 
-    def __init__(self, robot, arm, params):
+    def __init__(self, robot, arm, params, should_interrupt=None):
         self.robot = robot
         self.arm = arm
         self.params = params
+        self.should_interrupt = should_interrupt
 
     def plan_and_execute(self, logger, pose_goal=None, state_goal=None):
         return plan_and_execute(
@@ -74,6 +84,7 @@ class MoveItController:
             pose_goal=pose_goal,
             state_goal=state_goal,
             params=self.params,
+            should_interrupt=self.should_interrupt,
         )
 
     def move_to_home_joints(self, logger):
