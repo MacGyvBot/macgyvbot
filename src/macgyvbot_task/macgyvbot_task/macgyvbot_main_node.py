@@ -12,6 +12,8 @@ from ament_index_python.packages import get_package_share_directory
 from cv_bridge import CvBridge
 from geometry_msgs.msg import WrenchStamped
 from moveit.planning import MoveItPy, PlanRequestParameters
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import String
@@ -79,6 +81,7 @@ class MacGyvBotNode(Node):
         self.stop_req = threading.Event()
         self.pause_req = threading.Event()
         self.resume_req = threading.Event()
+        self.control_callback_group = MutuallyExclusiveCallbackGroup()
 
         self.grasp_point_mode = self._read_grasp_point_mode()
         self.yolo_model = self._read_yolo_model()
@@ -300,8 +303,15 @@ class MacGyvBotNode(Node):
             10,
         )
 
-        # 정지용 토픽 수신용
-        self.create_subscription(String, ROBOT_TASK_CONTROL_TOPIC, self._task_control_cb, 10)
+        # 정지/일시정지/재개 제어는 별도 callback group으로 분리해
+        # 고주기 image callback보다 늦게 처리될 가능성을 줄입니다.
+        self.create_subscription(
+            String,
+            ROBOT_TASK_CONTROL_TOPIC,
+            self._task_control_cb,
+            10,
+            callback_group=self.control_callback_group,
+        )
 
     def _log_startup(self):
         self.get_logger().info("노드 초기화 완료")
@@ -513,9 +523,8 @@ class MacGyvBotNode(Node):
         )
 
         while rclpy.ok():
-            rclpy.spin_once(self, timeout_sec=0.01)
-
             if not self.frame_processor.has_camera_state():
+                time.sleep(0.01)
                 continue
 
             if self.state.picking:
@@ -564,12 +573,22 @@ class MacGyvBotNode(Node):
 def main():
     rclpy.init()
     node = MacGyvBotNode()
+    executor = MultiThreadedExecutor(num_threads=2)
+    executor.add_node(node)
+    executor_thread = threading.Thread(
+        target=executor.spin,
+        name="macgyvbot_main_executor",
+        daemon=True,
+    )
+    executor_thread.start()
 
     try:
         node.run()
     except KeyboardInterrupt:
         pass
     finally:
+        executor.shutdown()
+        executor_thread.join(timeout=1.0)
         node.destroy_node()
         rclpy.shutdown()
 
