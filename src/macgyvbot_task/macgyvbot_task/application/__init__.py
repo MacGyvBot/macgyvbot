@@ -7,5 +7,11 @@ from macgyvbot_task.application.state.runtime_state import TaskRuntimeState
 from macgyvbot_task.application.status.robot_status_publisher import (
     RobotStatusPublisher,
 )
+from macgyvbot_task.application.tool_drop_coordinator import ToolDropCoordinator
 
-__all__ = ["RobotStatusPublisher", "TaskRuntimeState", "ToolCommandController"]
+__all__ = [
+    "RobotStatusPublisher",
+    "TaskRuntimeState",
+    "ToolCommandController",
+    "ToolDropCoordinator",
+]

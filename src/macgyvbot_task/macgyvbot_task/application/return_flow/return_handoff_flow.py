@@ -24,13 +24,23 @@ from macgyvbot_manipulation.handover_targeting import (
 class ReturnHandoffFlow:
     """Move toward a user-held tool and grasp it from the user."""
 
-    def __init__(self, robot, motion_controller, gripper, state, reporter, wait_fn):
+    def __init__(
+        self,
+        robot,
+        motion_controller,
+        gripper,
+        state,
+        reporter,
+        wait_fn,
+        drop_monitor=None,
+    ):
         self.robot = robot
         self.motion = motion_controller
         self.gripper = gripper
         self.state = state
         self.reporter = reporter
         self.wait_fn = wait_fn
+        self.drop_monitor = drop_monitor
         self.grasp_verifier = GraspVerifier(gripper, wait_fn)
 
     def receive(self, requested_tool, command, logger):
@@ -73,6 +83,8 @@ class ReturnHandoffFlow:
             "반납 공구 grasp에 성공했습니다.",
             command,
         )
+        if self.drop_monitor is not None:
+            self.drop_monitor.start(tool_name, "return", command)
         return tool_name, ""
 
     def wait_for_user_held_tool(self, tool_name, logger):

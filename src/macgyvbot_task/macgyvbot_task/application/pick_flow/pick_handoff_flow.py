@@ -27,12 +27,21 @@ from macgyvbot_manipulation.robot_pose import make_safe_pose
 class PickHandoffFlow:
     """Handle user handoff motion, waits, and fallback return motion."""
 
-    def __init__(self, robot, motion_controller, gripper, state, wait_fn):
+    def __init__(
+        self,
+        robot,
+        motion_controller,
+        gripper,
+        state,
+        wait_fn,
+        drop_monitor=None,
+    ):
         self.robot = robot
         self.motion = motion_controller
         self.gripper = gripper
         self.state = state
         self.wait_fn = wait_fn
+        self.drop_monitor = drop_monitor
 
     def return_tool_to_original_position(
         self,
@@ -68,6 +77,8 @@ class PickHandoffFlow:
             return False
 
         logger.info("반환 3단계: 원래 위치에 공구 놓기")
+        if self.drop_monitor is not None:
+            self.drop_monitor.stop("return_to_original_position")
         self.gripper.open_gripper()
         self.wait_fn(0.8)
 

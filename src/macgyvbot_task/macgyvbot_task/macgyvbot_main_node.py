@@ -27,6 +27,7 @@ from macgyvbot_config.topics import (
     HAND_GRASP_MASK_LOCK_TOPIC,
     HAND_GRASP_TOPIC,
     ROBOT_STATUS_TOPIC,
+    TOOL_DROP_TOPIC,
     TOOL_COMMAND_TOPIC,
 )
 from macgyvbot_config.vlm import DEFAULT_GRASP_POINT_MODE
@@ -48,6 +49,7 @@ from macgyvbot_task.application import (
     RobotStatusPublisher,
     TaskRuntimeState,
     ToolCommandController,
+    ToolDropCoordinator,
 )
 from macgyvbot_task.application.adapters.hand_grasp_result_adapter import (
     HandGraspResultAdapter,
@@ -80,6 +82,11 @@ class MacGyvBotNode(Node):
         self.robot_status_pub = self.create_publisher(
             String,
             ROBOT_STATUS_TOPIC,
+            10,
+        )
+        self.tool_drop_pub = self.create_publisher(
+            String,
+            TOOL_DROP_TOPIC,
             10,
         )
         self.state = TaskRuntimeState(
@@ -128,6 +135,11 @@ class MacGyvBotNode(Node):
             self._publish_status_payload,
             target_label_provider=lambda: self.state.target_label,
         )
+        self.tool_drop = ToolDropCoordinator(
+            self.gripper,
+            self._publish_tool_drop_payload,
+            self._publish_status_payload,
+        )
         self.task_controller = ToolCommandController(
             self.get_logger(),
             self.status_publisher,
@@ -136,7 +148,7 @@ class MacGyvBotNode(Node):
             clear_target=self._clear_pending_target,
             reset_search_status=self._reset_search_status,
             start_return=self.start_return_sequence,
-            release_gripper=self.gripper.open_gripper,
+            release_gripper=self.tool_drop.release_gripper,
         )
         self.frame_processor = PickFrameProcessor(
             self.state,
@@ -151,12 +163,14 @@ class MacGyvBotNode(Node):
             self.motion,
             self.gripper,
             self.state,
+            self.tool_drop,
         )
         self.return_runner = ReturnSequenceRunner(
             self.robot,
             self.motion,
             self.gripper,
             self.state,
+            self.tool_drop,
         )
 
         self._create_subscriptions()
@@ -275,6 +289,7 @@ class MacGyvBotNode(Node):
         )
         self.get_logger().info(f"공구 명령 토픽: {TOOL_COMMAND_TOPIC}")
         self.get_logger().info(f"로봇 상태 토픽: {ROBOT_STATUS_TOPIC}")
+        self.get_logger().info(f"공구 drop 감지 토픽: {TOOL_DROP_TOPIC}")
         self.get_logger().info(f"잡기 인식 결과 토픽: {HAND_GRASP_TOPIC}")
         self.get_logger().info(f"잡기 인식 화면 토픽: {HAND_GRASP_IMAGE_TOPIC}")
         self.get_logger().info(f"공구 mask lock 토픽: {HAND_GRASP_MASK_LOCK_TOPIC}")
@@ -471,6 +486,12 @@ class MacGyvBotNode(Node):
         self.robot_status_pub.publish(
             String(data=json.dumps(payload, ensure_ascii=False))
         )
+
+    def _publish_tool_drop_payload(self, payload):
+        self.tool_drop_pub.publish(
+            String(data=json.dumps(payload, ensure_ascii=False))
+        )
+
 
 def main():
     rclpy.init()
