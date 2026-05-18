@@ -131,6 +131,7 @@ class PickHandoffFlow:
             self.state,
             logger,
             timeout_sec=OBSERVATION_TIMEOUT_SEC,
+            should_interrupt=self.interrupted,
         )
         while not future.done():
             if self.interrupted():

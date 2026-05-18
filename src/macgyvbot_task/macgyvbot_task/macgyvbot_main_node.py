@@ -132,6 +132,7 @@ class MacGyvBotNode(Node):
             self.arm,
             self.pilz_params,
             should_interrupt=self._motion_interrupted,
+            node=self,
         )
         self.home_initializer = RobotHomeInitializer(
             self.robot,
@@ -360,6 +361,12 @@ class MacGyvBotNode(Node):
         self.get_logger().info(
             f"task control 수신: action={action}, reason={reason}"
         )
+
+        if action in ("stop", "pause"):
+            self.motion.cancel_current_goal(
+                self.get_logger(),
+                reason=reason or action,
+            )
 
         self.task_management.handle_control(action, reason=reason)
 
