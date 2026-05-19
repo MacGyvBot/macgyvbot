@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 import time
 
 import rclpy
@@ -11,6 +12,7 @@ from macgyvbot_config.drawer import (
     DRAWER_APPROACH_Z_OFFSET,
     DRAWER_DETECTION_POLL_SEC,
     DRAWER_DETECTION_TIMEOUT_SEC,
+    DRAWER_INSIDE_OBSERVATION_Z_OFFSET,
     DRAWER_LABEL,
     DRAWER_HANDLE_APPROACH_Z_OFFSET,
     DRAWER_HANDLE_GRASP_Z_OFFSET,
@@ -19,6 +21,7 @@ from macgyvbot_config.drawer import (
     DRAWER_HANDLE_OFFSET_Y,
     DRAWER_HANDLE_OFFSET_Z,
     DRAWER_OPEN_DIRECTION_X,
+    DRAWER_ORIENTATION_DELTA_WARN_DEG,
     DRAWER_PULL_DISTANCE_M,
     DRAWER_TOOL_PLACE_APPROACH_Z_OFFSET,
     DRAWER_TOOL_PLACE_Z_OFFSET,
@@ -253,14 +256,78 @@ class DrawerInteraction:
         self.gripper.close_gripper()
         self.wait(GRIPPER_GRASP_WAIT_SEC)
 
-        logger.info("서랍 열기 2단계: DRAWER_OPEN_JOINTS로 이동")
-        if not self.motion.move_to_drawer_open_joints(logger):
-            logger.error("서랍 열기 joint 이동 실패")
+        closed_rotation = Rotation.from_matrix(get_ee_matrix(self.robot)[:3, :3])
+
+        logger.info("서랍 열기 2단계: DRAWER_OPEN_JOINT_SEQUENCE로 이동")
+        if not self.motion.move_to_drawer_open_joint_sequence(
+            logger,
+            after_waypoint=lambda name: self._log_orientation_delta(
+                closed_rotation,
+                name,
+                logger,
+            ),
+        ):
+            logger.error("서랍 열기 joint sequence 이동 실패")
             return None
 
+        logger.info("서랍 열기 3단계: 손잡이 놓기")
         self.gripper.open_gripper()
         self.wait(GRIPPER_OPEN_WAIT_SEC)
+
+        logger.info("서랍 열기 4단계: 서랍 내부 관찰 pose로 이동")
+        if not self.move_to_inside_observation_pose(logger):
+            logger.error("서랍 내부 관찰 pose 이동 실패")
+            return None
+
+        self.state.drawer_observation_ready = True
         return motion
+
+    def move_to_inside_observation_pose(self, logger):
+        taught_result = self.motion.move_to_drawer_inside_observation_joints(logger)
+        if taught_result is True:
+            logger.info("서랍 내부 관찰 joint pose 도달")
+            return True
+        if taught_result is False:
+            return False
+
+        transform = get_ee_matrix(self.robot)
+        x = float(transform[0, 3])
+        y = float(transform[1, 3])
+        z = max(
+            float(transform[2, 3]) + DRAWER_INSIDE_OBSERVATION_Z_OFFSET,
+            SAFE_Z_MIN,
+        )
+        qx, qy, qz, qw = Rotation.from_matrix(transform[:3, :3]).as_quat()
+        ori = {
+            "x": float(qx),
+            "y": float(qy),
+            "z": float(qz),
+            "w": float(qw),
+        }
+        logger.info(
+            "서랍 내부 관찰 fallback pose 이동: "
+            f"x={x:.3f}, y={y:.3f}, z={z:.3f} "
+            f"(current_open_fk_z+{DRAWER_INSIDE_OBSERVATION_Z_OFFSET:.3f})"
+        )
+        return self.motion.plan_and_execute(
+            logger,
+            pose_goal=make_safe_pose(x, y, z, ori, logger),
+        )
+
+    def _log_orientation_delta(self, reference_rotation, label, logger):
+        current_rotation = Rotation.from_matrix(get_ee_matrix(self.robot)[:3, :3])
+        delta_deg = math.degrees(
+            (reference_rotation.inv() * current_rotation).magnitude()
+        )
+        log_msg = (
+            f"서랍 열기 orientation delta: {label} "
+            f"{delta_deg:.2f}deg "
+            f"(threshold={DRAWER_ORIENTATION_DELTA_WARN_DEG:.2f}deg)"
+        )
+        if delta_deg > DRAWER_ORIENTATION_DELTA_WARN_DEG:
+            logger.warn(log_msg)
+        else:
+            logger.info(log_msg)
 
     def open_drawer(self, handle_target_or_motion, logger):
         if isinstance(handle_target_or_motion, DrawerHandleMotion):

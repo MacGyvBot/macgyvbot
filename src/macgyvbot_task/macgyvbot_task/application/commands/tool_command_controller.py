@@ -17,6 +17,7 @@ class ToolCommandController:
         start_return,
         release_gripper,
         start_drawer_pick=None,
+        is_drawer_observation_validation_only=None,
     ):
         self.logger = logger
         self.status = status_publisher
@@ -27,6 +28,9 @@ class ToolCommandController:
         self.start_return = start_return
         self.release_gripper = release_gripper
         self.start_drawer_pick = start_drawer_pick
+        self.is_drawer_observation_validation_only = (
+            is_drawer_observation_validation_only or (lambda: False)
+        )
 
     def handle_target_label(self, tool_name, source="/target_label", command=None):
         val = (tool_name or "").strip()
@@ -57,6 +61,19 @@ class ToolCommandController:
         self.set_target(val, command)
         self.reset_search_status()
         self.logger.info(f"타겟 객체 설정: {val} ({source})")
+        if self.is_drawer_observation_validation_only():
+            self.status.publish(
+                "drawer_searching_only",
+                tool_name=val,
+                action="bring",
+                message=(
+                    f"{val} detection-only 탐색을 시작합니다. "
+                    "validation-only 모드라 pick은 시작하지 않습니다."
+                ),
+                command=command,
+            )
+            return True
+
         self.status.publish(
             "accepted",
             tool_name=val,
@@ -70,7 +87,40 @@ class ToolCommandController:
         action = command.get("action", "unknown")
         tool_name = command.get("tool_name", "unknown")
 
+        if action == "return" and self.is_drawer_observation_validation_only():
+            self.logger.warn(
+                "drawer_observation_validation_only: return 요청은 차단합니다."
+            )
+            self.status.publish(
+                "rejected",
+                tool_name=tool_name,
+                action=action,
+                message="validation-only 모드라 return/handoff 동작은 시작하지 않습니다.",
+                reason="drawer_observation_validation_only",
+                command=command,
+            )
+            return
+
         if action == "bring":
+            if self.is_drawer_observation_validation_only():
+                self.set_target(tool_name, command)
+                self.reset_search_status()
+                self.logger.info(
+                    "drawer_observation_validation_only: "
+                    f"bring 요청 '{tool_name}'은 detection-only target으로만 설정합니다."
+                )
+                self.status.publish(
+                    "drawer_searching_only",
+                    tool_name=tool_name,
+                    action=action,
+                    message=(
+                        f"{tool_name} detection-only 탐색을 시작합니다. "
+                        "validation-only 모드라 pick은 시작하지 않습니다."
+                    ),
+                    command=command,
+                )
+                return
+
             if self.start_drawer_pick is not None:
                 if self.is_busy():
                     self.logger.warn(

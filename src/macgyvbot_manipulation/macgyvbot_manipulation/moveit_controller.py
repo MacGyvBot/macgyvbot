@@ -11,7 +11,9 @@ from macgyvbot_manipulation.robot_safezone import (
 
 from macgyvbot_config.robot import (
     DRAWER_CLOSED_JOINTS,
+    DRAWER_INSIDE_OBSERVATION_JOINTS,
     DRAWER_OPEN_JOINTS,
+    DRAWER_OPEN_JOINT_SEQUENCE,
     EE_LINK,
     GROUP_NAME,
     HOME_JOINTS,
@@ -92,29 +94,55 @@ class MoveItController:
 
     def move_to_home_joints(self, logger):
         """Move to the configured Home joint pose."""
-        state_goal = RobotState(self.robot.get_robot_model())
-        state_goal.joint_positions = HOME_JOINTS
-        state_goal.update()
-
         logger.info("Home joint pose로 복귀합니다.")
-        return self.plan_and_execute(logger, state_goal=state_goal)
+        return self._move_to_joint_positions(HOME_JOINTS, logger)
 
     def move_to_drawer_closed_joints(self, logger):
         """Move to the configured drawer closed-handle joint pose."""
-        state_goal = RobotState(self.robot.get_robot_model())
-        state_goal.joint_positions = DRAWER_CLOSED_JOINTS
-        state_goal.update()
-
         logger.info("서랍 손잡이(닫힌) joint pose로 이동합니다.")
-        return self.plan_and_execute(logger, state_goal=state_goal)
+        return self._move_to_joint_positions(DRAWER_CLOSED_JOINTS, logger)
 
     def move_to_drawer_open_joints(self, logger):
         """Move to the configured drawer open-handle joint pose."""
-        state_goal = RobotState(self.robot.get_robot_model())
-        state_goal.joint_positions = DRAWER_OPEN_JOINTS
-        state_goal.update()
-
         logger.info("서랍 손잡이(열린) joint pose로 이동합니다.")
+        return self._move_to_joint_positions(DRAWER_OPEN_JOINTS, logger)
+
+    def move_to_drawer_open_joint_sequence(self, logger, after_waypoint=None):
+        """Move through taught drawer-open waypoints in order."""
+        for name, joint_positions in DRAWER_OPEN_JOINT_SEQUENCE:
+            logger.info(f"서랍 열기 waypoint 이동: {name}")
+            if not self._move_to_joint_positions(joint_positions, logger):
+                logger.error(f"서랍 열기 waypoint 실패: {name}")
+                return False
+            if after_waypoint is not None:
+                after_waypoint(name)
+        return True
+
+    def move_to_drawer_inside_observation_joints(self, logger):
+        """Move to the taught post-open drawer observation pose, if configured.
+
+        Returns:
+            True: configured joint pose reached.
+            False: configured joint pose failed.
+            None: no taught joint pose configured; caller may use a fallback.
+        """
+        if DRAWER_INSIDE_OBSERVATION_JOINTS is None:
+            logger.warn(
+                "DRAWER_INSIDE_OBSERVATION_JOINTS가 아직 설정되지 않아 "
+                "FK+offset 관찰 pose fallback을 사용합니다."
+            )
+            return None
+
+        logger.info("서랍 내부 관찰 joint pose로 이동합니다.")
+        return self._move_to_joint_positions(
+            DRAWER_INSIDE_OBSERVATION_JOINTS,
+            logger,
+        )
+
+    def _move_to_joint_positions(self, joint_positions, logger):
+        state_goal = RobotState(self.robot.get_robot_model())
+        state_goal.joint_positions = joint_positions
+        state_goal.update()
         return self.plan_and_execute(logger, state_goal=state_goal)
 
     def rotate_wrist_by_yaw_deg(self, yaw_deg, logger):

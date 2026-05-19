@@ -93,6 +93,9 @@ class MacGyvBotNode(Node):
             publish_robot_status=self._publish_robot_status,
             publish_status_payload=self._publish_status_payload,
         )
+        self.state.drawer_observation_validation_only = (
+            self._read_drawer_observation_validation_only()
+        )
         self.detector = YoloDetector(self.yolo_model)
         self.drawer_detector = YoloDetector(self.drawer_yolo_model)
         self.grasp_point_selector = GraspPointSelector(
@@ -151,6 +154,9 @@ class MacGyvBotNode(Node):
             start_return=self.start_return_sequence,
             release_gripper=self.gripper.open_gripper,
             start_drawer_pick=self.start_drawer_pick_sequence,
+            is_drawer_observation_validation_only=(
+                lambda: self.state.drawer_observation_validation_only
+            ),
         )
         self.frame_processor = PickFrameProcessor(
             self.state,
@@ -227,6 +233,14 @@ class MacGyvBotNode(Node):
             .strip()
         ) or DRAWER_YOLO_MODEL_NAME
 
+    def _read_drawer_observation_validation_only(self):
+        self.declare_parameter("drawer_observation_validation_only", True)
+        return (
+            self.get_parameter("drawer_observation_validation_only")
+            .get_parameter_value()
+            .bool_value
+        )
+
     def _read_force_torque_topic(self):
         self.declare_parameter("force_torque_topic", FORCE_TORQUE_TOPIC)
         return (
@@ -296,6 +310,10 @@ class MacGyvBotNode(Node):
         self.get_logger().info("노드 초기화 완료")
         self.get_logger().info(f"YOLO model: {self.yolo_model}")
         self.get_logger().info(f"Drawer YOLO model: {self.drawer_yolo_model}")
+        self.get_logger().info(
+            "drawer_observation_validation_only: "
+            f"{self.state.drawer_observation_validation_only}"
+        )
         self.get_logger().info(f"grasp point mode: {self.grasp_point_mode}")
         self.get_logger().info(
             "객체 입력 예시: ros2 topic pub --once /target_label "
@@ -392,6 +410,20 @@ class MacGyvBotNode(Node):
         self.state.depth_image = self.bridge.imgmsg_to_cv2(msg, "passthrough")
 
     def start_pick_sequence(self, bx, by, bz, z_m, vlm_yaw_deg=None):
+        if self.state.drawer_observation_validation_only:
+            self.get_logger().warn(
+                "drawer_observation_validation_only 모드라 pick 시작을 차단합니다."
+            )
+            self._publish_robot_status(
+                "drawer_searching_only",
+                tool_name=self.state.target_label,
+                action="bring",
+                message="validation-only 모드라 pick은 시작하지 않습니다.",
+                reason="drawer_observation_validation_only",
+                command=self.state.current_command,
+            )
+            return
+
         if self.state.picking:
             self.get_logger().warn("이미 pick 동작 중이라 새 pick 요청을 무시합니다.")
             return
@@ -412,6 +444,25 @@ class MacGyvBotNode(Node):
         self.state.pending_pick_thread.start()
 
     def start_drawer_pick_sequence(self, tool_name, command=None):
+        if self.state.drawer_observation_validation_only:
+            self.get_logger().warn(
+                "drawer_observation_validation_only 모드라 drawer pick 시작을 차단합니다."
+            )
+            self.state.target_label = tool_name
+            self.state.current_command = command
+            self._publish_robot_status(
+                "drawer_searching_only",
+                tool_name=tool_name,
+                action="bring",
+                message=(
+                    f"{tool_name} detection-only 탐색만 수행합니다. "
+                    "validation-only 모드라 drawer pick은 시작하지 않습니다."
+                ),
+                reason="drawer_observation_validation_only",
+                command=command,
+            )
+            return
+
         if self.state.picking:
             self.get_logger().warn(
                 "이미 pick 동작 중이라 새 drawer pick 요청을 무시합니다."
@@ -464,6 +515,8 @@ class MacGyvBotNode(Node):
     def _open_drawer_startup(self):
         """프로그램 시작 시 joint 이동으로 서랍 손잡이 위치를 잡고 연다."""
         log = self.get_logger()
+        self.state.drawer_observation_ready = False
+        self.state._drawer_observation_not_ready_logged = False
         drawer = DrawerInteraction(
             robot=self.robot,
             motion_controller=self.motion,
@@ -494,6 +547,16 @@ class MacGyvBotNode(Node):
         )
         if drawer.open_drawer_from_handle(motion, log) is None:
             log.error("시작 서랍 열기 실패")
+            return
+
+        self._publish_robot_status(
+            "drawer_observation_ready",
+            action="bring",
+            message=(
+                "서랍 열기, 손잡이 release, 내부 관찰 pose 이동 완료. "
+                "detection-only 탐지를 시작할 수 있습니다."
+            ),
+        )
 
     def run(self):
         if not self.home_initializer.initialize():

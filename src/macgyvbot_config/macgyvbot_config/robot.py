@@ -48,3 +48,15 @@ DRAWER_OPEN_JOINTS = {
     "joint_5": math.radians(88.91),
     "joint_6": math.radians(0.12),
 }
+
+# Optional taught waypoint sequence for opening the drawer without twisting the
+# handle. Add intermediate joint dictionaries here after hardware teaching if a
+# direct DRAWER_CLOSED_JOINTS -> DRAWER_OPEN_JOINTS move rotates the gripper.
+DRAWER_OPEN_JOINT_SEQUENCE = [
+    ("DRAWER_OPEN_JOINTS", DRAWER_OPEN_JOINTS),
+]
+
+# Optional hardware-taught view pose for looking into the opened drawer.
+# Leave as None until measured; drawer flow falls back to a conservative
+# current-open-handle FK + Z offset observation pose for software validation.
+DRAWER_INSIDE_OBSERVATION_JOINTS = None

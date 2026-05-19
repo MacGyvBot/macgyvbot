@@ -30,8 +30,12 @@ class TaskRuntimeState:
     home_xyz: tuple | None = None
     home_ori: dict | None = None
     drawer_handle_motion: Any = None
+    drawer_observation_validation_only: bool = True
+    drawer_observation_ready: bool = False
     current_command: dict | None = None
     _last_search_status_target: str | None = field(default=None, repr=False)
+    _last_drawer_detection_summary: str | None = field(default=None, repr=False)
+    _drawer_observation_not_ready_logged: bool = field(default=False, repr=False)
 
     def get_logger(self):
         return self.logger_provider()

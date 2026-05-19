@@ -496,7 +496,7 @@ class PickSequenceRunner:
 
             log.info("10단계: 사용자 잡기 확인 후 그리퍼 오픈(놓기)")
             self.gripper.open_gripper()
-            self.cooperative_wait(0.8)
+            cooperative_wait(0.8)
 
             log.info("10단계: 전달 후 Home 위치로 복귀")
             ok = self.handoff.move_home_after_handoff(log)
@@ -515,4 +515,3 @@ class PickSequenceRunner:
             self.state.target_label = None
             self.state.human_grasped_tool = False
             self.state.current_command = None
-
