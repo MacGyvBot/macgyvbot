@@ -73,8 +73,14 @@ class MacGyvBotNode(Node):
     def __init__(self):
         super().__init__("macgyvbot_main_node")
 
+        self.declare_parameter("display_debug_windows", False)
+
         self.bridge = CvBridge()
-        self.display = DebugDisplay()
+        self.display_debug_windows = self._read_bool_parameter(
+            "display_debug_windows",
+            False,
+        )
+        self.display = DebugDisplay(enabled=self.display_debug_windows)
 
         self.grasp_point_mode = self._read_grasp_point_mode()
         self.yolo_model = self._read_yolo_model()
@@ -98,6 +104,7 @@ class MacGyvBotNode(Node):
         self.grasp_point_selector = GraspPointSelector(
             self.grasp_point_mode,
             self.get_logger(),
+            **self._read_grasp_point_api_config(),
         )
 
         calib_file = self._resolve_calibration_file("T_gripper2camera.npy")
@@ -113,6 +120,14 @@ class MacGyvBotNode(Node):
             self.depth_projector,
             self.get_logger(),
         )
+
+        if self.display_debug_windows:
+            self.get_logger().info("OpenCV debug display windows are enabled.")
+        else:
+            self.get_logger().info(
+                "OpenCV debug display windows are disabled. "
+                "Use the command GUI detector panel instead."
+            )
         self.pick_target_resolver = PickTargetResolver(
             self.detector,
             self.grasp_point_selector,
@@ -214,6 +229,26 @@ class MacGyvBotNode(Node):
             .strip()
         ) or YOLO_MODEL_NAME
 
+    def _read_grasp_point_api_config(self):
+        self.declare_parameter("grasp_point_api_model", "gemini-2.5-flash")
+        self.declare_parameter("grasp_point_api_env_file", "")
+        self.declare_parameter("grasp_point_api_base_url", "")
+        self.declare_parameter("grasp_point_api_timeout_sec", 30.0)
+        return {
+            "api_model": str(
+                self.get_parameter("grasp_point_api_model").value
+            ).strip(),
+            "api_env_file": str(
+                self.get_parameter("grasp_point_api_env_file").value
+            ).strip(),
+            "api_base_url": str(
+                self.get_parameter("grasp_point_api_base_url").value
+            ).strip(),
+            "api_timeout_sec": float(
+                self.get_parameter("grasp_point_api_timeout_sec").value
+            ),
+        }
+
     def _read_force_torque_topic(self):
         self.declare_parameter("force_torque_topic", FORCE_TORQUE_TOPIC)
         return (
@@ -222,6 +257,14 @@ class MacGyvBotNode(Node):
             .string_value
             .strip()
         ) or FORCE_TORQUE_TOPIC
+
+    def _read_bool_parameter(self, name, default_value=False):
+        value = self.get_parameter(name).value
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in ("1", "true", "yes", "on")
+        return bool(value)
 
     def _create_subscriptions(self):
         self.create_subscription(

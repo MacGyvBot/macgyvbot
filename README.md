@@ -15,6 +15,8 @@ Doosan M0609 제어, OnRobot RG2 그리퍼, hand-tool grasp detection, GUI/STT/T
 - 기본 hand grasp mask lock은 `sam_enabled:=true`입니다.
 - VLM/SAM/ML 모델 파일은 Git에 포함하지 않고 `macgyvbot_resources` 아래에 둡니다.
 - VLM 추론이나 depth 보정이 실패하면 bbox center grasp point로 fallback합니다.
+- API grasp point mode가 실패하면 기본 grasp point mode인 `vlm`으로 fallback하고,
+  그마저 실패할 때만 bbox center로 fallback합니다.
 - 사용자 handoff grasp는 ML grasp, depth contact, locked mask contact가 모두
   통과해야 인정합니다.
 
@@ -233,6 +235,36 @@ VLM 없이 bbox center mode:
 ros2 launch macgyvbot_bringup macgyvbot.launch.py grasp_point_mode:=center
 ```
 
+Gemini API grasp point mode:
+
+```bash
+cp src/macgyvbot_resources/.env.example src/macgyvbot_resources/.env
+nano src/macgyvbot_resources/.env
+ros2 launch macgyvbot_bringup macgyvbot.launch.py \
+  grasp_point_mode:=api \
+  grasp_point_api_model:=gemini-2.5-flash
+```
+
+In `src/macgyvbot_resources/.env`, fill the template like this:
+
+```text
+GEMINI_API_KEY=your_real_key_here
+```
+
+`src/macgyvbot_resources/.env` is ignored by Git. The repository tracks only
+`src/macgyvbot_resources/.env.example` as the empty template.
+
+API mode 주의사항:
+
+- Gemini API grasp point mode는 네트워크 상태, API quota, 모델 응답 형식에 따라
+  local VLM mode보다 성능과 안정성이 떨어질 수 있습니다.
+- 이미지와 프롬프트를 함께 보내기 때문에 입력 토큰 여유가 크지 않습니다. 긴
+  task text나 과도한 프롬프트를 넣으면 응답 실패나 품질 저하가 생길 수 있습니다.
+- 반복 실행 시 토큰/quota가 빠르게 소진될 수 있습니다. 실제 로봇 테스트에서는
+  필요한 경우에만 `grasp_point_mode:=api`를 사용하고, 기본값인 `vlm` mode를
+  우선 사용합니다.
+- API 호출 실패 시에는 자동으로 기본 grasp point mode인 `vlm`으로 fallback합니다.
+
 SAM을 끄고 bbox lock fallback만 사용:
 
 ```bash
@@ -256,6 +288,13 @@ ros2 launch macgyvbot_bringup macgyvbot.launch.py use_tts:=false
 전체 launch는 command GUI/STT/TTS 노드를 함께 실행합니다. 사용자는 GUI 또는
 마이크로 아래와 같은 명령을 줄 수 있습니다.
 
+GUI는 위쪽에 왼쪽 로봇 상태, 가운데 detector 화면, 오른쪽 채팅창을 두고,
+로봇 상태와 detector 화면 아래쪽에는 넓은 Task Log를 배치합니다.
+Detector 화면은 `/hand_grasp_detection/annotated_image`를 구독해 GUI 안에만
+표시합니다. Perception 노드는 `publish_annotated:=true`, `display:=false`로
+실행되고 main task node의 `display_debug_windows` 기본값도 `false`이므로
+별도 OpenCV detector/debug 창은 띄우지 않습니다.
+
 ```text
 드라이버 가져다줘
 플라이어 가져와
@@ -268,7 +307,7 @@ ros2 launch macgyvbot_bringup macgyvbot.launch.py use_tts:=false
 ```
 
 GUI는 로봇 작업 상태를 채팅, 상태 패널, Task Log로 나누어 표시합니다.
-진행 중인 탐색/이동/파지 단계는 왼쪽 Task Log에 `HH:MM:SS [INFO] ...`
+진행 중인 탐색/이동/파지 단계는 Task Log에 `HH:MM:SS [INFO] ...`
 형식으로 남고, 사용자 행동이 필요한 상태나 완료/실패 상태만 MacGyvBot
 말풍선과 TTS로 안내합니다. `정지`, `재개`, `종료`도 LLM/parser action으로
 분류합니다. 단, 현재 `재개`와 `종료`는 로봇 제어 명령으로 발행하지 않고
@@ -303,7 +342,11 @@ ros2 run macgyvbot_command command_input_node --ros-args \
 
 | Argument | Default | 설명 |
 | --- | --- | --- |
-| `grasp_point_mode` | `vlm` | `vlm` 또는 `center` |
+| `grasp_point_mode` | `vlm` | `vlm`, `center`, or `api` |
+| `grasp_point_api_model` | `gemini-2.5-flash` | Gemini API mode model name |
+| `grasp_point_api_env_file` | `macgyvbot_resources/.env` | Local Gemini `.env` file |
+| `grasp_point_api_base_url` | Gemini API default | Override Gemini API base URL |
+| `grasp_point_api_timeout_sec` | `30.0` | API request timeout |
 | `sam_enabled` | `true` | SAM mask tracking/lock 사용 여부 |
 | `yolo_model` | `macgyvbot_resources/weights/yolov11_best.pt` | YOLO 모델 경로 |
 | `grasp_model` | `macgyvbot_resources/weights/hand_grasp_model.pkl` | ML hand grasp classifier |
@@ -314,6 +357,7 @@ ros2 run macgyvbot_command command_input_node --ros-args \
 | `parser_mode` | `llm_primary` | `llm_primary` 또는 `hybrid` |
 | `llm_model` | `gemma3:1b` | Ollama 모델명 |
 | `force_torque_topic` | `/force_torque_sensor_broadcaster/wrench` | return Z 하강 force 입력 |
+| `detector_image_topic` | `/hand_grasp_detection/annotated_image` | GUI 중앙 detector 화면 입력 |
 
 ## 주요 Topics
 
@@ -324,7 +368,7 @@ ros2 run macgyvbot_command command_input_node --ros-args \
 | `/tool_drop_detected` | task -> monitor/UI | `std_msgs/String` JSON | grasp 성공 후 의도치 않은 공구 drop 감지 이벤트 |
 | `/target_label` | manual -> task | `std_msgs/String` | 수동 pick target label |
 | `/human_grasped_tool` | perception -> task | `std_msgs/String` JSON | 사용자 hand-tool grasp 결과 |
-| `/hand_grasp_detection/annotated_image` | perception -> debug | `sensor_msgs/Image` | hand grasp overlay |
+| `/hand_grasp_detection/annotated_image` | perception -> command GUI | `sensor_msgs/Image` | GUI 중앙 detector overlay |
 | `/hand_grasp_detection/tool_mask_lock` | perception -> task | `std_msgs/String` JSON | grasp_success 이후 mask lock ack |
 | `/command_feedback` | command -> GUI | `std_msgs/String` JSON | 명령 해석 결과 |
 | `/stt_text` | command -> command | `std_msgs/String` | STT/GUI 입력 텍스트 |
@@ -414,6 +458,16 @@ sudo apt install ffmpeg espeak-ng
 - `tts_edge_rate`: 기본 `+25%`
 - `tts_pitch`: 기본 `+35Hz`
 - `tts_timeout_sec`: 기본 `20.0`
+
+## 수동 초기화 명령어
+
+로봇 실행 전 또는 테스트 중 초기 상태를 다시 맞추고 싶을 때 아래 명령어를 사용합니다.
+
+이 명령은 M0609 로봇팔을 Home joint pose로 이동시킨 뒤, OnRobot RG2 그리퍼를 open합니다.
+
+```bash
+source /opt/ros/humble/setup.bash && source ~/macgyvbot/install/setup.bash && ros2 action send_goal /dsr_moveit_controller/follow_joint_trajectory control_msgs/action/FollowJointTrajectory "{trajectory: {joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6], points: [{positions: [0.0, 0.0, 1.57079632679, 0.0, 1.57079632679, 1.57079632679], time_from_start: {sec: 4}}]}}" && sleep 1 && python3 -c 'from macgyvbot_manipulation.onrobot_gripper import RG; g=RG("rg2","192.168.1.1",502); g.open_gripper(); g.close_connection()'
+```
 
 ## 테스트
 

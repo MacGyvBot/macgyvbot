@@ -4,6 +4,7 @@ from datetime import datetime
 
 try:
     from PyQt5.QtCore import Qt, QTimer
+    from PyQt5.QtGui import QImage, QPixmap
     from PyQt5.QtWidgets import (
         QApplication,
         QFrame,
@@ -29,8 +30,9 @@ else:
             super().__init__()
             self._node = node
             self.setWindowTitle('MacGyvBot Assistant')
-            self.resize(1080, 720)
-            self.setMinimumSize(960, 620)
+            self.resize(1420, 760)
+            self.setMinimumSize(1280, 680)
+            self._detector_pixmap = None
 
             self._chat_scroll = QScrollArea()
             self._chat_scroll.setWidgetResizable(True)
@@ -52,6 +54,7 @@ else:
 
             self._robot_connection_status = QLabel('로봇 노드: 미확인')
             self._camera_connection_status = QLabel('카메라 노드: 미확인')
+            self._detector_connection_status = QLabel('Detector 영상: 대기 중')
             self._gui_connection_status = QLabel('GUI 노드: 연결됨')
             self._current_status = QLabel('현재 상태: 명령 대기')
             self._task_target_status = QLabel('작업 대상: 없음')
@@ -85,7 +88,7 @@ else:
 
             status_panel = QFrame()
             status_panel.setObjectName('statusPanel')
-            status_panel.setFixedWidth(250)
+            status_panel.setFixedWidth(290)
             status_panel_layout = QVBoxLayout()
             status_panel_layout.setContentsMargins(16, 16, 16, 16)
             status_panel_layout.setSpacing(10)
@@ -95,11 +98,51 @@ else:
             status_panel_layout.addSpacing(8)
             status_panel_layout.addWidget(self._robot_connection_status)
             status_panel_layout.addWidget(self._camera_connection_status)
+            status_panel_layout.addWidget(self._detector_connection_status)
             status_panel_layout.addWidget(self._gui_connection_status)
             status_panel_layout.addSpacing(12)
             status_panel_layout.addWidget(self._current_status)
             status_panel_layout.addWidget(self._task_target_status)
             status_panel_layout.addWidget(self._task_stage_status)
+            status_panel_layout.addStretch(1)
+
+            chat_panel = QWidget()
+            chat_panel_layout = QVBoxLayout()
+            chat_panel_layout.setContentsMargins(0, 0, 0, 0)
+            chat_panel_layout.setSpacing(0)
+            chat_panel.setLayout(chat_panel_layout)
+            chat_panel_layout.addWidget(self._chat_scroll)
+            chat_panel_layout.addLayout(input_layout)
+
+            detector_title = QLabel('Detector View')
+            detector_title.setObjectName('detectorPanelTitle')
+            detector_subtitle = QLabel('/hand_grasp_detection/annotated_image')
+            detector_subtitle.setObjectName('detectorPanelSubtitle')
+
+            detector_panel = QFrame()
+            detector_panel.setObjectName('detectorPanel')
+            detector_panel.setFixedWidth(540)
+            detector_panel_layout = QVBoxLayout()
+            detector_panel_layout.setContentsMargins(14, 14, 14, 10)
+            detector_panel_layout.setSpacing(8)
+            detector_panel.setLayout(detector_panel_layout)
+
+            self._detector_image = QLabel('Detector 영상 대기 중')
+            self._detector_image.setObjectName('detectorImage')
+            self._detector_image.setAlignment(Qt.AlignCenter)
+            self._detector_image.setFixedSize(512, 384)
+            self._detector_image.setSizePolicy(
+                QSizePolicy.Fixed,
+                QSizePolicy.Fixed,
+            )
+            self._detector_status = QLabel('Detector 상태: 대기 중')
+            self._detector_status.setObjectName('detectorStatus')
+
+            detector_panel_layout.addWidget(detector_title)
+            detector_panel_layout.addWidget(detector_subtitle)
+            detector_panel_layout.addWidget(self._detector_image, 0, Qt.AlignTop)
+            detector_panel_layout.addWidget(self._detector_status)
+            detector_panel_layout.addStretch(1)
 
             log_title = QLabel('Task Log')
             log_title.setObjectName('taskLogTitle')
@@ -116,22 +159,33 @@ else:
             log_scroll.setWidget(self._task_log)
             self._task_log_scroll = log_scroll
 
-            status_panel_layout.addSpacing(12)
-            status_panel_layout.addWidget(log_title)
-            status_panel_layout.addWidget(log_scroll, 1)
+            log_panel = QFrame()
+            log_panel.setObjectName('taskLogPanel')
+            log_panel_layout = QVBoxLayout()
+            log_panel_layout.setContentsMargins(14, 12, 14, 12)
+            log_panel_layout.setSpacing(8)
+            log_panel.setLayout(log_panel_layout)
+            log_panel_layout.addWidget(log_title)
+            log_panel_layout.addWidget(log_scroll, 1)
 
-            chat_panel = QWidget()
-            chat_panel_layout = QVBoxLayout()
-            chat_panel_layout.setContentsMargins(0, 0, 0, 0)
-            chat_panel_layout.setSpacing(0)
-            chat_panel.setLayout(chat_panel_layout)
-            chat_panel_layout.addWidget(self._chat_scroll)
-            chat_panel_layout.addLayout(input_layout)
+            left_workspace = QWidget()
+            left_workspace_layout = QVBoxLayout()
+            left_workspace_layout.setContentsMargins(0, 0, 0, 0)
+            left_workspace_layout.setSpacing(14)
+            left_workspace.setLayout(left_workspace_layout)
+
+            top_left_layout = QHBoxLayout()
+            top_left_layout.setContentsMargins(0, 0, 0, 0)
+            top_left_layout.setSpacing(14)
+            top_left_layout.addWidget(status_panel)
+            top_left_layout.addWidget(detector_panel, 1)
+            left_workspace_layout.addLayout(top_left_layout, 0)
+            left_workspace_layout.addWidget(log_panel, 1)
 
             content_layout = QHBoxLayout()
             content_layout.setContentsMargins(0, 0, 0, 0)
             content_layout.setSpacing(14)
-            content_layout.addWidget(status_panel)
+            content_layout.addWidget(left_workspace, 0)
             content_layout.addWidget(chat_panel, 1)
 
             layout = QVBoxLayout()
@@ -178,9 +232,18 @@ else:
         def set_status(self, text):
             self._current_status.setText(f'현재 상태: {text}')
 
-        def set_connection_status(self, robot_text, camera_text, gui_text='연결됨'):
+        def set_connection_status(
+            self,
+            robot_text,
+            camera_text,
+            gui_text='연결됨',
+            detector_text='대기 중',
+        ):
             self._robot_connection_status.setText(f'로봇 노드: {robot_text}')
             self._camera_connection_status.setText(f'카메라 노드: {camera_text}')
+            self._detector_connection_status.setText(
+                f'Detector 영상: {detector_text}'
+            )
             self._gui_connection_status.setText(f'GUI 노드: {gui_text}')
             self._robot_connection_status.setStyleSheet(
                 self._connection_style(robot_text)
@@ -188,9 +251,13 @@ else:
             self._camera_connection_status.setStyleSheet(
                 self._connection_style(camera_text)
             )
+            self._detector_connection_status.setStyleSheet(
+                self._connection_style(detector_text)
+            )
             self._gui_connection_status.setStyleSheet(
                 self._connection_style(gui_text)
             )
+            self.set_detector_status(detector_text)
 
         def set_task_status(self, target_text, stage_text):
             self._task_target_status.setText(f'작업 대상: {target_text}')
@@ -211,6 +278,81 @@ else:
         def _scroll_task_log_to_bottom(self):
             scrollbar = self._task_log_scroll.verticalScrollBar()
             scrollbar.setValue(scrollbar.maximum())
+
+        def set_detector_status(self, status_text):
+            self._detector_status.setText(f'Detector 상태: {status_text}')
+            self._detector_status.setStyleSheet(
+                self._detector_status_style(status_text)
+            )
+            if self._detector_pixmap is None and status_text == '대기 중':
+                self._detector_image.setText('Detector 영상 대기 중')
+            if status_text == '미수신' and self._detector_pixmap is None:
+                self._detector_image.setText('Detector 영상 미수신')
+
+        def set_detector_image(self, msg):
+            image = self._image_msg_to_qimage(msg)
+            self._detector_pixmap = QPixmap.fromImage(image)
+            self._refresh_detector_pixmap()
+            self.set_detector_status('수신 중')
+
+        def resizeEvent(self, event):
+            super().resizeEvent(event)
+            self._refresh_detector_pixmap()
+
+        def _refresh_detector_pixmap(self):
+            if self._detector_pixmap is None:
+                return
+
+            scaled = self._detector_pixmap.scaled(
+                self._detector_image.size(),
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation,
+            )
+            self._detector_image.setPixmap(scaled)
+
+        def _image_msg_to_qimage(self, msg):
+            width = int(getattr(msg, 'width', 0))
+            height = int(getattr(msg, 'height', 0))
+            step = int(getattr(msg, 'step', 0))
+            encoding = str(getattr(msg, 'encoding', '')).lower()
+
+            if width <= 0 or height <= 0 or step <= 0:
+                raise ValueError('잘못된 image 크기입니다.')
+
+            data = bytes(msg.data)
+            if encoding == 'rgb8':
+                return QImage(
+                    data,
+                    width,
+                    height,
+                    step,
+                    QImage.Format_RGB888,
+                ).copy()
+
+            if encoding == 'bgr8':
+                return QImage(
+                    data,
+                    width,
+                    height,
+                    step,
+                    QImage.Format_RGB888,
+                ).rgbSwapped().copy()
+
+            if encoding == 'mono8':
+                grayscale_format = getattr(
+                    QImage,
+                    'Format_Grayscale8',
+                    QImage.Format_Indexed8,
+                )
+                return QImage(
+                    data,
+                    width,
+                    height,
+                    step,
+                    grayscale_format,
+                ).copy()
+
+            raise ValueError(f'지원하지 않는 image encoding입니다: {encoding}')
 
         def _append_bubble(self, speaker, text, align, role):
             colors = {
@@ -518,10 +660,26 @@ else:
 
         @staticmethod
         def _connection_style(status_text):
-            connected = status_text in ('연결됨', '실행 중')
+            connected = status_text in ('연결됨', '실행 중', '수신 중')
             color = '#25A55F' if connected else '#7A8794'
             border = '#CFEBDD' if connected else '#D5E2F0'
             background = '#F5FFF9' if connected else '#FFFFFF'
+            return f'''
+                background-color: {background};
+                border: 1px solid {border};
+                border-radius: 10px;
+                padding: 8px 12px;
+                color: {color};
+                font-size: 13px;
+                font-weight: 700;
+            '''
+
+        @staticmethod
+        def _detector_status_style(status_text):
+            connected = status_text == '수신 중'
+            color = '#25A55F' if connected else '#7A8794'
+            background = '#F5FFF9' if connected else '#FFFFFF'
+            border = '#CFEBDD' if connected else '#D5E2F0'
             return f'''
                 background-color: {background};
                 border: 1px solid {border};
@@ -570,6 +728,11 @@ else:
                     border: 1px solid #C9DAEC;
                     border-radius: 16px;
                 }
+                QFrame#detectorPanel {
+                    background-color: #F8FBFF;
+                    border: 1px solid #C9DAEC;
+                    border-radius: 0px;
+                }
                 QLabel#statusPanelTitle {
                     color: #223B5C;
                     font-size: 17px;
@@ -578,6 +741,11 @@ else:
                 QLabel#statusPanelSubtitle {
                     color: #6A7E96;
                     font-size: 12px;
+                }
+                QFrame#taskLogPanel {
+                    background-color: #F8FBFF;
+                    border: 1px solid #C9DAEC;
+                    border-radius: 0px;
                 }
                 QLabel#taskLogTitle {
                     color: #223B5C;
@@ -588,7 +756,7 @@ else:
                 QScrollArea#taskLogScroll {
                     background-color: #101B2A;
                     border: 1px solid #263A56;
-                    border-radius: 10px;
+                    border-radius: 0px;
                 }
                 QLabel#taskLog {
                     background-color: #101B2A;
@@ -597,6 +765,24 @@ else:
                     font-family: "D2Coding", "Consolas", "Menlo", monospace;
                     font-size: 11px;
                     line-height: 1.35;
+                    border-radius: 0px;
+                }
+                QLabel#detectorPanelTitle {
+                    color: #223B5C;
+                    font-size: 17px;
+                    font-weight: 900;
+                }
+                QLabel#detectorPanelSubtitle {
+                    color: #6A7E96;
+                    font-size: 12px;
+                }
+                QLabel#detectorImage {
+                    background-color: #111827;
+                    color: #D8E4F2;
+                    border: none;
+                    border-radius: 0px;
+                    font-size: 15px;
+                    font-weight: 700;
                 }
                 QLineEdit {
                     background-color: #FFFFFF;
@@ -643,8 +829,14 @@ else:
             self._camera_connection_status.setStyleSheet(
                 self._connection_style('미확인')
             )
+            self._detector_connection_status.setStyleSheet(
+                self._connection_style('대기 중')
+            )
             self._gui_connection_status.setStyleSheet(
                 self._connection_style('연결됨')
+            )
+            self._detector_status.setStyleSheet(
+                self._detector_status_style('대기 중')
             )
             self._current_status.setStyleSheet(
                 '''

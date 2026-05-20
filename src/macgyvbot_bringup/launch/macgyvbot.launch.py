@@ -41,8 +41,16 @@ def generate_launch_description():
     llm_model = LaunchConfiguration("llm_model")
     llm_timeout_sec = LaunchConfiguration("llm_timeout_sec")
     parser_mode = LaunchConfiguration("parser_mode")
+    detector_image_topic = LaunchConfiguration("detector_image_topic")
+    display_debug_windows = LaunchConfiguration("display_debug_windows")
     sam_enabled = LaunchConfiguration("sam_enabled")
     sam_checkpoint = LaunchConfiguration("sam_checkpoint")
+    grasp_point_api_model = LaunchConfiguration("grasp_point_api_model")
+    grasp_point_api_env_file = LaunchConfiguration("grasp_point_api_env_file")
+    grasp_point_api_base_url = LaunchConfiguration("grasp_point_api_base_url")
+    grasp_point_api_timeout_sec = LaunchConfiguration(
+        "grasp_point_api_timeout_sec"
+    )
 
     moveit_config = (
         MoveItConfigsBuilder(
@@ -97,9 +105,31 @@ def generate_launch_description():
             DeclareLaunchArgument("llm_timeout_sec", default_value="25.0"),
             DeclareLaunchArgument("parser_mode", default_value="llm_primary"),
             DeclareLaunchArgument(
+                "detector_image_topic",
+                default_value=HAND_GRASP_IMAGE_TOPIC,
+                description="Annotated detector image topic shown in the GUI.",
+            ),
+            DeclareLaunchArgument(
+                "display_debug_windows",
+                default_value="false",
+                description=(
+                    "Show legacy OpenCV debug windows from macgyvbot_main_node."
+                ),
+            ),
+            DeclareLaunchArgument(
                 "grasp_point_mode",
                 default_value="vlm",
-                description="Grasp point selection mode: center or vlm",
+                description="Grasp point selection mode: center, vlm, or api",
+            ),
+            DeclareLaunchArgument(
+                "grasp_point_api_model",
+                default_value="gemini-2.5-flash",
+            ),
+            DeclareLaunchArgument("grasp_point_api_env_file", default_value=""),
+            DeclareLaunchArgument("grasp_point_api_base_url", default_value=""),
+            DeclareLaunchArgument(
+                "grasp_point_api_timeout_sec",
+                default_value="30.0",
             ),
             DeclareLaunchArgument(
                 "force_torque_topic",
@@ -129,9 +159,14 @@ def generate_launch_description():
                         "grasp_point_mode": LaunchConfiguration(
                             "grasp_point_mode"
                         ),
+                        "grasp_point_api_model": grasp_point_api_model,
+                        "grasp_point_api_env_file": grasp_point_api_env_file,
+                        "grasp_point_api_base_url": grasp_point_api_base_url,
+                        "grasp_point_api_timeout_sec": grasp_point_api_timeout_sec,
                         "force_torque_topic": LaunchConfiguration(
                             "force_torque_topic"
                         ),
+                        "display_debug_windows": display_debug_windows,
                     },
                 ],
             ),
@@ -195,6 +230,7 @@ def generate_launch_description():
                         "use_local_parser": True,
                         "use_llm_fallback": True,
                         "parser_mode": parser_mode,
+                        "detector_image_topic": detector_image_topic,
                         "timeout_sec": llm_timeout_sec,
                         "min_confidence": 0.55,
                     },
