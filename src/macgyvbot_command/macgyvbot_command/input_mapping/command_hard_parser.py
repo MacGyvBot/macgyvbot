@@ -95,7 +95,7 @@ def find_action(text):
 
     for keyword in STOP_KEYWORDS:
         if normalize_text(keyword) in normalized:
-            return 'stop'
+            return 'pause'
 
     for keyword in RESUME_KEYWORDS:
         if normalize_text(keyword) in normalized:

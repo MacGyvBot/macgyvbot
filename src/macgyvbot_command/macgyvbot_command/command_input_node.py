@@ -323,7 +323,7 @@ class CommandInputNode(Node):
         method = command.get('match_method', 'unknown')
         confidence = command.get('confidence', 0.0)
 
-        if action == 'stop':
+        if action == 'pause':
             self._append_log('warn', '정지 명령을 로봇 노드로 전달했습니다.')
             return
 
@@ -354,10 +354,26 @@ class CommandInputNode(Node):
 
         if status == 'accepted':
             command = feedback.get('command') or {}
-            if command.get('action') == 'stop':
+            if command.get('action') == 'pause':
                 stop_message = '정지 요청을 로봇에 전달했습니다.'
                 self._append_bot(stop_message)
                 self._append_log('warn', stop_message)
+                followup_message = '작업을 재개할까요, 아니면 종료할까요?'
+                if (
+                    self.window is not None
+                    and hasattr(self.window, 'append_control_actions')
+                ):
+                    self.window.append_bot(followup_message)
+                    self._speak_bot(followup_message)
+                    self.window.append_control_actions(
+                        (
+                            ('재개', '재개'),
+                            ('종료', '종료'),
+                        )
+                    )
+                else:
+                    self._append_bot(followup_message)
+                self._append_log('info', followup_message)
                 self._set_status('정지 요청 전달')
                 return
 
@@ -631,6 +647,10 @@ class CommandInputNode(Node):
             'returned': '반납 작업을 완료했습니다.',
             'rejected': '요청을 수행할 수 없습니다.',
             'tool_dropped': '공구 drop이 감지되었습니다.',
+            'vlm_loading': 'VLM grasp 모델을 로드하는 중입니다. 잠시만 기다려주세요.',
+            'vlm_ready': 'VLM grasp 모델 준비가 완료되었습니다.',
+            'vlm_warning': 'VLM grasp 모델 상태를 확인해야 합니다.',
+            'vlm_error': 'VLM grasp 모델 처리 중 오류가 발생했습니다.',
         }
 
         message = templates.get(state, f'현재 작업 상태는 {state}입니다.')
@@ -672,6 +692,10 @@ class CommandInputNode(Node):
             'returned': '반납 완료',
             'rejected': '거절',
             'tool_dropped': '공구 낙하 감지',
+            'vlm_loading': 'VLM 로드 중',
+            'vlm_ready': 'VLM 준비 완료',
+            'vlm_warning': 'VLM 경고',
+            'vlm_error': 'VLM 오류',
         }
         return labels.get(state, message)
 
@@ -709,6 +733,10 @@ class CommandInputNode(Node):
             'returned': '반납 완료',
             'rejected': '작업 거절',
             'tool_dropped': '공구 낙하 감지',
+            'vlm_loading': 'VLM 모델 로드 중',
+            'vlm_ready': 'VLM 모델 준비 완료',
+            'vlm_warning': 'VLM 상태 경고',
+            'vlm_error': 'VLM 상태 오류',
         }
         return stage_labels.get(state, message)
 
@@ -744,6 +772,10 @@ class CommandInputNode(Node):
             'rejected',
             'tool_dropped',
             'handoff_complete',
+            'vlm_loading',
+            'vlm_ready',
+            'vlm_warning',
+            'vlm_error',
         }
 
     def _always_show_robot_statuses(self):
@@ -762,12 +794,16 @@ class CommandInputNode(Node):
             'rejected',
             'handoff_complete',
             'tool_dropped',
+            'vlm_loading',
+            'vlm_ready',
+            'vlm_warning',
+            'vlm_error',
         }
 
     def _robot_status_severity(self, state):
-        if state in ('failed', 'error', 'tool_dropped'):
+        if state in ('failed', 'error', 'tool_dropped', 'vlm_error'):
             return 'error'
-        if state in ('busy', 'paused', 'cancelled', 'rejected'):
+        if state in ('busy', 'paused', 'cancelled', 'rejected', 'vlm_warning'):
             return 'warn'
         return 'info'
 

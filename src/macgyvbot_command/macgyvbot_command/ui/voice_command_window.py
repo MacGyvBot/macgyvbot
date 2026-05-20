@@ -225,6 +225,9 @@ else:
             self.append_bot(text)
             self._append_confirmation_actions()
 
+        def append_control_actions(self, actions):
+            self._append_quick_reply_actions(actions)
+
         def append_command_result(self, command):
             self._append_command_card(command)
 
@@ -418,15 +421,23 @@ else:
             self._add_chat_widget(row)
 
         def _append_confirmation_actions(self):
+            self._append_quick_reply_actions(
+                (
+                    ('예, 맞아요', '네'),
+                    ('아니요', '아니오'),
+                )
+            )
+
+        def _append_quick_reply_actions(self, actions):
             row = QWidget()
             row_layout = QHBoxLayout()
             row_layout.setContentsMargins(0, 0, 0, 10)
             row_layout.setSpacing(8)
             row.setLayout(row_layout)
 
-            yes_button = QPushButton('예, 맞아요')
-            no_button = QPushButton('아니요')
-            for button in (yes_button, no_button):
+            buttons = []
+            for label, reply in actions:
+                button = QPushButton(label)
                 button.setCursor(Qt.PointingHandCursor)
                 button.setStyleSheet(
                     '''
@@ -444,12 +455,13 @@ else:
                     }
                     '''
                 )
+                button.clicked.connect(
+                    lambda _checked=False, text=reply: self._send_quick_reply(text)
+                )
+                buttons.append(button)
 
-            yes_button.clicked.connect(lambda: self._send_quick_reply('네'))
-            no_button.clicked.connect(lambda: self._send_quick_reply('아니오'))
-
-            row_layout.addWidget(yes_button, 0, Qt.AlignLeft)
-            row_layout.addWidget(no_button, 0, Qt.AlignLeft)
+            for button in buttons:
+                row_layout.addWidget(button, 0, Qt.AlignLeft)
             row_layout.addStretch(1)
             self._add_chat_widget(row)
 
@@ -634,7 +646,7 @@ else:
                 'bring': '가져오기',
                 'return': '정리하기',
                 'release': '놓기',
-                'stop': '정지',
+                'pause': '정지',
                 'resume': '재개',
                 'exit': '종료',
                 'unknown': '알 수 없음',

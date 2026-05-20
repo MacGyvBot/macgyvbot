@@ -66,10 +66,10 @@ class CommandLlmParser:
             return self._accepted_result(
                 {
                     'tool_name': 'unknown',
-                    'action': 'stop',
+                    'action': 'pause',
                     'target_mode': 'unknown',
                     'raw_text': text,
-                    'match_method': 'stop_keyword',
+                    'match_method': 'pause_keyword',
                     'match_score': 1.0,
                     'confidence': 1.0,
                 }
@@ -259,13 +259,13 @@ class CommandLlmParser:
         tool_name, match_method, match_score, matched_keyword = find_tool(effective_text)
         action = find_action(effective_text)
 
-        if action == 'stop':
+        if action == 'pause':
             command = {
                 'tool_name': 'unknown',
-                'action': 'stop',
+                'action': 'pause',
                 'target_mode': 'unknown',
                 'raw_text': text,
-                'match_method': 'stop_keyword',
+                'match_method': 'pause_keyword',
                 'match_score': 1.0,
                 'confidence': 1.0,
             }
@@ -352,13 +352,13 @@ class CommandLlmParser:
             )
             return command
 
-        if action == 'stop':
+        if action == 'pause':
             command = {
                 'tool_name': 'unknown',
-                'action': 'stop',
+                'action': 'pause',
                 'target_mode': 'unknown',
                 'raw_text': text,
-                'match_method': 'stop_keyword',
+                'match_method': 'pause_keyword',
                 'match_score': 1.0,
                 'confidence': 1.0,
             }
@@ -482,7 +482,7 @@ class CommandLlmParser:
             return f'{tool_name}를 정리하라는 뜻으로 이해했습니다.'
         if action == 'release':
             return f'{tool_name}를 놓으라는 뜻으로 이해했습니다.'
-        if action == 'stop':
+        if action == 'pause':
             return '정지 명령으로 이해했습니다.'
         if action == 'resume':
             return '재개 명령으로 이해했습니다. 제어 인터페이스가 연결되면 작업 재개 요청으로 전달됩니다.'
@@ -585,7 +585,7 @@ class CommandLlmParser:
 - bring: {ALLOWED_ACTIONS['bring']}
 - return: {ALLOWED_ACTIONS['return']}
 - release: {ALLOWED_ACTIONS['release']}
-- stop: {ALLOWED_ACTIONS['stop']}
+- pause: {ALLOWED_ACTIONS['pause']}
 - resume: {ALLOWED_ACTIONS['resume']}
 - exit: {ALLOWED_ACTIONS['exit']}
 - unknown: {ALLOWED_ACTIONS['unknown']}
@@ -620,10 +620,10 @@ class CommandLlmParser:
 - "고마워", "안녕", "알겠어" 같은 대화는 smalltalk intent다.
 - status_query와 smalltalk는 tool_name unknown, action unknown, target_mode unknown으로 둔다.
 - status_query와 smalltalk는 assistant_message에 사용자가 볼 짧은 한국어 응답을 넣는다.
-- "멈춰", "정지", "중지", "중단", "스탑", "stop", "pause"처럼 명확한 정지 표현만 stop action이다.
+- "멈춰", "정지", "중지", "중단", "스탑", "stop", "pause"처럼 명확한 정지 표현만 pause action이다.
 - "재개", "다시 시작", "계속해", "resume", "restart"처럼 명확한 재개 표현만 resume action이다.
 - "종료", "끝내", "꺼줘", "닫아줘", "exit", "quit"처럼 명확한 종료 표현만 exit action이다.
-- 이해하지 못한 문장을 stop, resume, exit로 추측하지 말고 action unknown으로 둔다.
+- 이해하지 못한 문장을 pause, resume, exit로 추측하지 말고 action unknown으로 둔다.
 
 예시:
 입력: 드라이버 가져다줘
@@ -655,7 +655,7 @@ class CommandLlmParser:
 출력: {{"intent":"command","tool_name":"tape_measure","action":"bring","target_mode":"named","confidence":0.82,"needs_confirmation":false,"context_used":"none"}}
 
 입력: 멈춰
-출력: {{"intent":"command","tool_name":"unknown","action":"stop","target_mode":"unknown","confidence":0.90,"needs_confirmation":false,"context_used":"none"}}
+출력: {{"intent":"command","tool_name":"unknown","action":"pause","target_mode":"unknown","confidence":0.90,"needs_confirmation":false,"context_used":"none"}}
 
 입력: 다시 시작해
 출력: {{"intent":"command","tool_name":"unknown","action":"resume","target_mode":"unknown","confidence":0.90,"needs_confirmation":false,"context_used":"none"}}
@@ -915,8 +915,8 @@ class CommandLlmParser:
                 ),
             }
 
-        if action == 'stop' and not self._has_stop_intent(raw_text):
-            self._warn('명확한 정지 표현이 없어 stop 명령을 무시합니다.')
+        if action == 'pause' and not self._has_stop_intent(raw_text):
+            self._warn('명확한 정지 표현이 없어 pause 명령을 무시합니다.')
             candidate_command['action'] = 'unknown'
             return {
                 'command': None,
@@ -1035,8 +1035,8 @@ class CommandLlmParser:
     def _adjust_action(self, raw_text, action):
         normalized = self._normalize_answer(raw_text)
         if self._has_stop_intent(raw_text):
-            return 'stop'
-        if action == 'stop':
+            return 'pause'
+        if action == 'pause':
             return 'unknown'
         if self._has_resume_intent(raw_text):
             return 'resume'
