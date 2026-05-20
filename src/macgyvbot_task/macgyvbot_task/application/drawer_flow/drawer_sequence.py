@@ -135,6 +135,25 @@ class DrawerInteraction:
             logger,
             vlm_rpy_deg,
         )
+        if target is None and source != "center":
+            # VLM/grasp_selector가 이미지 경계 근처 픽셀을 선택해 depth=0이 된 경우.
+            # bbox center로 재시도한다.
+            cu, cv = self._box_center_pixel(best_box)
+            logger.warn(
+                f"VLM pixel ({u}, {v}) depth 무효 — bbox center ({cu}, {cv})로 재시도"
+            )
+            target = self.depth_projector.pixel_to_base_target(
+                cu,
+                cv,
+                label,
+                "center",
+                self.state.depth_image,
+                self.state.intrinsics,
+                logger,
+                None,
+            )
+            if target is not None:
+                u, v, source, vlm_rpy_deg = cu, cv, "center_fallback", None
         if target is None:
             return None
 
@@ -279,7 +298,6 @@ class DrawerInteraction:
             logger.error("서랍 내부 관찰 pose 이동 실패")
             return None
 
-        self.state.drawer_observation_ready = True
         return motion
 
     def move_to_inside_observation_pose(self, logger):
@@ -396,58 +414,28 @@ class DrawerInteraction:
         return motion
 
     def close_drawer(self, motion, logger):
-        logger.info("서랍 닫기 1단계: 열린 손잡이 상단 접근")
+        # Joint-space 이동으로 Cartesian IK 없이 서랍을 닫는다.
+        # open_drawer_from_handle이 joint-space로 동작하는 것과 대칭적 구조.
+        logger.info("서랍 닫기 1단계: 열린 손잡이 joint pose로 이동")
         self.gripper.open_gripper()
         self.wait(GRIPPER_OPEN_WAIT_SEC)
-        if not self._move_handle_pose(
-            motion.open_x,
-            motion.y,
-            motion.approach_z,
-            motion.ori,
-            logger,
-        ):
-            logger.error("열린 손잡이 상단 접근 실패")
+        if not self.motion.move_to_drawer_open_joints(logger):
+            logger.error("열린 손잡이 joint pose 이동 실패")
             return False
 
-        logger.info("서랍 닫기 2단계: 손잡이 파지 높이로 하강")
-        if not self._move_handle_pose(
-            motion.open_x,
-            motion.y,
-            motion.grasp_z,
-            motion.ori,
-            logger,
-        ):
-            logger.error("열린 손잡이 하강 실패")
-            return False
-
-        logger.info("서랍 닫기 3단계: 손잡이 파지")
+        logger.info("서랍 닫기 2단계: 손잡이 파지")
         self.gripper.close_gripper()
         self.wait(GRIPPER_GRASP_WAIT_SEC)
 
-        logger.info(
-            "서랍 닫기 4단계: 손잡이를 밀어 서랍 닫기 "
-            f"x={motion.open_x:.3f}->{motion.closed_x:.3f}"
-        )
-        if not self._move_handle_pose(
-            motion.closed_x,
-            motion.y,
-            motion.grasp_z,
-            motion.ori,
-            logger,
-        ):
-            logger.error("서랍 닫기 밀기 실패")
+        logger.info("서랍 닫기 3단계: 닫힌 손잡이 joint pose로 이동 (서랍 밀기)")
+        if not self.motion.move_to_drawer_closed_joints(logger):
+            logger.error("서랍 닫기 joint 이동 실패")
             return False
 
-        logger.info("서랍 닫기 5단계: 손잡이를 놓고 안전 높이로 복귀")
+        logger.info("서랍 닫기 4단계: 손잡이 놓기")
         self.gripper.open_gripper()
         self.wait(GRIPPER_OPEN_WAIT_SEC)
-        return self._move_handle_pose(
-            motion.closed_x,
-            motion.y,
-            motion.travel_z,
-            motion.ori,
-            logger,
-        )
+        return True
 
     def place_tool_in_open_drawer(self, drawer_target, logger):
         ori = self.state.home_ori

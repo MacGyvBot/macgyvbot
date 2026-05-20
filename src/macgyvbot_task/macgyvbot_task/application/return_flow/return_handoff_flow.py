@@ -7,7 +7,6 @@ import time
 import rclpy
 
 from macgyvbot_config.hand_grasp import HAND_GRASP_TIMEOUT_SEC
-from macgyvbot_config.timing import HANDOFF_POLL_SEC
 from macgyvbot_config.handoff import (
     HANDOVER_HAND_X_OFFSET_M,
     HANDOVER_HAND_Z_OFFSET_M,
@@ -98,7 +97,7 @@ class ReturnHandoffFlow:
                 )
                 return None
 
-            self.wait_fn(HANDOFF_POLL_SEC)
+            self.wait_fn(0.1)
 
         return None
 

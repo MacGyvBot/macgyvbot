@@ -16,7 +16,6 @@ from macgyvbot_config.handoff import (
     OBSERVATION_TIMEOUT_SEC,
 )
 from macgyvbot_config.robot import BASE_FRAME
-from macgyvbot_config.timing import GRIPPER_GRASP_WAIT_SEC, HANDOFF_POLL_SEC
 from macgyvbot_manipulation.handover_targeting import (
     move_to_candidate_with_offset,
     move_to_observation_pose,
@@ -70,7 +69,7 @@ class PickHandoffFlow:
 
         logger.info("반환 3단계: 원래 위치에 공구 놓기")
         self.gripper.open_gripper()
-        self.wait_fn(GRIPPER_GRASP_WAIT_SEC)
+        self.wait_fn(0.8)
 
         logger.info("반환 4단계: 공구를 놓은 뒤 안전 높이로 복귀")
         ok = self.motion.plan_and_execute(
@@ -202,7 +201,7 @@ class PickHandoffFlow:
                 )
                 return False
 
-            self.wait_fn(HANDOFF_POLL_SEC)
+            self.wait_fn(0.1)
 
         return False
 
@@ -232,6 +231,6 @@ class PickHandoffFlow:
                 )
                 return False
 
-            self.wait_fn(HANDOFF_POLL_SEC)
+            self.wait_fn(0.1)
 
         return False

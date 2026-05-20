@@ -2,8 +2,6 @@
 
 import time
 
-import rclpy
-
 from macgyvbot_config.grasp import (
     GRASP_RETRY_LIMIT,
     GRASP_VERIFY_POLL_SEC,
@@ -11,7 +9,7 @@ from macgyvbot_config.grasp import (
     GRASP_VERIFY_TIMEOUT_SEC,
     GRIPPER_CLOSED_WIDTH_THRESHOLD_MM,
 )
-from macgyvbot_config.timing import GRIPPER_OPEN_WAIT_SEC, SEQUENCE_WAIT_POLL_SEC
+from macgyvbot_config.timing import SEQUENCE_WAIT_POLL_SEC
 
 
 class GraspVerifier:
@@ -35,7 +33,7 @@ class GraspVerifier:
                 f"{failure_prefix} 실패. 재시도 준비 {attempt}/{GRASP_RETRY_LIMIT}"
             )
             self.gripper.open_gripper()
-            self.wait_fn(GRIPPER_OPEN_WAIT_SEC)
+            self.wait_fn(0.5)
 
         return False
 
@@ -119,6 +117,8 @@ def _read_width_mm(gripper, logger):
 
 
 def cooperative_wait(duration_sec):
+    import rclpy
+
     end_time = time.monotonic() + max(0.0, float(duration_sec))
     while rclpy.ok() and time.monotonic() < end_time:
         remaining = end_time - time.monotonic()
