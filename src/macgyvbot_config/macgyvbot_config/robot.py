@@ -59,4 +59,11 @@ DRAWER_OPEN_JOINT_SEQUENCE = [
 # Optional hardware-taught view pose for looking into the opened drawer.
 # Leave as None until measured; drawer flow falls back to a conservative
 # current-open-handle FK + Z offset observation pose for software validation.
-DRAWER_INSIDE_OBSERVATION_JOINTS = None
+DRAWER_INSIDE_OBSERVATION_JOINTS = {
+    "joint_1": math.radians(-1.62),
+    "joint_2": math.radians(31.59),
+    "joint_3": math.radians(52.82),
+    "joint_4": math.radians(-1.21),
+    "joint_5": math.radians(97.25),
+    "joint_6": math.radians(87.13),
+}
