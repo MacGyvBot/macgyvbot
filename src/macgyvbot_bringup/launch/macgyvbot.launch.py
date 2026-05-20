@@ -167,6 +167,11 @@ def generate_launch_description():
                             "force_torque_topic"
                         ),
                         "display_debug_windows": display_debug_windows,
+                        "sam_enabled": sam_enabled,
+                        "sam_checkpoint": sam_checkpoint,
+                        "sam_backend": "mobile_sam",
+                        "sam_model_type": "vit_t",
+                        "sam_device": "cuda",
                     },
                 ],
             ),

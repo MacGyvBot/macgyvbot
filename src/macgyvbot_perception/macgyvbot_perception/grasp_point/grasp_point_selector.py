@@ -21,6 +21,11 @@ class GraspPointSelector:
         api_env_file="",
         api_base_url="",
         api_timeout_sec=30.0,
+        sam_enabled=True,
+        sam_checkpoint="",
+        sam_backend="mobile_sam",
+        sam_model_type="vit_t",
+        sam_device="cuda",
     ):
         self.mode = mode
         self.logger = logger
@@ -28,6 +33,11 @@ class GraspPointSelector:
         self.api_env_file = api_env_file
         self.api_base_url = api_base_url
         self.api_timeout_sec = api_timeout_sec
+        self.sam_enabled = sam_enabled
+        self.sam_checkpoint = sam_checkpoint
+        self.sam_backend = sam_backend
+        self.sam_model_type = sam_model_type
+        self.sam_device = sam_device
         self.vlm_grasp_point_selector = None
         self.api_grasp_point_selector = None
 
@@ -44,7 +54,14 @@ class GraspPointSelector:
             return
 
         if self.vlm_grasp_point_selector is None:
-            self.vlm_grasp_point_selector = VLMGraspPointSelector(self.logger)
+            self.vlm_grasp_point_selector = VLMGraspPointSelector(
+                self.logger,
+                sam_enabled=self.sam_enabled,
+                sam_checkpoint=self.sam_checkpoint,
+                sam_backend=self.sam_backend,
+                sam_model_type=self.sam_model_type,
+                sam_device=self.sam_device,
+            )
 
         try:
             self.vlm_grasp_point_selector.preload()
@@ -176,7 +193,14 @@ class GraspPointSelector:
             return None
 
         if self.vlm_grasp_point_selector is None:
-            self.vlm_grasp_point_selector = VLMGraspPointSelector(self.logger)
+            self.vlm_grasp_point_selector = VLMGraspPointSelector(
+                self.logger,
+                sam_enabled=self.sam_enabled,
+                sam_checkpoint=self.sam_checkpoint,
+                sam_backend=self.sam_backend,
+                sam_model_type=self.sam_model_type,
+                sam_device=self.sam_device,
+            )
 
         return self.vlm_grasp_point_selector.select_grasp_pixel(
             bbox,

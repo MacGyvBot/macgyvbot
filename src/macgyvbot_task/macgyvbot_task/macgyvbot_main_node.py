@@ -105,6 +105,7 @@ class MacGyvBotNode(Node):
             self.grasp_point_mode,
             self.get_logger(),
             **self._read_grasp_point_api_config(),
+            **self._read_vlm_sam_config(),
         )
         self.grasp_point_selector.preload_vlm_if_needed()
 
@@ -249,6 +250,23 @@ class MacGyvBotNode(Node):
             "api_timeout_sec": float(
                 self.get_parameter("grasp_point_api_timeout_sec").value
             ),
+        }
+
+    def _read_vlm_sam_config(self):
+        self.declare_parameter("sam_enabled", True)
+        self.declare_parameter(
+            "sam_checkpoint",
+            str(Path("weights") / "mobile_sam.pt"),
+        )
+        self.declare_parameter("sam_backend", "mobile_sam")
+        self.declare_parameter("sam_model_type", "vit_t")
+        self.declare_parameter("sam_device", "cuda")
+        return {
+            "sam_enabled": self._read_bool_parameter("sam_enabled", True),
+            "sam_checkpoint": str(self.get_parameter("sam_checkpoint").value).strip(),
+            "sam_backend": str(self.get_parameter("sam_backend").value).strip(),
+            "sam_model_type": str(self.get_parameter("sam_model_type").value).strip(),
+            "sam_device": str(self.get_parameter("sam_device").value).strip(),
         }
 
     def _read_force_torque_topic(self):
