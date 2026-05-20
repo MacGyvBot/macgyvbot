@@ -106,6 +106,7 @@ class MacGyvBotNode(Node):
             self.get_logger(),
             **self._read_grasp_point_api_config(),
         )
+        self.grasp_point_selector.preload_vlm_if_needed()
 
         calib_file = self._resolve_calibration_file("T_gripper2camera.npy")
         self.gripper2cam = np.load(str(calib_file)).astype(float)

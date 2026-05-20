@@ -124,6 +124,9 @@ class VLMGraspPointSelector:
         self.logger = logger
         self.model = None
 
+    def preload(self):
+        self._ensure_model_loaded()
+
     def select_grasp_pixel(
         self,
         bbox,

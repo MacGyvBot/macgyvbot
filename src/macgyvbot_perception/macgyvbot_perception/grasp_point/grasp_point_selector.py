@@ -31,6 +31,35 @@ class GraspPointSelector:
         self.vlm_grasp_point_selector = None
         self.api_grasp_point_selector = None
 
+    def preload_vlm_if_needed(self):
+        if not self._uses_vlm():
+            return
+
+        try:
+            from macgyvbot_perception.grasp_point.vlm_grasp_point_selector import (
+                VLMGraspPointSelector,
+            )
+        except ImportError as exc:
+            self.logger.warn(f"VLM grasp module import failed: {exc}")
+            return
+
+        if self.vlm_grasp_point_selector is None:
+            self.vlm_grasp_point_selector = VLMGraspPointSelector(self.logger)
+
+        try:
+            self.vlm_grasp_point_selector.preload()
+        except Exception as exc:
+            self.logger.warn(f"VLM preload failed: {exc}")
+
+    def _uses_vlm(self):
+        return (
+            self.mode == GRASP_POINT_MODE_VLM
+            or (
+                self.mode == GRASP_POINT_MODE_API
+                and DEFAULT_GRASP_POINT_MODE == GRASP_POINT_MODE_VLM
+            )
+        )
+
     def select(
         self,
         box,
