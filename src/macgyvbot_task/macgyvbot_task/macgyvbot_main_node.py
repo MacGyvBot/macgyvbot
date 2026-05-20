@@ -73,8 +73,14 @@ class MacGyvBotNode(Node):
     def __init__(self):
         super().__init__("macgyvbot_main_node")
 
+        self.declare_parameter("display_debug_windows", False)
+
         self.bridge = CvBridge()
-        self.display = DebugDisplay()
+        self.display_debug_windows = self._read_bool_parameter(
+            "display_debug_windows",
+            False,
+        )
+        self.display = DebugDisplay(enabled=self.display_debug_windows)
 
         self.grasp_point_mode = self._read_grasp_point_mode()
         self.yolo_model = self._read_yolo_model()
@@ -114,6 +120,14 @@ class MacGyvBotNode(Node):
             self.depth_projector,
             self.get_logger(),
         )
+
+        if self.display_debug_windows:
+            self.get_logger().info("OpenCV debug display windows are enabled.")
+        else:
+            self.get_logger().info(
+                "OpenCV debug display windows are disabled. "
+                "Use the command GUI detector panel instead."
+            )
         self.pick_target_resolver = PickTargetResolver(
             self.detector,
             self.grasp_point_selector,
@@ -243,6 +257,14 @@ class MacGyvBotNode(Node):
             .string_value
             .strip()
         ) or FORCE_TORQUE_TOPIC
+
+    def _read_bool_parameter(self, name, default_value=False):
+        value = self.get_parameter(name).value
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in ("1", "true", "yes", "on")
+        return bool(value)
 
     def _create_subscriptions(self):
         self.create_subscription(

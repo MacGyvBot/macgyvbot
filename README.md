@@ -288,6 +288,11 @@ ros2 launch macgyvbot_bringup macgyvbot.launch.py use_tts:=false
 전체 launch는 command GUI/STT/TTS 노드를 함께 실행합니다. 사용자는 GUI 또는
 마이크로 아래와 같은 명령을 줄 수 있습니다.
 
+GUI는 왼쪽 로봇 상태, 가운데 detector 화면, 오른쪽 채팅창으로 구성됩니다.
+Detector 화면은 `/hand_grasp_detection/annotated_image`를 구독해 GUI 안에만
+표시합니다. Perception 노드는 `publish_annotated:=true`, `display:=false`로
+실행되므로 별도 OpenCV detector 창은 띄우지 않습니다.
+
 ```text
 드라이버 가져다줘
 플라이어 가져와
@@ -341,6 +346,7 @@ ros2 run macgyvbot_command command_input_node --ros-args \
 | `parser_mode` | `llm_primary` | `llm_primary` 또는 `hybrid` |
 | `llm_model` | `gemma3:1b` | Ollama 모델명 |
 | `force_torque_topic` | `/force_torque_sensor_broadcaster/wrench` | return Z 하강 force 입력 |
+| `detector_image_topic` | `/hand_grasp_detection/annotated_image` | GUI 중앙 detector 화면 입력 |
 
 ## 주요 Topics
 
@@ -351,7 +357,7 @@ ros2 run macgyvbot_command command_input_node --ros-args \
 | `/tool_drop_detected` | task -> monitor/UI | `std_msgs/String` JSON | grasp 성공 후 의도치 않은 공구 drop 감지 이벤트 |
 | `/target_label` | manual -> task | `std_msgs/String` | 수동 pick target label |
 | `/human_grasped_tool` | perception -> task | `std_msgs/String` JSON | 사용자 hand-tool grasp 결과 |
-| `/hand_grasp_detection/annotated_image` | perception -> debug | `sensor_msgs/Image` | hand grasp overlay |
+| `/hand_grasp_detection/annotated_image` | perception -> command GUI | `sensor_msgs/Image` | GUI 중앙 detector overlay |
 | `/hand_grasp_detection/tool_mask_lock` | perception -> task | `std_msgs/String` JSON | grasp_success 이후 mask lock ack |
 | `/command_feedback` | command -> GUI | `std_msgs/String` JSON | 명령 해석 결과 |
 | `/stt_text` | command -> command | `std_msgs/String` | STT/GUI 입력 텍스트 |
