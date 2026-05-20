@@ -12,6 +12,13 @@ from macgyvbot_config.handoff import (
     HANDOVER_HAND_Z_OFFSET_M,
     OBSERVATION_TIMEOUT_SEC,
 )
+from macgyvbot_config.return_flow import (
+    RETURN_HAND_CLOSE_ROI_CENTER_X,
+    RETURN_HAND_CLOSE_ROI_CENTER_Y,
+    RETURN_HAND_CLOSE_ROI_HEIGHT_RATIO,
+    RETURN_HAND_CLOSE_ROI_TIMEOUT_SEC,
+    RETURN_HAND_CLOSE_ROI_WIDTH_RATIO,
+)
 from macgyvbot_config.robot import BASE_FRAME
 from macgyvbot_manipulation.grasp_verifier import GraspVerifier
 from macgyvbot_manipulation.handover_targeting import (
@@ -99,6 +106,16 @@ class ReturnHandoffFlow:
         return True, ""
 
     def grasp_at_current_position(self, tool_name, command, logger):
+        if not self.wait_for_tool_in_close_roi(logger):
+            self.reporter.fail(
+                tool_name,
+                "그리퍼 전방 영역에서 반납 공구를 확인하지 못했습니다.",
+                "return_close_roi_timeout",
+                command,
+                logger,
+            )
+            return None, "return_close_roi_timeout"
+
         logger.info("사용자 손 위치에 접근했습니다. 반납 공구 grasp를 시도합니다.")
         if not self.try_robot_grasp(tool_name, command, logger):
             self.reporter.fail(
@@ -119,6 +136,57 @@ class ReturnHandoffFlow:
         if self.tool_hold_monitor is not None:
             self.tool_hold_monitor.start(tool_name, "return", command)
         return tool_name, ""
+
+    def wait_for_tool_in_close_roi(self, logger):
+        start_time = time.monotonic()
+
+        while rclpy.ok():
+            result = self.state.last_grasp_result or {}
+            tool_roi = result.get("tool_roi")
+            if self._tool_roi_in_close_region(tool_roi):
+                logger.info(
+                    "그리퍼 close ROI 안에서 공구 확인: "
+                    f"tool_roi={tool_roi}"
+                )
+                return True
+
+            if time.monotonic() - start_time >= RETURN_HAND_CLOSE_ROI_TIMEOUT_SEC:
+                logger.warn(
+                    "그리퍼 close ROI 안에서 공구를 확인하지 못했습니다: "
+                    f"timeout={RETURN_HAND_CLOSE_ROI_TIMEOUT_SEC:.1f}s"
+                )
+                return False
+
+            self.wait_fn(0.1)
+
+        return False
+
+    def _tool_roi_in_close_region(self, tool_roi):
+        if self.state.color_image is None:
+            return False
+        if not isinstance(tool_roi, (list, tuple)) or len(tool_roi) != 4:
+            return False
+
+        height, width = self.state.color_image.shape[:2]
+        if width <= 0 or height <= 0:
+            return False
+
+        try:
+            x1, y1, x2, y2 = [float(value) for value in tool_roi]
+        except (TypeError, ValueError):
+            return False
+
+        center_u = (x1 + x2) * 0.5
+        center_v = (y1 + y2) * 0.5
+        roi_center_u = width * RETURN_HAND_CLOSE_ROI_CENTER_X
+        roi_center_v = height * RETURN_HAND_CLOSE_ROI_CENTER_Y
+        half_width = width * RETURN_HAND_CLOSE_ROI_WIDTH_RATIO * 0.5
+        half_height = height * RETURN_HAND_CLOSE_ROI_HEIGHT_RATIO * 0.5
+
+        return (
+            abs(center_u - roi_center_u) <= half_width
+            and abs(center_v - roi_center_v) <= half_height
+        )
 
     def receive(self, requested_tool, command, logger):
         advanced, advance_reason = self.advance_for_return_detection(

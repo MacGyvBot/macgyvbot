@@ -9,6 +9,7 @@ from typing import Optional
 import rclpy
 
 from macgyvbot_config.handoff import OBSERVATION_TIMEOUT_SEC
+from macgyvbot_config.return_flow import RETURN_FLOOR_MAX_BASE_Z_M
 from macgyvbot_config.robot import BASE_FRAME
 from macgyvbot_config.timing import SEQUENCE_WAIT_POLL_SEC
 from macgyvbot_domain.target_models import PickTarget
@@ -74,11 +75,15 @@ class ReturnTargetResolver:
             if floor_allowed and not saw_hand_without_position:
                 floor_target = self._floor_target(tool_name)
                 if floor_target.found:
-                    return ReturnTarget(
-                        source=RETURN_SOURCE_FLOOR,
-                        tool_name=floor_target.label or tool_name,
-                        floor_target=floor_target,
-                    )
+                    if self._is_floor_height(floor_target, logger):
+                        return ReturnTarget(
+                            source=RETURN_SOURCE_FLOOR,
+                            tool_name=floor_target.label or tool_name,
+                            floor_target=floor_target,
+                        )
+                    last_floor_reason = "floor_target_z_too_high"
+                    self.wait_fn(self.poll_sec)
+                    continue
                 last_floor_reason = floor_target.reason or last_floor_reason
 
             self.wait_fn(self.poll_sec)
@@ -132,6 +137,22 @@ class ReturnTargetResolver:
             self.state.depth_image,
             self.state.intrinsics,
         )
+
+    @staticmethod
+    def _is_floor_height(target, logger):
+        if target.base_xyz is None or len(target.base_xyz) < 3:
+            return False
+
+        base_z = float(target.base_xyz[2])
+        if base_z < RETURN_FLOOR_MAX_BASE_Z_M:
+            return True
+
+        logger.warn(
+            "공구만 인식되었지만 floor 후보 z가 높아 바닥 공구로 보지 않습니다: "
+            f"base_z={base_z:.3f}m, "
+            f"threshold={RETURN_FLOOR_MAX_BASE_Z_M:.3f}m"
+        )
+        return False
 
     @staticmethod
     def _hand_present(result):

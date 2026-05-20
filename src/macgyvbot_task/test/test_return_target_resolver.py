@@ -95,12 +95,12 @@ def no_wait(_duration_sec):
     pass
 
 
-def make_floor_target(found=True, reason=""):
+def make_floor_target(found=True, reason="", base_z=0.06):
     return PickTarget(
         found=found,
         label="hammer",
         pixel=(10, 10) if found else None,
-        base_xyz=(0.4, 0.1, 0.2) if found else None,
+        base_xyz=(0.4, 0.1, base_z) if found else None,
         depth_m=0.5 if found else None,
         yaw_deg=None,
         reason=reason,
@@ -150,6 +150,22 @@ def test_floor_target_selected_when_no_hand_is_present():
     assert target.source == RETURN_SOURCE_FLOOR
     assert target.tool_name == "hammer"
     assert target.floor_target.found is True
+
+
+def test_high_tool_only_target_is_not_treated_as_floor():
+    state = FakeState()
+    state.last_grasp_result = {"hand_present": False}
+    resolver = ReturnTargetResolver(
+        state,
+        FakePickTargetResolver(make_floor_target(base_z=0.08)),
+        no_wait,
+        timeout_sec=0.01,
+    )
+
+    target = resolver.resolve("hammer", FakeLogger())
+
+    assert target.source == RETURN_SOURCE_NONE
+    assert target.reason == "floor_target_z_too_high"
 
 
 def test_no_target_returns_failure_reason():
