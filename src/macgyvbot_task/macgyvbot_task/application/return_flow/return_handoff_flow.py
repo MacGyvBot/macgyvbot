@@ -43,6 +43,83 @@ class ReturnHandoffFlow:
         self.tool_hold_monitor = tool_hold_monitor
         self.grasp_verifier = GraspVerifier(gripper, wait_fn)
 
+    def receive_from_candidate(self, tool_name, candidate, command, logger):
+        ok, reason = self.move_to_candidate(tool_name, candidate, command, logger)
+        if not ok:
+            return None, reason
+
+        return self.grasp_at_current_position(tool_name, command, logger)
+
+    def move_to_candidate(self, tool_name, candidate, command, logger):
+        if candidate.frame_id not in ("world", BASE_FRAME):
+            self.reporter.fail(
+                tool_name,
+                f"반납 위치 frame이 planning frame이 아닙니다: {candidate.frame_id}",
+                "return_unsupported_frame",
+                command,
+                logger,
+            )
+            return False, "return_unsupported_frame"
+
+        ok, final_pose, reason = move_to_candidate_with_offset(
+            self.motion,
+            candidate,
+            self.state.home_ori,
+            logger,
+            x_offset_m=HANDOVER_HAND_X_OFFSET_M,
+            z_offset_m=HANDOVER_HAND_Z_OFFSET_M,
+        )
+        logger.info(
+            "감지된 사용자 손 위치로 수령 이동: "
+            f"source={candidate.source}, frame={candidate.frame_id}, "
+            f"raw=({candidate.x:.3f},{candidate.y:.3f},{candidate.z:.3f}), "
+            f"safe=({final_pose.x:.3f},{final_pose.y:.3f},{final_pose.z:.3f})"
+        )
+        self.reporter.publish(
+            "moving_return_detected_pose",
+            tool_name,
+            "탐색된 사용자 손 위치로 이동합니다.",
+            command,
+        )
+        if not ok:
+            failure_reason = (
+                "return_detected_pose_move_failed"
+                if reason == "target_move_failed"
+                else reason
+            )
+            self.reporter.fail(
+                tool_name,
+                "탐색된 반납 위치로 이동하지 못했습니다.",
+                failure_reason,
+                command,
+                logger,
+            )
+            return False, failure_reason
+
+        return True, ""
+
+    def grasp_at_current_position(self, tool_name, command, logger):
+        logger.info("사용자 손 위치에 접근했습니다. 반납 공구 grasp를 시도합니다.")
+        if not self.try_robot_grasp(tool_name, command, logger):
+            self.reporter.fail(
+                tool_name,
+                "반납 공구 grasp에 실패했습니다.",
+                "return_grasp_failed",
+                command,
+                logger,
+            )
+            return None, "return_grasp_failed"
+
+        self.reporter.publish(
+            "grasp_success",
+            tool_name,
+            "반납 공구 grasp에 성공했습니다.",
+            command,
+        )
+        if self.tool_hold_monitor is not None:
+            self.tool_hold_monitor.start(tool_name, "return", command)
+        return tool_name, ""
+
     def receive(self, requested_tool, command, logger):
         advanced, advance_reason = self.advance_for_return_detection(
             requested_tool,

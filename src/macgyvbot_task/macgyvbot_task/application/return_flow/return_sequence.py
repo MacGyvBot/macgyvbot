@@ -5,11 +5,20 @@ import time
 import rclpy
 
 from macgyvbot_config.timing import SEQUENCE_WAIT_POLL_SEC
+from macgyvbot_manipulation.handover_targeting import move_to_observation_pose
+from macgyvbot_task.application.return_flow.return_floor_pickup_flow import (
+    ReturnFloorPickupFlow,
+)
 from macgyvbot_task.application.return_flow.return_handoff_flow import (
     ReturnHandoffFlow,
 )
 from macgyvbot_task.application.return_flow.return_home_placement_flow import (
     ReturnHomePlacementFlow,
+)
+from macgyvbot_task.application.return_flow.return_target_resolver import (
+    RETURN_SOURCE_FLOOR,
+    RETURN_SOURCE_HAND,
+    ReturnTargetResolver,
 )
 from macgyvbot_task.application.status.return_status_reporter import (
     ReturnStatusReporter,
@@ -17,7 +26,7 @@ from macgyvbot_task.application.status.return_status_reporter import (
 
 
 class ReturnSequenceRunner:
-    """Receive a user-held tool and place it in its configured home pose."""
+    """Receive or pick up a returned tool and place it at robot Home."""
 
     def __init__(
         self,
@@ -25,6 +34,7 @@ class ReturnSequenceRunner:
         motion_controller,
         gripper,
         state,
+        pick_target_resolver,
         tool_hold_monitor=None,
     ):
         self.robot = robot
@@ -33,7 +43,21 @@ class ReturnSequenceRunner:
         self.state = state
         self.tool_hold_monitor = tool_hold_monitor
         self.reporter = ReturnStatusReporter(state)
+        self.target_resolver = ReturnTargetResolver(
+            state,
+            pick_target_resolver,
+            self._cooperative_wait,
+        )
         self.handoff = ReturnHandoffFlow(
+            robot,
+            motion_controller,
+            gripper,
+            state,
+            self.reporter,
+            self._cooperative_wait,
+            tool_hold_monitor,
+        )
+        self.floor_pickup = ReturnFloorPickupFlow(
             robot,
             motion_controller,
             gripper,
@@ -76,20 +100,68 @@ class ReturnSequenceRunner:
             self.gripper.open_gripper()
             self._cooperative_wait(0.5)
 
-            tool_name, receive_failure_reason = self.handoff.receive(
+            if not self._move_to_observation_pose(requested_tool, command, log):
+                return
+
+            self.state.human_grasped_tool = False
+            self.state.last_grasp_result = None
+            self.reporter.publish(
+                "checking_return_target",
                 requested_tool,
+                "반납 공구가 손에 있는지 바닥에 있는지 확인합니다.",
                 command,
-                log,
             )
+            target = self.target_resolver.resolve(requested_tool, log)
+            if target.tool_name and target.tool_name != "unknown":
+                self.state.target_label = target.tool_name
+
+            if target.source == RETURN_SOURCE_HAND:
+                tool_name, failure_reason = self._handle_hand_target(
+                    target,
+                    requested_tool,
+                    command,
+                    log,
+                )
+            elif target.source == RETURN_SOURCE_FLOOR:
+                self.reporter.publish(
+                    "return_floor_detected",
+                    target.tool_name,
+                    "바닥에 있는 반납 공구를 집습니다.",
+                    command,
+                )
+                tool_name, failure_reason = self.floor_pickup.pick(
+                    target.floor_target,
+                    command,
+                    log,
+                )
+            else:
+                self.reporter.fail(
+                    requested_tool,
+                    "반납받을 손 또는 바닥 공구를 찾지 못했습니다.",
+                    target.reason or "return_target_not_found",
+                    command,
+                    log,
+                )
+                self._recover_to_home(
+                    requested_tool,
+                    command,
+                    log,
+                    reason=target.reason or "return_target_not_found",
+                )
+                return
+
             if tool_name is None:
-                if receive_failure_reason == "return_grasp_failed":
+                if failure_reason in {
+                    "return_grasp_failed",
+                    "return_floor_grasp_failed",
+                }:
                     return
 
                 self._recover_to_home(
                     requested_tool,
                     command,
                     log,
-                    reason=receive_failure_reason,
+                    reason=failure_reason,
                 )
                 return
 
@@ -112,6 +184,87 @@ class ReturnSequenceRunner:
             if self.tool_hold_monitor is not None:
                 self.tool_hold_monitor.stop("return_sequence_finished")
             self._clear_state()
+
+    def _handle_hand_target(self, target, requested_tool, command, logger):
+        self.reporter.publish(
+            "return_hand_detected",
+            target.tool_name,
+            "사용자 손 위치로 먼저 이동합니다.",
+            command,
+        )
+        moved, failure_reason = self.handoff.move_to_candidate(
+            target.tool_name,
+            target.hand_candidate,
+            command,
+            logger,
+        )
+        if not moved:
+            return None, failure_reason
+
+        self.state.human_grasped_tool = False
+        self.state.last_grasp_result = None
+        self.reporter.publish(
+            "checking_return_target",
+            target.tool_name,
+            "이동한 위치에서 손과 바닥 공구를 다시 확인합니다.",
+            command,
+        )
+        local_target = self.target_resolver.resolve(requested_tool, logger)
+        if local_target.tool_name and local_target.tool_name != "unknown":
+            self.state.target_label = local_target.tool_name
+
+        if local_target.source == RETURN_SOURCE_HAND:
+            return self.handoff.grasp_at_current_position(
+                local_target.tool_name,
+                command,
+                logger,
+            )
+
+        if local_target.source == RETURN_SOURCE_FLOOR:
+            self.reporter.publish(
+                "return_floor_detected",
+                local_target.tool_name,
+                "이동한 위치에서 바닥 반납 공구를 확인했습니다.",
+                command,
+            )
+            return self.floor_pickup.pick(
+                local_target.floor_target,
+                command,
+                logger,
+            )
+
+        self.reporter.fail(
+            target.tool_name,
+            "이동한 위치에서 손 또는 바닥 공구를 찾지 못했습니다.",
+            local_target.reason or "return_target_not_found_after_move",
+            command,
+            logger,
+        )
+        return None, local_target.reason or "return_target_not_found_after_move"
+
+    def _move_to_observation_pose(self, tool_name, command, logger):
+        self.reporter.publish(
+            "moving_return_grasp_pose",
+            tool_name,
+            "반납 공구를 감지하기 위해 관찰 자세로 이동합니다.",
+            command,
+        )
+        ok, start_pose = move_to_observation_pose(self.motion, self.robot, logger)
+        logger.info(
+            "반납 1단계: 공구 감지 전 관찰 자세 이동 "
+            f"pose=({start_pose.x:.3f},{start_pose.y:.3f},{start_pose.z:.3f})"
+        )
+        if ok:
+            return True
+
+        self.reporter.fail(
+            tool_name,
+            "반납 공구 감지 전 관찰 자세 이동에 실패했습니다.",
+            "return_detection_observation_failed",
+            command,
+            logger,
+        )
+        return False
 
     def _recover_to_home(self, tool_name, command, logger, reason):
         self.reporter.publish(
