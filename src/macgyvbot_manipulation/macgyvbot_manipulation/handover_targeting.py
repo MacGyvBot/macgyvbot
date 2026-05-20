@@ -15,6 +15,7 @@ from macgyvbot_config.handoff import (
     HANDOVER_REPLAN_MAX_ATTEMPTS,
     HANDOVER_REPLAN_X_STEP_M,
     HANDOVER_SEARCH_TIMEOUT_SEC,
+    HANDOVER_TARGET_MIN_Z_CLEARANCE_M,
 )
 from macgyvbot_config.robot import (
     BASE_FRAME,
@@ -237,7 +238,8 @@ def move_to_candidate_with_offset(
 
     target_x = candidate.x + float(x_offset_m)
     target_y = candidate.y
-    target_z = max(SAFE_Z_MIN + 0.15, candidate.z + float(z_offset_m))
+    min_target_z = SAFE_Z_MIN + HANDOVER_TARGET_MIN_Z_CLEARANCE_M
+    target_z = max(min_target_z, candidate.z + float(z_offset_m))
     attempts = build_replan_attempts(target_x, target_y, target_z)
 
     last_pose = SearchStartPose(*attempts[0])
@@ -275,19 +277,18 @@ def build_replan_attempts(
     target_z: float,
     max_attempts: int = HANDOVER_REPLAN_MAX_ATTEMPTS,
     x_step_m: float = HANDOVER_REPLAN_X_STEP_M,
-    z_step_m: float = 0.0,
+    min_z: float = SAFE_Z_MIN + HANDOVER_TARGET_MIN_Z_CLEARANCE_M,
 ) -> list[tuple[float, float, float]]:
     """Build progressively safer Cartesian targets for IK/planning retry."""
     attempts = [(float(target_x), float(target_y), float(target_z))]
     retry_count = max(0, int(max_attempts) - 1)
     for index in range(1, retry_count + 1):
         y_ratio = max(0.0, 1.0 - index / float(max(1, retry_count)))
-        z_lift = z_step_m * ((index + 1) // 2)
         attempts.append(
             (
                 float(target_x) - float(x_step_m) * index,
                 float(target_y) * y_ratio,
-                float(target_z) + z_lift,
+                max(float(min_z), float(target_z)),
             )
         )
     return attempts
