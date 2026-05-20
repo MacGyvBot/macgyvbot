@@ -56,6 +56,7 @@ else:
             self._current_status = QLabel('현재 상태: 명령 대기')
             self._task_target_status = QLabel('작업 대상: 없음')
             self._task_stage_status = QLabel('작업 단계: 대기')
+            self._task_log_entries = []
             self._title = QLabel('MacGyvBot Assistant')
             self._subtitle = QLabel('음성 명령 기반 공구 전달 로봇')
             self._avatar = QLabel('M')
@@ -99,7 +100,25 @@ else:
             status_panel_layout.addWidget(self._current_status)
             status_panel_layout.addWidget(self._task_target_status)
             status_panel_layout.addWidget(self._task_stage_status)
-            status_panel_layout.addStretch(1)
+
+            log_title = QLabel('Task Log')
+            log_title.setObjectName('taskLogTitle')
+            self._task_log = QLabel('로그 대기 중')
+            self._task_log.setObjectName('taskLog')
+            self._task_log.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            self._task_log.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+            self._task_log.setWordWrap(True)
+
+            log_scroll = QScrollArea()
+            log_scroll.setObjectName('taskLogScroll')
+            log_scroll.setWidgetResizable(True)
+            log_scroll.setMinimumHeight(170)
+            log_scroll.setWidget(self._task_log)
+            self._task_log_scroll = log_scroll
+
+            status_panel_layout.addSpacing(12)
+            status_panel_layout.addWidget(log_title)
+            status_panel_layout.addWidget(log_scroll, 1)
 
             chat_panel = QWidget()
             chat_panel_layout = QVBoxLayout()
@@ -176,6 +195,22 @@ else:
         def set_task_status(self, target_text, stage_text):
             self._task_target_status.setText(f'작업 대상: {target_text}')
             self._task_stage_status.setText(f'작업 단계: {stage_text}')
+
+        def append_task_log(self, level, message):
+            level = str(level or 'INFO').upper()
+            message = str(message or '').strip()
+            if not message:
+                return
+
+            entry = f'{datetime.now().strftime("%H:%M:%S")} [{level}] {message}'
+            self._task_log_entries.append(entry)
+            self._task_log_entries = self._task_log_entries[-80:]
+            self._task_log.setText('\n'.join(self._task_log_entries))
+            QTimer.singleShot(0, self._scroll_task_log_to_bottom)
+
+        def _scroll_task_log_to_bottom(self):
+            scrollbar = self._task_log_scroll.verticalScrollBar()
+            scrollbar.setValue(scrollbar.maximum())
 
         def _append_bubble(self, speaker, text, align, role):
             colors = {
@@ -459,6 +494,8 @@ else:
                 'return': '정리하기',
                 'release': '놓기',
                 'stop': '정지',
+                'resume': '재개',
+                'exit': '종료',
                 'unknown': '알 수 없음',
             }.get(str(action), str(action))
 
@@ -502,6 +539,8 @@ else:
                 'fuzzy': 'Fuzzy',
                 'llm': 'LLM',
                 'local_deictic': 'Local',
+                'resume_keyword': 'Control',
+                'exit_keyword': 'Control',
                 'unknown': 'Unknown',
             }.get(str(method), str(method))
 
@@ -539,6 +578,25 @@ else:
                 QLabel#statusPanelSubtitle {
                     color: #6A7E96;
                     font-size: 12px;
+                }
+                QLabel#taskLogTitle {
+                    color: #223B5C;
+                    font-size: 14px;
+                    font-weight: 900;
+                    padding-top: 4px;
+                }
+                QScrollArea#taskLogScroll {
+                    background-color: #101B2A;
+                    border: 1px solid #263A56;
+                    border-radius: 10px;
+                }
+                QLabel#taskLog {
+                    background-color: #101B2A;
+                    color: #D9E8F7;
+                    padding: 9px 10px;
+                    font-family: "D2Coding", "Consolas", "Menlo", monospace;
+                    font-size: 11px;
+                    line-height: 1.35;
                 }
                 QLineEdit {
                     background-color: #FFFFFF;

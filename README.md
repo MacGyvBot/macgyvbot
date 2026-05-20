@@ -263,7 +263,16 @@ ros2 launch macgyvbot_bringup macgyvbot.launch.py use_tts:=false
 아까 가져온 거 정리해
 지금 뭐 하는 중이야?
 멈춰
+재개
+종료
 ```
+
+GUI는 로봇 작업 상태를 채팅, 상태 패널, Task Log로 나누어 표시합니다.
+진행 중인 탐색/이동/파지 단계는 왼쪽 Task Log에 `HH:MM:SS [INFO] ...`
+형식으로 남고, 사용자 행동이 필요한 상태나 완료/실패 상태만 MacGyvBot
+말풍선과 TTS로 안내합니다. `정지`, `재개`, `종료`도 LLM/parser action으로
+분류합니다. 단, 현재 `재개`와 `종료`는 로봇 제어 명령으로 발행하지 않고
+GUI 안내만 표시합니다.
 
 명령 해석 모드:
 

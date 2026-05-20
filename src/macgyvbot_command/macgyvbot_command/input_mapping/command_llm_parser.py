@@ -16,7 +16,9 @@ from macgyvbot_command.input_mapping.command_vocabulary import (
     ALLOWED_TARGET_MODES,
     ALLOWED_TOOLS,
     DEICTIC_WORDS,
+    EXIT_KEYWORDS,
     NO_WORDS,
+    RESUME_KEYWORDS,
     STOP_KEYWORDS,
     YES_WORDS,
 )
@@ -68,6 +70,32 @@ class CommandLlmParser:
                     'target_mode': 'unknown',
                     'raw_text': text,
                     'match_method': 'stop_keyword',
+                    'match_score': 1.0,
+                    'confidence': 1.0,
+                }
+            )
+
+        if self._has_resume_intent(text):
+            return self._accepted_result(
+                {
+                    'tool_name': 'unknown',
+                    'action': 'resume',
+                    'target_mode': 'unknown',
+                    'raw_text': text,
+                    'match_method': 'resume_keyword',
+                    'match_score': 1.0,
+                    'confidence': 1.0,
+                }
+            )
+
+        if self._has_exit_intent(text):
+            return self._accepted_result(
+                {
+                    'tool_name': 'unknown',
+                    'action': 'exit',
+                    'target_mode': 'unknown',
+                    'raw_text': text,
+                    'match_method': 'exit_keyword',
                     'match_score': 1.0,
                     'confidence': 1.0,
                 }
@@ -242,6 +270,32 @@ class CommandLlmParser:
                 'confidence': 1.0,
             }
             self._info('local parser가 정지 명령으로 확정했습니다.')
+            return command
+
+        if action == 'resume':
+            command = {
+                'tool_name': 'unknown',
+                'action': 'resume',
+                'target_mode': 'unknown',
+                'raw_text': text,
+                'match_method': 'resume_keyword',
+                'match_score': 1.0,
+                'confidence': 1.0,
+            }
+            self._info('local parser가 재개 명령으로 확정했습니다.')
+            return command
+
+        if action == 'exit':
+            command = {
+                'tool_name': 'unknown',
+                'action': 'exit',
+                'target_mode': 'unknown',
+                'raw_text': text,
+                'match_method': 'exit_keyword',
+                'match_score': 1.0,
+                'confidence': 1.0,
+            }
+            self._info('local parser가 종료 명령으로 확정했습니다.')
             return command
 
         previous_tool = self._context.resolve_previous_tool()
@@ -430,6 +484,10 @@ class CommandLlmParser:
             return f'{tool_name}를 놓으라는 뜻으로 이해했습니다.'
         if action == 'stop':
             return '정지 명령으로 이해했습니다.'
+        if action == 'resume':
+            return '재개 명령으로 이해했습니다. 제어 인터페이스가 연결되면 작업 재개 요청으로 전달됩니다.'
+        if action == 'exit':
+            return '종료 요청으로 이해했습니다. 안전을 위해 자동 종료하지 않고 안내만 표시합니다.'
         return '명령을 올바른 입력으로 판단했습니다.'
 
     def _build_confirmation_question(self, command):
@@ -528,6 +586,8 @@ class CommandLlmParser:
 - return: {ALLOWED_ACTIONS['return']}
 - release: {ALLOWED_ACTIONS['release']}
 - stop: {ALLOWED_ACTIONS['stop']}
+- resume: {ALLOWED_ACTIONS['resume']}
+- exit: {ALLOWED_ACTIONS['exit']}
 - unknown: {ALLOWED_ACTIONS['unknown']}
 
 허용 target_mode:
@@ -561,7 +621,9 @@ class CommandLlmParser:
 - status_query와 smalltalk는 tool_name unknown, action unknown, target_mode unknown으로 둔다.
 - status_query와 smalltalk는 assistant_message에 사용자가 볼 짧은 한국어 응답을 넣는다.
 - "멈춰", "정지", "중지", "중단", "스탑", "stop", "pause"처럼 명확한 정지 표현만 stop action이다.
-- 이해하지 못한 문장을 stop으로 추측하지 말고 action unknown으로 둔다.
+- "재개", "다시 시작", "계속해", "resume", "restart"처럼 명확한 재개 표현만 resume action이다.
+- "종료", "끝내", "꺼줘", "닫아줘", "exit", "quit"처럼 명확한 종료 표현만 exit action이다.
+- 이해하지 못한 문장을 stop, resume, exit로 추측하지 말고 action unknown으로 둔다.
 
 예시:
 입력: 드라이버 가져다줘
@@ -594,6 +656,12 @@ class CommandLlmParser:
 
 입력: 멈춰
 출력: {{"intent":"command","tool_name":"unknown","action":"stop","target_mode":"unknown","confidence":0.90,"needs_confirmation":false,"context_used":"none"}}
+
+입력: 다시 시작해
+출력: {{"intent":"command","tool_name":"unknown","action":"resume","target_mode":"unknown","confidence":0.90,"needs_confirmation":false,"context_used":"none"}}
+
+입력: 종료해
+출력: {{"intent":"command","tool_name":"unknown","action":"exit","target_mode":"unknown","confidence":0.90,"needs_confirmation":false,"context_used":"none"}}
 
 입력: 지금 뭐 하는 중이야?
 출력: {{"intent":"status_query","tool_name":"unknown","action":"unknown","target_mode":"unknown","confidence":0.90,"needs_confirmation":false,"context_used":"robot_status","assistant_message":"현재 로봇 상태를 확인해드릴게요."}}
@@ -658,7 +726,12 @@ class CommandLlmParser:
         previous_tool = self._context.resolve_previous_tool()
         previous_command = self._context.resolve_previous_command()
 
-        if action == 'unknown' and self._has_repeat_reference(raw_text) and previous_command:
+        explicit_action = find_action(effective_text)
+        if (
+            self._has_repeat_reference(raw_text)
+            and previous_command
+            and explicit_action == 'unknown'
+        ):
             tool_name = previous_command.get('tool_name', tool_name)
             action = previous_command.get('action', action)
             target_mode = previous_command.get('target_mode', 'named')
@@ -856,6 +929,34 @@ class CommandLlmParser:
                 ),
             }
 
+        if action == 'resume' and not self._has_resume_intent(raw_text):
+            self._warn('명확한 재개 표현이 없어 resume 명령을 무시합니다.')
+            candidate_command['action'] = 'unknown'
+            return {
+                'command': None,
+                'feedback': self._feedback(
+                    status='rejected',
+                    raw_text=raw_text,
+                    reason='unknown_action',
+                    message='무엇을 해야 하는지 확정하지 못했습니다. 다시 입력해주세요.',
+                    command=candidate_command,
+                ),
+            }
+
+        if action == 'exit' and not self._has_exit_intent(raw_text):
+            self._warn('명확한 종료 표현이 없어 exit 명령을 무시합니다.')
+            candidate_command['action'] = 'unknown'
+            return {
+                'command': None,
+                'feedback': self._feedback(
+                    status='rejected',
+                    raw_text=raw_text,
+                    reason='unknown_action',
+                    message='무엇을 해야 하는지 확정하지 못했습니다. 다시 입력해주세요.',
+                    command=candidate_command,
+                ),
+            }
+
         if action == 'bring' and target_mode == 'deictic':
             self._warn('deictic bring 명령은 지원하지 않아 재입력을 요청합니다.')
             return {
@@ -937,6 +1038,14 @@ class CommandLlmParser:
             return 'stop'
         if action == 'stop':
             return 'unknown'
+        if self._has_resume_intent(raw_text):
+            return 'resume'
+        if action == 'resume':
+            return 'unknown'
+        if self._has_exit_intent(raw_text):
+            return 'exit'
+        if action == 'exit':
+            return 'unknown'
         return_tokens = (
             '가져다가놔',
             '가져다가놓',
@@ -983,6 +1092,16 @@ class CommandLlmParser:
     def _has_stop_intent(raw_text):
         normalized = normalize_text(raw_text)
         return any(normalize_text(keyword) in normalized for keyword in STOP_KEYWORDS)
+
+    @staticmethod
+    def _has_resume_intent(raw_text):
+        normalized = normalize_text(raw_text)
+        return any(normalize_text(keyword) in normalized for keyword in RESUME_KEYWORDS)
+
+    @staticmethod
+    def _has_exit_intent(raw_text):
+        normalized = normalize_text(raw_text)
+        return any(normalize_text(keyword) in normalized for keyword in EXIT_KEYWORDS)
 
     def _has_previous_reference(self, raw_text):
         normalized = self._normalize_answer(raw_text)
