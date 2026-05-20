@@ -13,6 +13,8 @@ from macgyvbot_config.handoff import (
     OBSERVATION_TIMEOUT_SEC,
 )
 from macgyvbot_config.return_flow import (
+    RETURN_HAND_CLOSE_DEPTH_MAX_MM,
+    RETURN_HAND_CLOSE_DEPTH_MIN_MM,
     RETURN_HAND_CLOSE_ROI_CENTER_X,
     RETURN_HAND_CLOSE_ROI_CENTER_Y,
     RETURN_HAND_CLOSE_ROI_HEIGHT_RATIO,
@@ -143,16 +145,20 @@ class ReturnHandoffFlow:
         while rclpy.ok():
             result = self.state.last_grasp_result or {}
             tool_roi = result.get("tool_roi")
-            if self._tool_roi_in_close_region(tool_roi):
+            tool_depth_mm = result.get("tool_depth_mm")
+            if (
+                self._tool_roi_in_close_region(tool_roi)
+                and self._tool_depth_in_close_range(tool_depth_mm)
+            ):
                 logger.info(
-                    "그리퍼 close ROI 안에서 공구 확인: "
-                    f"tool_roi={tool_roi}"
+                    "그리퍼 close ROI/depth 범위 안에서 공구 확인: "
+                    f"tool_roi={tool_roi}, tool_depth_mm={tool_depth_mm}"
                 )
                 return True
 
             if time.monotonic() - start_time >= RETURN_HAND_CLOSE_ROI_TIMEOUT_SEC:
                 logger.warn(
-                    "그리퍼 close ROI 안에서 공구를 확인하지 못했습니다: "
+                    "그리퍼 close ROI/depth 범위 안에서 공구를 확인하지 못했습니다: "
                     f"timeout={RETURN_HAND_CLOSE_ROI_TIMEOUT_SEC:.1f}s"
                 )
                 return False
@@ -186,6 +192,19 @@ class ReturnHandoffFlow:
         return (
             abs(center_u - roi_center_u) <= half_width
             and abs(center_v - roi_center_v) <= half_height
+        )
+
+    @staticmethod
+    def _tool_depth_in_close_range(tool_depth_mm):
+        try:
+            depth_mm = float(tool_depth_mm)
+        except (TypeError, ValueError):
+            return False
+
+        return (
+            RETURN_HAND_CLOSE_DEPTH_MIN_MM
+            <= depth_mm
+            <= RETURN_HAND_CLOSE_DEPTH_MAX_MM
         )
 
     def receive(self, requested_tool, command, logger):

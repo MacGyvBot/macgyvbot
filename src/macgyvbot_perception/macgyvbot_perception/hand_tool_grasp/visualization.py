@@ -7,6 +7,8 @@ from typing import Optional
 import cv2
 
 from macgyvbot_config.return_flow import (
+    RETURN_HAND_CLOSE_DEPTH_MAX_MM,
+    RETURN_HAND_CLOSE_DEPTH_MIN_MM,
     RETURN_HAND_CLOSE_ROI_CENTER_X,
     RETURN_HAND_CLOSE_ROI_CENTER_Y,
     RETURN_HAND_CLOSE_ROI_HEIGHT_RATIO,
@@ -134,4 +136,14 @@ def draw_close_roi(frame):
         markerSize=14,
         thickness=1,
     )
-    draw_text(frame, "close ROI", (x1, max(24, y1 - 8)), color, scale=0.45)
+    draw_text(
+        frame,
+        (
+            "close ROI "
+            f"{RETURN_HAND_CLOSE_DEPTH_MIN_MM / 10:.0f}-"
+            f"{RETURN_HAND_CLOSE_DEPTH_MAX_MM / 10:.0f}cm"
+        ),
+        (x1, max(24, y1 - 8)),
+        color,
+        scale=0.45,
+    )
