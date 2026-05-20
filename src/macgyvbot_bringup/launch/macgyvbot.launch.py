@@ -42,6 +42,7 @@ def generate_launch_description():
     llm_timeout_sec = LaunchConfiguration("llm_timeout_sec")
     parser_mode = LaunchConfiguration("parser_mode")
     detector_image_topic = LaunchConfiguration("detector_image_topic")
+    display_debug_windows = LaunchConfiguration("display_debug_windows")
     sam_enabled = LaunchConfiguration("sam_enabled")
     sam_checkpoint = LaunchConfiguration("sam_checkpoint")
 
@@ -103,6 +104,13 @@ def generate_launch_description():
                 description="Annotated detector image topic shown in the GUI.",
             ),
             DeclareLaunchArgument(
+                "display_debug_windows",
+                default_value="false",
+                description=(
+                    "Show legacy OpenCV debug windows from macgyvbot_main_node."
+                ),
+            ),
+            DeclareLaunchArgument(
                 "grasp_point_mode",
                 default_value="vlm",
                 description="Grasp point selection mode: center or vlm",
@@ -138,6 +146,7 @@ def generate_launch_description():
                         "force_torque_topic": LaunchConfiguration(
                             "force_torque_topic"
                         ),
+                        "display_debug_windows": display_debug_windows,
                     },
                 ],
             ),

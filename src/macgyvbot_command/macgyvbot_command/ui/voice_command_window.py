@@ -122,8 +122,8 @@ else:
             detector_panel.setObjectName('detectorPanel')
             detector_panel.setFixedWidth(540)
             detector_panel_layout = QVBoxLayout()
-            detector_panel_layout.setContentsMargins(14, 14, 14, 14)
-            detector_panel_layout.setSpacing(10)
+            detector_panel_layout.setContentsMargins(14, 14, 14, 10)
+            detector_panel_layout.setSpacing(8)
             detector_panel.setLayout(detector_panel_layout)
 
             self._detector_image = QLabel('Detector 영상 대기 중')
@@ -139,8 +139,9 @@ else:
 
             detector_panel_layout.addWidget(detector_title)
             detector_panel_layout.addWidget(detector_subtitle)
-            detector_panel_layout.addWidget(self._detector_image, 1)
+            detector_panel_layout.addWidget(self._detector_image, 0, Qt.AlignTop)
             detector_panel_layout.addWidget(self._detector_status)
+            detector_panel_layout.addStretch(1)
 
             content_layout = QHBoxLayout()
             content_layout.setContentsMargins(0, 0, 0, 0)
@@ -672,7 +673,7 @@ else:
                 QFrame#detectorPanel {
                     background-color: #F8FBFF;
                     border: 1px solid #C9DAEC;
-                    border-radius: 16px;
+                    border-radius: 0px;
                 }
                 QLabel#statusPanelTitle {
                     color: #223B5C;
@@ -695,8 +696,8 @@ else:
                 QLabel#detectorImage {
                     background-color: #111827;
                     color: #D8E4F2;
-                    border: 1px solid #26374D;
-                    border-radius: 14px;
+                    border: none;
+                    border-radius: 0px;
                     font-size: 15px;
                     font-weight: 700;
                 }
