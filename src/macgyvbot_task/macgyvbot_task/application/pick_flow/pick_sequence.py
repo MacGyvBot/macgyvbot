@@ -22,12 +22,14 @@ class PickSequenceRunner:
         gripper,
         state,
         tool_hold_monitor=None,
+        refine_pick_target=None,
     ):
         self.robot = robot
         self.motion = motion_controller
         self.gripper = gripper
         self.state = state
         self.tool_hold_monitor = tool_hold_monitor
+        self.refine_pick_target = refine_pick_target
         self.target_planner = PickTargetPlanner(robot)
         self.handoff = PickHandoffFlow(
             robot,
@@ -108,6 +110,20 @@ class PickSequenceRunner:
                     command=self.state.current_command,
                 )
                 return
+
+            refined_target = self._refine_target_after_xy_move(log)
+            if refined_target is not None:
+                bx, by, bz = refined_target.base_xyz
+                z_m = refined_target.depth_m
+                vlm_yaw_deg = refined_target.yaw_deg
+                plan = self.target_planner.plan(bx, by, bz, log)
+                log.info(
+                    "상단 view VLM 결과로 pick target 갱신: "
+                    f"pixel={refined_target.pixel}, "
+                    f"base=({plan.target_x:.3f}, {plan.target_y:.3f}, "
+                    f"{bz:.3f}), depth={z_m:.3f}, "
+                    f"yaw={vlm_yaw_deg}"
+                )
 
             if vlm_yaw_deg is not None:
                 ok = self.motion.rotate_wrist_by_yaw_deg(vlm_yaw_deg, log)
@@ -307,3 +323,28 @@ class PickSequenceRunner:
         while rclpy.ok() and time.monotonic() < end_time:
             remaining = end_time - time.monotonic()
             time.sleep(min(SEQUENCE_WAIT_POLL_SEC, max(0.0, remaining)))
+
+    def _refine_target_after_xy_move(self, log):
+        if self.refine_pick_target is None:
+            return None
+
+        target_label = self.state.target_label
+        if not target_label:
+            return None
+
+        self.cooperative_wait(0.2)
+        try:
+            target = self.refine_pick_target(target_label)
+        except Exception as exc:
+            log.warn(f"상단 view VLM target 갱신 실패: {exc}")
+            return None
+
+        if target is None or not target.found:
+            reason = getattr(target, "reason", "unknown") if target else "unknown"
+            log.warn(
+                "상단 view VLM target을 얻지 못해 bbox center plan을 유지합니다. "
+                f"reason={reason}"
+            )
+            return None
+
+        return target

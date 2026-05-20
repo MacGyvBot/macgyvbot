@@ -180,6 +180,7 @@ class MacGyvBotNode(Node):
             self.gripper,
             self.state,
             self.tool_hold_monitor,
+            refine_pick_target=self._refine_pick_target_after_centering,
         )
         self.return_runner = ReturnSequenceRunner(
             self.robot,
@@ -441,6 +442,27 @@ class MacGyvBotNode(Node):
             daemon=True,
         )
         self.state.pending_pick_thread.start()
+
+    def _refine_pick_target_after_centering(self, target_label):
+        if not self.pick_target_resolver.should_defer_vlm_until_top_view():
+            return None
+
+        if not self.frame_processor.has_camera_state():
+            self.get_logger().warn("상단 view VLM 갱신을 위한 camera state가 없습니다.")
+            return None
+
+        color_image = self.state.color_image.copy()
+        depth_image = self.state.depth_image.copy()
+        intrinsics = dict(self.state.intrinsics)
+        results = self.detector.detect(color_image)
+
+        return self.pick_target_resolver.target_from_boxes(
+            results[0].boxes,
+            target_label,
+            color_image,
+            depth_image,
+            intrinsics,
+        )
 
     def start_return_sequence(self, command):
         if self.state.picking:

@@ -5,9 +5,45 @@
 
 ## 목표
 
-- YOLO bbox center 기반 이동 후 VLM을 개입시켜, VLM 입력 시점의 시야와 depth 품질을 높인다.
+- YOLO bbox center 기반으로 먼저 x, y 위치를 맞춘 뒤 VLM을 개입시켜, VLM 입력 시점의 시야와 depth 품질을 높인다.
+- VLM은 객체 상단에서 실제로 잡을 point와 gripper yaw를 선택하는 역할로 제한한다.
+- 최종 z 이동은 VLM이 아니라 depth로 확인한 metric depth를 기준으로 수행한다.
 - 큰 VLM 모델, SAM mask, VLM 호출 타이밍 조정, prompt/tuning을 통해 grasp point 품질을 개선한다.
 - launch 시작 시 VLM 가중치를 미리 로드해 첫 pick 동작에서 발생하는 지연을 줄인다.
+
+## 변경하려는 알고리즘
+
+기존 방식:
+
+```text
+YOLO detection
+-> 탐지된 frame의 bbox crop을 VLM에 바로 전달
+-> VLM grasp point/yaw 추론
+-> depth로 grasp point의 z 확인
+-> pick sequence 시작
+```
+
+변경하려는 방식:
+
+```text
+YOLO detection
+-> bbox center pixel을 depth로 base x, y, z 후보로 변환
+-> robot이 bbox center 기준 x, y로 먼저 이동
+-> 객체 상단 관찰 frame을 다시 확보
+-> VLM이 상단 view에서 잡을 point와 gripper yaw 선택
+-> 선택 point의 z를 depth로 확인
+-> gripper yaw 조절
+-> depth로 확인한 z까지 하강
+-> gripper close
+```
+
+핵심 원칙:
+
+- [x] x, y 정렬은 YOLO bbox center 기반으로 먼저 수행한다.
+- [x] VLM은 초기 탐지 frame이 아니라 center 이동 이후의 상단 관찰 frame을 사용한다.
+- [x] VLM은 grasp point와 gripper angle 판단에 집중한다.
+- [x] z는 VLM 추론값이 아니라 RealSense depth projection 결과를 사용한다.
+- [x] VLM 실패 시 기존 bbox center 기반 grasp fallback을 유지한다.
 
 ## 1단계: 현재 VLM 동작 기준선 정리
 
@@ -31,24 +67,24 @@
 
 ```text
 YOLO detection
--> bbox center로 1차 x,y 접근
--> 재촬영 및 YOLO detection
--> bbox center로 2차 x,y 보정
--> 재촬영 및 YOLO detection
+-> bbox center 기반 x,y 이동
+-> 상단 관찰 frame 갱신
 -> VLM grasp point/yaw 추론
--> depth 보정
--> 최종 grasp pose 계산
+-> VLM point의 depth 확인
+-> gripper yaw 조절
+-> depth z까지 하강 후 grasp
 ```
 
 TODO:
 
-- [ ] pick flow에서 VLM 호출 위치를 현재보다 뒤로 미룰 수 있는 지점을 찾는다.
-- [ ] YOLO bbox center 기반 1차 x,y 이동 단계를 추가한다.
-- [ ] 1차 이동 후 frame을 다시 받아 YOLO bbox를 재계산한다.
-- [ ] 재계산된 bbox center 기반 2차 x,y 보정 단계를 추가한다.
-- [ ] 2차 보정 후 frame을 다시 받아 VLM 입력 image, bbox, depth를 갱신한다.
-- [ ] VLM 추론은 2차 보정 이후에만 호출하도록 제어한다.
-- [ ] 1차/2차 이동 실패 시 기존 bbox center grasp 또는 기존 fallback 흐름으로 복귀한다.
+- [x] pick flow에서 VLM 호출 위치를 현재보다 뒤로 미룰 수 있는 지점을 찾는다.
+- [x] YOLO bbox center pixel을 depth projection으로 base 좌표 후보로 변환한다.
+- [x] bbox center 기반 x, y 이동 단계를 pick sequence 앞단에 추가한다.
+- [x] x, y 이동 후 frame을 다시 받아 YOLO bbox, color image, depth image를 갱신한다.
+- [x] VLM 입력은 이동 이후 갱신된 상단 관찰 frame만 사용하도록 제어한다.
+- [x] VLM이 선택한 point의 depth를 다시 확인해 최종 z를 계산한다.
+- [x] VLM yaw 결과를 gripper wrist 회전에 연결한다.
+- [x] x, y 이동 또는 VLM 추론 실패 시 기존 bbox center grasp 또는 기존 fallback 흐름으로 복귀한다.
 - [ ] 보정 이동 거리 제한을 둔다.
 - [ ] 작업 공간 safezone을 벗어나는 보정 목표는 폐기한다.
 - [ ] 각 단계별 상태 로그를 추가한다.
@@ -102,25 +138,30 @@ TODO:
 
 ## 4단계: Launch 시작 시 VLM 가중치 사전 로드
 
-- [ ] 현재 VLM 객체가 언제 생성되고 weight가 언제 로드되는지 확인한다.
-- [ ] `grasp_point_mode:=vlm` 또는 `api` fallback용 VLM이 필요한 경우 launch 시작 시 로드되게 한다.
+- [x] 현재 VLM 객체가 언제 생성되고 weight가 언제 로드되는지 확인한다.
+- [x] `grasp_point_mode:=vlm` 또는 `api` fallback용 VLM이 필요한 경우 launch 시작 시 로드되게 한다.
+- [x] `macgyvbot_main_node` 초기화 중 `GraspPointSelector.preload_vlm_if_needed()`를 호출한다.
+- [x] `VLMGraspPointSelector.preload()`에서 기존 `_ensure_model_loaded()` 경로를 재사용한다.
+- [x] VLM preload 실패 시 launch를 중단하지 않고 warning만 남긴다.
 - [ ] 로드 완료 전 pick 명령이 들어오면 대기하거나 명확한 상태를 발행한다.
 - [ ] GUI/TTS에 VLM loading 상태를 표시할지 검토한다.
-- [ ] VLM 로드 실패 시 `center` fallback으로 계속 실행할지, launch 실패로 처리할지 정책을 정한다.
+- [x] VLM 로드 실패 시 `center` fallback으로 계속 실행할지, launch 실패로 처리할지 정책을 정한다.
 - [ ] 모델 로드 timeout과 에러 메시지를 추가한다.
 - [ ] 첫 pick에서 VLM cold start 지연이 사라졌는지 측정한다.
 
 완료 기준:
 
 - [ ] launch 이후 첫 VLM pick에서 모델 로드 지연이 발생하지 않는다.
-- [ ] VLM 로드 실패 시 사용자와 로그가 원인을 알 수 있다.
+- [x] VLM preload 실패 시 warning log를 남기고 노드는 계속 실행된다.
+- [ ] VLM 로드 실패 시 사용자와 로그가 원인을 충분히 알 수 있다.
 
 ## 5단계: 통합 테스트
 
-- [ ] `python3 -m compileall -q src`
+- [x] `python3 -m compileall -q src`
 - [ ] VLM weight가 없는 환경에서 launch fallback 확인
 - [ ] VLM weight가 있는 환경에서 launch preload 확인
-- [ ] RealSense 입력으로 YOLO center 2회 보정 확인
+- [ ] RealSense 입력으로 YOLO bbox center 기반 x, y 이동 확인
+- [ ] center 이동 이후의 최신 frame으로 VLM이 호출되는지 확인
 - [ ] VLM 추론 결과가 최신 frame 기준인지 확인
 - [ ] SAM enabled/disabled 양쪽에서 pick flow 확인
 - [ ] `grasp_point_mode:=center` 기존 동작 회귀 확인
@@ -130,8 +171,8 @@ TODO:
 ## 우선순위
 
 1. [ ] 현재 흐름과 baseline 정리
-2. [ ] VLM 호출 타이밍을 2차 YOLO center 보정 이후로 이동
-3. [ ] launch 시작 시 VLM preload
+2. [x] launch 시작 시 VLM preload
+3. [x] VLM 호출 타이밍을 bbox center x, y 이동 이후로 이동
 4. [ ] SAM mask 기반 VLM 결과 검증
 5. [ ] 큰 VLM 모델 비교
 6. [ ] prompt/tuning 및 평가 자동화

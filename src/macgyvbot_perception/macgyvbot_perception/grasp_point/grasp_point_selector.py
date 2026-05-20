@@ -60,6 +60,9 @@ class GraspPointSelector:
             )
         )
 
+    def should_defer_vlm_until_top_view(self):
+        return self.mode == GRASP_POINT_MODE_VLM
+
     def select(
         self,
         box,
@@ -126,6 +129,10 @@ class GraspPointSelector:
         u = int((bbox[0] + bbox[2]) / 2)
         v = int((bbox[1] + bbox[3]) / 2)
         return u, v, GRASP_POINT_MODE_CENTER, None
+
+    def select_bbox_center(self, box):
+        bbox = box.xyxy[0].cpu().numpy()
+        return self._select_bbox_center_pixel(bbox)
 
     def _select_default_grasp_pixel(
         self,
