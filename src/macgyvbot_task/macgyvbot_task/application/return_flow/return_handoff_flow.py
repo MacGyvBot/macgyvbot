@@ -41,7 +41,11 @@ class ReturnHandoffFlow:
         self.reporter = reporter
         self.wait_fn = wait_fn
         self.interrupted = interrupted or (lambda: False)
-        self.grasp_verifier = GraspVerifier(gripper, wait_fn)
+        self.grasp_verifier = GraspVerifier(
+            gripper,
+            wait_fn,
+            interrupted=self.interrupted,
+        )
 
     def receive(self, requested_tool, command, logger):
         advanced, advance_reason = self.advance_for_return_detection(

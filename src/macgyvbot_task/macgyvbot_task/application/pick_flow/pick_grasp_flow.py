@@ -13,9 +13,14 @@ class PickGraspFlow:
         gripper,
         state,
         wait_fn,
+        interrupted=None,
     ):
         self.state = state
-        self.grasp_verifier = GraspVerifier(gripper, wait_fn)
+        self.grasp_verifier = GraspVerifier(
+            gripper,
+            wait_fn,
+            interrupted=interrupted,
+        )
 
     def try_robot_grasp(self, logger):
         def publish_attempt(attempt, retry_limit):

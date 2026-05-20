@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import deque
 import threading
 import time
+import traceback
 
 import rclpy
 
@@ -84,9 +85,27 @@ class TaskControlCoordinator:
         completed = False
         stopped = False
         failed = False
+        failure_status_published = False
 
         try:
-            steps = list(step_builder())
+            try:
+                steps = list(step_builder())
+            except Exception as exc:
+                failed = True
+                self._log_step_exception(
+                    log,
+                    task_name,
+                    step_name=None,
+                    exc=exc,
+                )
+                failure_status_published = self._publish_task_exception_status(
+                    task_name,
+                    step_name=None,
+                    exc=exc,
+                    reason="task_step_build_exception",
+                )
+                return
+
             with self._lock:
                 self._queue.clear()
                 self._queue.extend(steps)
@@ -107,7 +126,24 @@ class TaskControlCoordinator:
                     break
 
                 log.info(f"task step 시작: {step.name}")
-                ok = step.execute()
+                try:
+                    ok = step.execute()
+                except Exception as exc:
+                    failed = True
+                    self._log_step_exception(
+                        log,
+                        task_name,
+                        step_name=step.name,
+                        exc=exc,
+                    )
+                    failure_status_published = self._publish_task_exception_status(
+                        task_name,
+                        step_name=step.name,
+                        exc=exc,
+                        reason="task_step_exception",
+                    )
+                    break
+
                 if ok:
                     log.info(f"task step 완료: {step.name}")
                     continue
@@ -129,6 +165,10 @@ class TaskControlCoordinator:
             if stopped:
                 log.info(f"{task_name} task queue 중단")
             elif failed:
+                if not failure_status_published:
+                    log.warn(
+                        f"{task_name} task queue 실패 상태는 step 내부 publish에 위임됨"
+                    )
                 log.info(f"{task_name} task queue 실패로 종료")
             elif completed:
                 log.info(f"{task_name} task queue 완료")
@@ -152,6 +192,36 @@ class TaskControlCoordinator:
         self.state.target_label = None
         self.state.human_grasped_tool = False
         self.state.current_command = None
+
+    def _publish_task_exception_status(self, task_name, step_name, exc, reason):
+        publish = getattr(self.state, "_publish_robot_status", None)
+        if publish is None:
+            return False
+
+        action = "bring" if task_name == "pick" else task_name
+        step_label = step_name or "build_steps"
+        exc_type = type(exc).__name__
+        publish(
+            "failed",
+            tool_name=self.state.target_label,
+            action=action,
+            message=(
+                f"{task_name} task step 예외로 작업을 중단합니다: "
+                f"{step_label} ({exc_type})"
+            ),
+            reason=reason,
+            command=self.state.current_command,
+        )
+        return True
+
+    @staticmethod
+    def _log_step_exception(log, task_name, step_name, exc):
+        step_label = step_name or "build_steps"
+        log.error(
+            f"{task_name} task step 예외 발생: "
+            f"step={step_label}, error={type(exc).__name__}: {exc}"
+        )
+        log.error(traceback.format_exc())
 
     def logger(self):
         return self.logger_provider()

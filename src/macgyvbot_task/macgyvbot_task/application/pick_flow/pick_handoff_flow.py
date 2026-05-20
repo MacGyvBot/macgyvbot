@@ -225,6 +225,10 @@ class PickHandoffFlow:
         start_time = time.monotonic()
 
         while rclpy.ok():
+            if self.interrupted():
+                logger.info("사용자 잡기 인식 대기를 stop/pause 요청으로 중단합니다.")
+                return False
+
             if self.state.human_grasped_tool:
                 logger.info("사용자가 공구를 잡은 것으로 확인됨")
                 return True
@@ -243,6 +247,10 @@ class PickHandoffFlow:
         start_time = time.monotonic()
 
         while rclpy.ok():
+            if self.interrupted():
+                logger.info("공구 mask lock 대기를 stop/pause 요청으로 중단합니다.")
+                return False
+
             result = self.state.last_tool_mask_lock_result
             if self.state.tool_mask_locked and result is not None:
                 logger.info(

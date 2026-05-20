@@ -21,6 +21,9 @@ from std_msgs.msg import String
 from macgyvbot_config.models import YOLO_MODEL_NAME
 from macgyvbot_config.robot import GROUP_NAME
 from macgyvbot_config.topics import (
+    CAMERA_COLOR_TOPIC,
+    CAMERA_DEPTH_TOPIC,
+    CAMERA_INFO_TOPIC,
     FORCE_TORQUE_TOPIC,
     HAND_GRASP_IMAGE_TOPIC,
     HAND_GRASP_MASK_LOCK_TOPIC,
@@ -253,19 +256,19 @@ class MacGyvBotNode(Node):
     def _create_subscriptions(self):
         self.create_subscription(
             CameraInfo,
-            "/camera/camera/color/camera_info",
+            CAMERA_INFO_TOPIC,
             self._cam_info_cb,
             10,
         )
         self.create_subscription(
             Image,
-            "/camera/camera/color/image_raw",
+            CAMERA_COLOR_TOPIC,
             self._color_cb,
             10,
         )
         self.create_subscription(
             Image,
-            "/camera/camera/aligned_depth_to_color/image_raw",
+            CAMERA_DEPTH_TOPIC,
             self._depth_cb,
             10,
         )

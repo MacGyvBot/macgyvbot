@@ -27,6 +27,7 @@ from macgyvbot_command.stt.speech_to_text import SpeechToTextService
 from macgyvbot_command.tts import TtsService
 
 from macgyvbot_config.topics import (
+    CAMERA_COLOR_TOPIC,
     ROBOT_TASK_CONTROL_TOPIC,
 )
 
@@ -50,7 +51,7 @@ class CommandInputNode(Node):
         self.declare_parameter('tool_command_topic', '/tool_command')
         self.declare_parameter('command_feedback_topic', '/command_feedback')
         self.declare_parameter('robot_status_topic', '/robot_task_status')
-        self.declare_parameter('camera_status_topic', '/camera/camera/color/image_raw')
+        self.declare_parameter('camera_status_topic', CAMERA_COLOR_TOPIC)
         self.declare_parameter('connection_check_period_sec', 1.0)
         self.declare_parameter('camera_timeout_sec', 3.0)
         self.declare_parameter(

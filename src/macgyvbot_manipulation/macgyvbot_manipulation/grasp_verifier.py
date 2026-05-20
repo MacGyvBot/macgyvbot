@@ -15,12 +15,17 @@ from macgyvbot_config.timing import SEQUENCE_WAIT_POLL_SEC
 class GraspVerifier:
     """Confirm that the gripper is stably holding an object."""
 
-    def __init__(self, gripper, wait_fn=None):
+    def __init__(self, gripper, wait_fn=None, interrupted=None):
         self.gripper = gripper
         self.wait_fn = wait_fn or cooperative_wait
+        self.interrupted = interrupted or (lambda: False)
 
     def try_grasp(self, logger, publish_attempt=None, failure_prefix="공구 grasp"):
         for attempt in range(1, GRASP_RETRY_LIMIT + 1):
+            if self.interrupted():
+                logger.info(f"{failure_prefix} 시도를 stop/pause 요청으로 중단합니다.")
+                return False
+
             logger.info(f"{failure_prefix} 시도 {attempt}/{GRASP_RETRY_LIMIT}")
             if publish_attempt is not None:
                 publish_attempt(attempt, GRASP_RETRY_LIMIT)
@@ -28,6 +33,10 @@ class GraspVerifier:
             self.gripper.close_gripper()
             if self.verify(logger):
                 return True
+
+            if self.interrupted():
+                logger.info(f"{failure_prefix} 확인을 stop/pause 요청으로 중단합니다.")
+                return False
 
             logger.warn(
                 f"{failure_prefix} 실패. 재시도 준비 {attempt}/{GRASP_RETRY_LIMIT}"
@@ -43,6 +52,10 @@ class GraspVerifier:
         stable_count = 0
 
         while time.monotonic() - start_time < GRASP_VERIFY_TIMEOUT_SEC:
+            if self.interrupted():
+                logger.info("그리퍼 grasp 확인을 stop/pause 요청으로 중단합니다.")
+                return False
+
             try:
                 confirmed, busy, status, width_mm = read_grasp_confirmation(
                     self.gripper,

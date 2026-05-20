@@ -44,6 +44,7 @@ class PickSequenceRunner:
             gripper,
             state,
             self.cooperative_wait,
+            interrupted=self._interrupted,
         )
 
     def build_steps(self, bx, by, bz, z_m, vlm_yaw_deg=None):
