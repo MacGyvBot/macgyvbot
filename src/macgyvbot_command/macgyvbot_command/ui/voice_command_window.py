@@ -30,11 +30,12 @@ else:
             super().__init__()
             self._node = node
             self.setWindowTitle('MacGyvBot Assistant')
-            self.resize(1420, 760)
-            self.setMinimumSize(1280, 680)
+            self.resize(1420, 860)
+            self.setMinimumSize(1280, 760)
             self._detector_pixmap = None
 
             self._chat_scroll = QScrollArea()
+            self._chat_scroll.setObjectName('chatScroll')
             self._chat_scroll.setWidgetResizable(True)
             self._chat_container = QWidget()
             self._chat_container.setObjectName('chatContainer')
@@ -44,6 +45,9 @@ else:
             self._chat_layout.addStretch(1)
             self._chat_container.setLayout(self._chat_layout)
             self._chat_scroll.setWidget(self._chat_container)
+            self._chat_scroll.viewport().setStyleSheet(
+                'background-color: #E7F1FA; border-radius: 16px;'
+            )
 
             self._input = QLineEdit()
             self._input.setPlaceholderText('메시지를 입력하거나 음성으로 말해주세요.')
@@ -83,8 +87,6 @@ else:
 
             status_title = QLabel('Robot Status')
             status_title.setObjectName('statusPanelTitle')
-            status_subtitle = QLabel('실시간 연결 및 작업 상태')
-            status_subtitle.setObjectName('statusPanelSubtitle')
 
             status_panel = QFrame()
             status_panel.setObjectName('statusPanel')
@@ -94,7 +96,6 @@ else:
             status_panel_layout.setSpacing(10)
             status_panel.setLayout(status_panel_layout)
             status_panel_layout.addWidget(status_title)
-            status_panel_layout.addWidget(status_subtitle)
             status_panel_layout.addSpacing(8)
             status_panel_layout.addWidget(self._robot_connection_status)
             status_panel_layout.addWidget(self._camera_connection_status)
@@ -116,12 +117,11 @@ else:
 
             detector_title = QLabel('Detector View')
             detector_title.setObjectName('detectorPanelTitle')
-            detector_subtitle = QLabel('/hand_grasp_detection/annotated_image')
-            detector_subtitle.setObjectName('detectorPanelSubtitle')
 
             detector_panel = QFrame()
             detector_panel.setObjectName('detectorPanel')
             detector_panel.setFixedWidth(540)
+            detector_panel.setMinimumHeight(500)
             detector_panel_layout = QVBoxLayout()
             detector_panel_layout.setContentsMargins(14, 14, 14, 10)
             detector_panel_layout.setSpacing(8)
@@ -139,7 +139,6 @@ else:
             self._detector_status.setObjectName('detectorStatus')
 
             detector_panel_layout.addWidget(detector_title)
-            detector_panel_layout.addWidget(detector_subtitle)
             detector_panel_layout.addWidget(self._detector_image, 0, Qt.AlignTop)
             detector_panel_layout.addWidget(self._detector_status)
             detector_panel_layout.addStretch(1)
@@ -720,8 +719,14 @@ else:
                     border: 1px solid #B7CEE7;
                     border-radius: 14px;
                 }
+                QScrollArea#chatScroll {
+                    background-color: #E7F1FA;
+                    border: 1px solid #B7CEE7;
+                    border-radius: 16px;
+                }
                 QWidget#chatContainer {
                     background-color: #E7F1FA;
+                    border-radius: 16px;
                 }
                 QFrame#statusPanel {
                     background-color: #F8FBFF;
@@ -731,7 +736,7 @@ else:
                 QFrame#detectorPanel {
                     background-color: #F8FBFF;
                     border: 1px solid #C9DAEC;
-                    border-radius: 0px;
+                    border-radius: 16px;
                 }
                 QLabel#statusPanelTitle {
                     color: #223B5C;
@@ -745,7 +750,7 @@ else:
                 QFrame#taskLogPanel {
                     background-color: #F8FBFF;
                     border: 1px solid #C9DAEC;
-                    border-radius: 0px;
+                    border-radius: 16px;
                 }
                 QLabel#taskLogTitle {
                     color: #223B5C;
