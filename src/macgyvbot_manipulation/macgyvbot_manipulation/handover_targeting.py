@@ -24,7 +24,7 @@ from macgyvbot_config.robot import (
 )
 from macgyvbot_config.timing import SEQUENCE_WAIT_POLL_SEC
 from macgyvbot_manipulation.robot_pose import make_safe_pose
-from macgyvbot_manipulation.robot_safezone import SAFE_Z_MIN
+from macgyvbot_manipulation.robot_safezone import SAFE_X_MIN, SAFE_Z_MIN
 
 
 @dataclass(frozen=True)
@@ -243,10 +243,14 @@ def move_to_candidate_with_offset(
     attempts = build_replan_attempts(target_x, target_y, target_z)
 
     last_pose = SearchStartPose(*attempts[0])
-    for attempt_index, (target_x, target_y, target_z) in enumerate(attempts, start=1):
+    total_attempts = len(attempts)
+    for attempt_index, (target_x, target_y, target_z) in enumerate(
+        attempts,
+        start=1,
+    ):
         logger.info(
             "사용자 손 위치 전달 플래닝 시도: "
-            f"{attempt_index}/{len(attempts)}, "
+            f"{attempt_index}/{total_attempts}, "
             f"target=({target_x:.3f},{target_y:.3f},{target_z:.3f})"
         )
         pose_goal = make_safe_pose(target_x, target_y, target_z, ori, logger)
@@ -262,7 +266,7 @@ def move_to_candidate_with_offset(
         if ok:
             return True, last_pose, ""
 
-        if attempt_index < len(attempts):
+        if attempt_index < total_attempts:
             logger.warn(
                 "사용자 손 위치 전달 플래닝 실패. "
                 "x를 줄이고 y를 0에 가깝게 보정해 재시도합니다."
@@ -281,7 +285,11 @@ def build_replan_attempts(
 ) -> list[tuple[float, float, float]]:
     """Build progressively safer Cartesian targets for IK/planning retry."""
     attempts = [(float(target_x), float(target_y), float(target_z))]
-    retry_count = max(0, int(max_attempts) - 1)
+    if int(max_attempts) > 0:
+        retry_count = max(0, int(max_attempts) - 1)
+    else:
+        retry_count = _unbounded_retry_count(target_x, target_y, x_step_m)
+
     for index in range(1, retry_count + 1):
         y_ratio = max(0.0, 1.0 - index / float(max(1, retry_count)))
         attempts.append(
@@ -292,3 +300,10 @@ def build_replan_attempts(
             )
         )
     return attempts
+
+
+def _unbounded_retry_count(target_x: float, target_y: float, x_step_m: float) -> int:
+    """Return all distinct x/y correction steps until no safer target remains."""
+    x_steps = max(0, int((float(target_x) - SAFE_X_MIN) / float(x_step_m)))
+    y_steps = max(1, int(abs(float(target_y)) / float(x_step_m)))
+    return max(x_steps, y_steps)
