@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# ROS 2 / colcon
+build/
+install/
+log/
+
+# Editors / OS
+.DS_Store
+.vscode/
+.idea/
+
+# Large model and dataset artifacts
+*.pt
+*.pth
+*.pkl
+*.onnx
+*.engine
+*.bag
+*.db3
+*.mp4
+*.mov
+*.avi
+
+# Local environment
+.env
+.env.*
+!.env.example
+
+# Local VLM model cache under the workspace resource package
+src/macgyvbot_resources/weights/vlm/*
+!src/macgyvbot_resources/weights/vlm/.gitkeep
