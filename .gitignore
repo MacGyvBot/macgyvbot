@@ -36,7 +36,6 @@ log/
 .env.*
 !.env.example
 
-
 # Local VLM model cache under the workspace resource package
 src/macgyvbot_resources/weights/vlm/*
 !src/macgyvbot_resources/weights/vlm/.gitkeep

@@ -30,6 +30,7 @@ from macgyvbot_config.topics import (
     HAND_GRASP_MASK_LOCK_TOPIC,
     HAND_GRASP_TOPIC,
     ROBOT_STATUS_TOPIC,
+    TOOL_DROP_TOPIC,
     TOOL_COMMAND_TOPIC,
 )
 from macgyvbot_config.vlm import DEFAULT_GRASP_POINT_MODE
@@ -51,6 +52,7 @@ from macgyvbot_task.application import (
     RobotStatusPublisher,
     TaskRuntimeState,
     ToolCommandController,
+    ToolDropStatusReporter,
 )
 from macgyvbot_task.application.adapters.hand_grasp_result_adapter import (
     HandGraspResultAdapter,
@@ -70,12 +72,63 @@ from macgyvbot_task.application.robot.robot_home_initializer import (
 )
 
 
+class VLMStatusLogger:
+    """Forward VLM logs to ROS logger and robot status topic."""
+
+    def __init__(self, logger, publish_status_payload):
+        self._logger = logger
+        self._publish_status_payload = publish_status_payload
+
+    def info(self, message):
+        self._logger.info(message)
+        self._publish_if_vlm_status("info", message)
+
+    def warn(self, message):
+        self._logger.warn(message)
+        self._publish_if_vlm_status("warn", message)
+
+    def error(self, message):
+        self._logger.error(message)
+        self._publish_if_vlm_status("error", message)
+
+    def _publish_if_vlm_status(self, level, message):
+        text = str(message or "")
+        if "VLM" not in text:
+            return
+
+        if "로드 시작" in text:
+            status = "vlm_loading"
+        elif "로드 완료" in text:
+            status = "vlm_ready"
+        elif level == "error" or "실패" in text:
+            status = "vlm_error"
+        elif level == "warn" or "CPU 실행" in text:
+            status = "vlm_warning"
+        else:
+            return
+
+        self._publish_status_payload(
+            {
+                "status": status,
+                "tool_name": "unknown",
+                "action": "system",
+                "message": text,
+            }
+        )
+
+
 class MacGyvBotNode(Node):
     def __init__(self):
         super().__init__("macgyvbot_main_node")
 
+        self.declare_parameter("display_debug_windows", False)
+
         self.bridge = CvBridge()
-        self.display = DebugDisplay()
+        self.display_debug_windows = self._read_bool_parameter(
+            "display_debug_windows",
+            False,
+        )
+        self.display = DebugDisplay(enabled=self.display_debug_windows)
 
         self.grasp_point_mode = self._read_grasp_point_mode()
         self.yolo_model = self._read_yolo_model()
@@ -86,6 +139,11 @@ class MacGyvBotNode(Node):
             ROBOT_STATUS_TOPIC,
             10,
         )
+        self.tool_drop_pub = self.create_publisher(
+            String,
+            TOOL_DROP_TOPIC,
+            10,
+        )
         self.state = TaskRuntimeState(
             logger_provider=self.get_logger,
             publish_robot_status=self._publish_robot_status,
@@ -93,9 +151,14 @@ class MacGyvBotNode(Node):
         )
         self.detector = YoloDetector(self.yolo_model)
         self.drawer_detector = YoloDetector(self.drawer_yolo_model)
+        self.grasp_point_logger = VLMStatusLogger(
+            self.get_logger(),
+            self._publish_status_payload,
+        )
         self.grasp_point_selector = GraspPointSelector(
             self.grasp_point_mode,
-            self.get_logger(),
+            self.grasp_point_logger,
+            **self._read_grasp_point_api_config(),
         )
 
         calib_file = self._resolve_calibration_file("T_gripper2camera.npy")
@@ -111,6 +174,14 @@ class MacGyvBotNode(Node):
             self.depth_projector,
             self.get_logger(),
         )
+
+        if self.display_debug_windows:
+            self.get_logger().info("OpenCV debug display windows are enabled.")
+        else:
+            self.get_logger().info(
+                "OpenCV debug display windows are disabled. "
+                "Use the command GUI detector panel instead."
+            )
         self.pick_target_resolver = PickTargetResolver(
             self.detector,
             self.grasp_point_selector,
@@ -139,6 +210,11 @@ class MacGyvBotNode(Node):
             self._publish_status_payload,
             target_label_provider=lambda: self.state.target_label,
         )
+        self.tool_hold_monitor = ToolDropStatusReporter(
+            self.gripper,
+            self._publish_tool_drop_payload,
+            self._publish_status_payload,
+        )
         self.task_controller = ToolCommandController(
             self.get_logger(),
             self.status_publisher,
@@ -147,7 +223,7 @@ class MacGyvBotNode(Node):
             clear_target=self._clear_pending_target,
             reset_search_status=self._reset_search_status,
             start_return=self.start_return_sequence,
-            release_gripper=self.gripper.open_gripper,
+            release_gripper=self.tool_hold_monitor.release_gripper,
             start_drawer_pick=self.start_drawer_pick_sequence,
         )
         self.frame_processor = PickFrameProcessor(
@@ -167,12 +243,14 @@ class MacGyvBotNode(Node):
             drawer_detector=self.drawer_detector,
             depth_projector=self.depth_projector,
             grasp_point_selector=self.grasp_point_selector,
+            tool_hold_monitor=self.tool_hold_monitor,
         )
         self.return_runner = ReturnSequenceRunner(
             self.robot,
             self.motion,
             self.gripper,
             self.state,
+            self.tool_hold_monitor,
         )
 
         self._create_subscriptions()
@@ -225,6 +303,26 @@ class MacGyvBotNode(Node):
             .strip()
         ) or DRAWER_YOLO_MODEL_NAME
 
+    def _read_grasp_point_api_config(self):
+        self.declare_parameter("grasp_point_api_model", "gemini-2.5-flash")
+        self.declare_parameter("grasp_point_api_env_file", "")
+        self.declare_parameter("grasp_point_api_base_url", "")
+        self.declare_parameter("grasp_point_api_timeout_sec", 30.0)
+        return {
+            "api_model": str(
+                self.get_parameter("grasp_point_api_model").value
+            ).strip(),
+            "api_env_file": str(
+                self.get_parameter("grasp_point_api_env_file").value
+            ).strip(),
+            "api_base_url": str(
+                self.get_parameter("grasp_point_api_base_url").value
+            ).strip(),
+            "api_timeout_sec": float(
+                self.get_parameter("grasp_point_api_timeout_sec").value
+            ),
+        }
+
     def _read_force_torque_topic(self):
         self.declare_parameter("force_torque_topic", FORCE_TORQUE_TOPIC)
         return (
@@ -233,6 +331,14 @@ class MacGyvBotNode(Node):
             .string_value
             .strip()
         ) or FORCE_TORQUE_TOPIC
+
+    def _read_bool_parameter(self, name, default_value=False):
+        value = self.get_parameter(name).value
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in ("1", "true", "yes", "on")
+        return bool(value)
 
     def _create_subscriptions(self):
         self.create_subscription(
@@ -301,6 +407,7 @@ class MacGyvBotNode(Node):
         )
         self.get_logger().info(f"공구 명령 토픽: {TOOL_COMMAND_TOPIC}")
         self.get_logger().info(f"로봇 상태 토픽: {ROBOT_STATUS_TOPIC}")
+        self.get_logger().info(f"공구 drop 감지 토픽: {TOOL_DROP_TOPIC}")
         self.get_logger().info(f"잡기 인식 결과 토픽: {HAND_GRASP_TOPIC}")
         self.get_logger().info(f"잡기 인식 화면 토픽: {HAND_GRASP_IMAGE_TOPIC}")
         self.get_logger().info(f"공구 mask lock 토픽: {HAND_GRASP_MASK_LOCK_TOPIC}")
@@ -521,6 +628,12 @@ class MacGyvBotNode(Node):
         self.robot_status_pub.publish(
             String(data=json.dumps(payload, ensure_ascii=False))
         )
+
+    def _publish_tool_drop_payload(self, payload):
+        self.tool_drop_pub.publish(
+            String(data=json.dumps(payload, ensure_ascii=False))
+        )
+
 
 def main():
     rclpy.init()
