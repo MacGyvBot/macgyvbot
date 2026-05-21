@@ -15,6 +15,11 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
 
+from macgyvbot_config.topics import (
+    CAMERA_COLOR_TOPIC,
+    HAND_GRASP_IMAGE_TOPIC,
+    ROBOT_TASK_CONTROL_TOPIC,
+)
 from macgyvbot_command.ui.voice_command_window import (
     QApplication,
     QTimer,
@@ -26,10 +31,6 @@ from macgyvbot_command.input_mapping.command_llm_parser import (
 from macgyvbot_command.stt.speech_to_text import SpeechToTextService
 from macgyvbot_command.tts import TtsService
 
-from macgyvbot_config.topics import (
-    CAMERA_COLOR_TOPIC,
-    ROBOT_TASK_CONTROL_TOPIC,
-)
 
 class CommandInputNode(Node):
     def __init__(self):
@@ -52,8 +53,10 @@ class CommandInputNode(Node):
         self.declare_parameter('command_feedback_topic', '/command_feedback')
         self.declare_parameter('robot_status_topic', '/robot_task_status')
         self.declare_parameter('camera_status_topic', CAMERA_COLOR_TOPIC)
+        self.declare_parameter('detector_image_topic', HAND_GRASP_IMAGE_TOPIC)
         self.declare_parameter('connection_check_period_sec', 1.0)
         self.declare_parameter('camera_timeout_sec', 3.0)
+        self.declare_parameter('detector_timeout_sec', 3.0)
         self.declare_parameter(
             'robot_node_names',
             'macgyvbot_main_node,macgyvbot',
@@ -100,11 +103,13 @@ class CommandInputNode(Node):
         command_feedback_topic = self.get_parameter('command_feedback_topic').value
         robot_status_topic = self.get_parameter('robot_status_topic').value
         camera_status_topic = self.get_parameter('camera_status_topic').value
+        detector_image_topic = self.get_parameter('detector_image_topic').value
 
         self.window = None
         self._last_gui_text = ''
         self._last_target_label = ''
         self._last_camera_stamp_ns = None
+        self._last_detector_stamp_ns = None
         self._last_connection_text = ''
         self._last_robot_status_key = None
         self._robot_node_names = {
@@ -115,6 +120,9 @@ class CommandInputNode(Node):
         self._camera_timeout_ns = int(
             float(self.get_parameter('camera_timeout_sec').value) * 1_000_000_000
         )
+        self._detector_timeout_ns = int(
+            float(self.get_parameter('detector_timeout_sec').value) * 1_000_000_000
+        )
 
         self._stt_pub = self.create_publisher(String, stt_text_topic, 10)
         self._compat_pub = (
@@ -124,15 +132,23 @@ class CommandInputNode(Node):
         )
         self._tool_command_pub = self.create_publisher(String, tool_command_topic, 10)
         self._feedback_pub = self.create_publisher(String, command_feedback_topic, 10)
-
-        # 로봇 정지 명령을 위한 토픽 퍼블리셔
-        self._task_control_pub = self.create_publisher(String, ROBOT_TASK_CONTROL_TOPIC, 10)
+        self._task_control_pub = self.create_publisher(
+            String,
+            ROBOT_TASK_CONTROL_TOPIC,
+            10,
+        )
 
         self.create_subscription(String, stt_text_topic, self._text_cb, 10)
         self.create_subscription(String, tool_command_topic, self._tool_command_cb, 10)
         self.create_subscription(String, command_feedback_topic, self._feedback_cb, 10)
         self.create_subscription(String, robot_status_topic, self._robot_status_cb, 10)
         self.create_subscription(Image, camera_status_topic, self._camera_status_cb, 10)
+        self.create_subscription(
+            Image,
+            detector_image_topic,
+            self._detector_image_cb,
+            10,
+        )
         self.create_timer(
             float(self.get_parameter('connection_check_period_sec').value),
             self._update_connection_status,
@@ -396,20 +412,34 @@ class CommandInputNode(Node):
     def _camera_status_cb(self, _msg):
         self._last_camera_stamp_ns = self.get_clock().now().nanoseconds
 
+    def _detector_image_cb(self, msg):
+        self._last_detector_stamp_ns = self.get_clock().now().nanoseconds
+        if self.window is not None and hasattr(self.window, 'set_detector_image'):
+            try:
+                self.window.set_detector_image(msg)
+            except ValueError as exc:
+                self.get_logger().warn(f'detector image 표시 실패: {exc}')
+
     def _update_connection_status(self):
         if self.window is None:
             return
 
         robot_text = self._robot_connection_text()
         camera_text = self._camera_connection_text()
-        connection_text = f'{robot_text}|{camera_text}|연결됨'
+        detector_text = self._detector_connection_text()
+        connection_text = f'{robot_text}|{camera_text}|{detector_text}|연결됨'
 
         if connection_text == self._last_connection_text:
             return
 
         self._last_connection_text = connection_text
         if hasattr(self.window, 'set_connection_status'):
-            self.window.set_connection_status(robot_text, camera_text)
+            self.window.set_connection_status(
+                robot_text,
+                camera_text,
+                gui_text='연결됨',
+                detector_text=detector_text,
+            )
 
     def _robot_connection_text(self):
         node_names = set(self.get_node_names())
@@ -427,6 +457,15 @@ class CommandInputNode(Node):
         elapsed_ns = self.get_clock().now().nanoseconds - self._last_camera_stamp_ns
         if elapsed_ns <= self._camera_timeout_ns:
             return '연결됨'
+        return '미수신'
+
+    def _detector_connection_text(self):
+        if self._last_detector_stamp_ns is None:
+            return '대기 중'
+
+        elapsed_ns = self.get_clock().now().nanoseconds - self._last_detector_stamp_ns
+        if elapsed_ns <= self._detector_timeout_ns:
+            return '수신 중'
         return '미수신'
 
     def _build_rejected_message(self, reason, message):
@@ -522,6 +561,7 @@ class CommandInputNode(Node):
             'success': '작업이 완료되었습니다.',
             'failed': '작업에 실패했습니다.',
             'error': '작업 중 오류가 발생했습니다.',
+            'tool_dropped': '공구 drop이 감지되었습니다.',
             'busy': '이미 다른 작업을 수행 중입니다.',
             'paused': '로봇이 일시정지되었습니다.',
             'resumed': '작업을 다시 시작합니다.',
@@ -562,6 +602,7 @@ class CommandInputNode(Node):
             'success': '완료',
             'failed': '실패',
             'error': '오류',
+            'tool_dropped': '공구 이탈',
             'busy': '작업 중',
             'paused': '일시정지',
             'resumed': '재개',
@@ -598,6 +639,7 @@ class CommandInputNode(Node):
             'success': '작업 완료',
             'failed': '작업 실패',
             'error': '작업 오류',
+            'tool_dropped': '공구 이탈 감지',
             'busy': '다른 작업 수행 중',
             'paused': '작업 일시정지',
             'resumed': '작업 재개',
@@ -616,6 +658,7 @@ class CommandInputNode(Node):
             'success',
             'failed',
             'error',
+            'tool_dropped',
             'busy',
             'paused',
             'resumed',
@@ -632,6 +675,7 @@ class CommandInputNode(Node):
             'success',
             'failed',
             'error',
+            'tool_dropped',
             'busy',
             'paused',
             'resumed',
@@ -680,16 +724,6 @@ class CommandInputNode(Node):
         if self.window is not None and hasattr(self.window, 'set_task_status'):
             self.window.set_task_status(target_text, stage_text)
 
-    def destroy_node(self):
-        if self._stt_service is not None:
-            self._stt_service.stop()
-        if self._tts_service is not None:
-            self._tts_service.stop()
-        super().destroy_node()
-
-    #----------------------------------------------------------------------------------------------------
-    # 헬퍼
-
     def _send_task_control_request(self, action, reason):
         msg = String()
         msg.data = json.dumps(
@@ -701,7 +735,9 @@ class CommandInputNode(Node):
             ensure_ascii=False,
         )
         self._task_control_pub.publish(msg)
-        self.get_logger().info(f"task control 토픽 발행: action={action}, reason={reason}")
+        self.get_logger().info(
+            f"task control 토픽 발행: action={action}, reason={reason}"
+        )
 
         messages = {
             "stop": "로봇 작업을 정지합니다.",
@@ -710,7 +746,12 @@ class CommandInputNode(Node):
         }
         self._append_bot(messages.get(action, "로봇 작업 제어 요청을 보냈습니다."))
 
-    #----------------------------------------------------------------------------------------------------
+    def destroy_node(self):
+        if self._stt_service is not None:
+            self._stt_service.stop()
+        if self._tts_service is not None:
+            self._tts_service.stop()
+        super().destroy_node()
 
 
 def main(args=None):

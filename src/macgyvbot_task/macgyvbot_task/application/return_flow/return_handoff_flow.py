@@ -32,6 +32,7 @@ class ReturnHandoffFlow:
         state,
         reporter,
         wait_fn,
+        tool_hold_monitor=None,
         interrupted=None,
     ):
         self.robot = robot
@@ -40,6 +41,7 @@ class ReturnHandoffFlow:
         self.state = state
         self.reporter = reporter
         self.wait_fn = wait_fn
+        self.tool_hold_monitor = tool_hold_monitor
         self.interrupted = interrupted or (lambda: False)
         self.grasp_verifier = GraspVerifier(
             gripper,
@@ -95,6 +97,8 @@ class ReturnHandoffFlow:
             "반납 공구 grasp에 성공했습니다.",
             command,
         )
+        if self.tool_hold_monitor is not None:
+            self.tool_hold_monitor.start(tool_name, "return", command)
         return tool_name, ""
 
     def wait_for_user_held_tool(self, tool_name, logger):

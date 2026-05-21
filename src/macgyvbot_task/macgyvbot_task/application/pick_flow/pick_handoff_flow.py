@@ -34,6 +34,7 @@ class PickHandoffFlow:
         gripper,
         state,
         wait_fn,
+        tool_hold_monitor=None,
         interrupted=None,
     ):
         self.robot = robot
@@ -41,6 +42,7 @@ class PickHandoffFlow:
         self.gripper = gripper
         self.state = state
         self.wait_fn = wait_fn
+        self.tool_hold_monitor = tool_hold_monitor
         self.interrupted = interrupted or (lambda: False)
 
     def return_tool_to_original_position(
@@ -77,6 +79,8 @@ class PickHandoffFlow:
             return False
 
         logger.info("반환 3단계: 원래 위치에 공구 놓기")
+        if self.tool_hold_monitor is not None:
+            self.tool_hold_monitor.stop("return_to_original_position")
         self.gripper.open_gripper()
         self.wait_fn(0.8)
 

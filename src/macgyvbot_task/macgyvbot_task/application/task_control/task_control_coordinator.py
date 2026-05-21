@@ -25,6 +25,7 @@ class TaskControlCoordinator:
         pause_event,
         resume_event,
         logger_provider,
+        cleanup_callbacks=None,
     ):
         self.pick_sequence = pick_sequence
         self.return_sequence = return_sequence
@@ -33,6 +34,7 @@ class TaskControlCoordinator:
         self.pause_event = pause_event
         self.resume_event = resume_event
         self.logger_provider = logger_provider
+        self.cleanup_callbacks = list(cleanup_callbacks or [])
         self._queue = deque()
         self._lock = threading.Lock()
         self._thread = None
@@ -173,6 +175,7 @@ class TaskControlCoordinator:
             elif completed:
                 log.info(f"{task_name} task queue 완료")
 
+            self._run_cleanup_callbacks(log)
             self._clear_task_state()
             self.stop_event.clear()
             self.resume_event.clear()
@@ -192,6 +195,13 @@ class TaskControlCoordinator:
         self.state.target_label = None
         self.state.human_grasped_tool = False
         self.state.current_command = None
+
+    def _run_cleanup_callbacks(self, log):
+        for cleanup in self.cleanup_callbacks:
+            try:
+                cleanup()
+            except Exception as exc:
+                log.warn(f"task cleanup callback 실패: {exc}")
 
     def _publish_task_exception_status(self, task_name, step_name, exc, reason):
         publish = getattr(self.state, "_publish_robot_status", None)

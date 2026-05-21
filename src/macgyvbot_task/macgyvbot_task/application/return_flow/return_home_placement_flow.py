@@ -17,6 +17,7 @@ class ReturnHomePlacementFlow:
         state,
         reporter,
         wait_fn,
+        tool_hold_monitor=None,
         interrupted=None,
     ):
         self.robot = robot
@@ -25,6 +26,7 @@ class ReturnHomePlacementFlow:
         self.state = state
         self.reporter = reporter
         self.wait_fn = wait_fn
+        self.tool_hold_monitor = tool_hold_monitor
         self.interrupted = interrupted or (lambda: False)
         self.force_detector = ForceReactionDetector(
             motion_controller,
@@ -98,11 +100,14 @@ class ReturnHomePlacementFlow:
             logger.info("반납 공구 놓기 전 stop/pause 요청으로 중단합니다.")
             return False
 
+        if self.tool_hold_monitor is not None:
+            self.tool_hold_monitor.stop("return_home_release")
         self.gripper.open_gripper()
         self.wait_fn(0.8)
         if self.interrupted():
             logger.info("반납 공구 놓기 후 stop/pause 요청으로 중단합니다.")
             return False
+
 
         return self.move_home_after_return(
             target_x,

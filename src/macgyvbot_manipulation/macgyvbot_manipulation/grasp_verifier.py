@@ -86,7 +86,7 @@ class GraspVerifier:
         return False
 
 
-def read_grasp_confirmation(gripper, logger):
+def read_grasp_confirmation(gripper, logger, log_success=True):
     """Return whether the current gripper state is a valid object grasp."""
     status = gripper.get_status()
     grip_detected = len(status) > 1 and bool(status[1])
@@ -114,10 +114,11 @@ def read_grasp_confirmation(gripper, logger):
         )
         return False, busy, status, width_mm
 
-    logger.info(
-        "그리퍼 grip detected 신호와 폭으로 grasp 성공을 확인했습니다: "
-        f"width={width_mm:.1f}mm"
-    )
+    if log_success:
+        logger.info(
+            "그리퍼 grip detected 신호와 폭으로 grasp 성공을 확인했습니다: "
+            f"width={width_mm:.1f}mm"
+        )
     return True, busy, status, width_mm
 
 

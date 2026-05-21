@@ -22,11 +22,11 @@ class TaskManagement:
         self.resume_event = resume_event
         self.logger_provider = logger_provider
 
-    def handle_control(self, action, reason=""):
+    def handle_control(self, action, reason="", publish_status=True):
         action = (action or "").strip().lower()
 
         if action == "stop":
-            return self._handle_stop(reason)
+            return self._handle_stop(reason, publish_status=publish_status)
         if action == "pause":
             return self._handle_pause(reason)
         if action == "resume":
@@ -35,17 +35,18 @@ class TaskManagement:
         self.logger().warn(f"지원하지 않는 task control action: {action}")
         return False
 
-    def _handle_stop(self, reason):
+    def _handle_stop(self, reason, publish_status=True):
         self.stop_event.set()
         self.pause_event.clear()
         self.resume_event.clear()
         self._clear_task_queue()
-        self.state._publish_robot_status(
-            "cancelled",
-            message="사용자 요청으로 작업을 중단합니다.",
-            reason=reason or "stop_requested",
-            command=self.state.current_command,
-        )
+        if publish_status:
+            self.state._publish_robot_status(
+                "cancelled",
+                message="사용자 요청으로 작업을 중단합니다.",
+                reason=reason or "stop_requested",
+                command=self.state.current_command,
+            )
         return True
 
     def _handle_pause(self, reason):

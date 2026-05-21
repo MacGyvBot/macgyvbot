@@ -29,8 +29,9 @@ from macgyvbot_config.topics import (
     HAND_GRASP_MASK_LOCK_TOPIC,
     HAND_GRASP_TOPIC,
     ROBOT_STATUS_TOPIC,
-    TOOL_COMMAND_TOPIC,
     ROBOT_TASK_CONTROL_TOPIC,
+    TOOL_DROP_TOPIC,
+    TOOL_COMMAND_TOPIC,
 )
 from macgyvbot_config.vlm import DEFAULT_GRASP_POINT_MODE
 from macgyvbot_manipulation.moveit_controller import (
@@ -51,6 +52,7 @@ from macgyvbot_task.application import (
     RobotStatusPublisher,
     TaskRuntimeState,
     ToolCommandController,
+    ToolDropStatusReporter,
 )
 from macgyvbot_task.application.adapters.hand_grasp_result_adapter import (
     HandGraspResultAdapter,
@@ -78,8 +80,14 @@ class MacGyvBotNode(Node):
     def __init__(self):
         super().__init__("macgyvbot_main_node")
 
+        self.declare_parameter("display_debug_windows", False)
+
         self.bridge = CvBridge()
-        self.display = DebugDisplay()
+        self.display_debug_windows = self._read_bool_parameter(
+            "display_debug_windows",
+            False,
+        )
+        self.display = DebugDisplay(enabled=self.display_debug_windows)
         self.stop_req = threading.Event()
         self.pause_req = threading.Event()
         self.resume_req = threading.Event()
@@ -93,6 +101,11 @@ class MacGyvBotNode(Node):
             ROBOT_STATUS_TOPIC,
             10,
         )
+        self.tool_drop_pub = self.create_publisher(
+            String,
+            TOOL_DROP_TOPIC,
+            10,
+        )
         self.state = TaskRuntimeState(
             logger_provider=self.get_logger,
             publish_robot_status=self._publish_robot_status,
@@ -102,6 +115,7 @@ class MacGyvBotNode(Node):
         self.grasp_point_selector = GraspPointSelector(
             self.grasp_point_mode,
             self.get_logger(),
+            **self._read_grasp_point_api_config(),
         )
 
         calib_file = self._resolve_calibration_file("T_gripper2camera.npy")
@@ -117,6 +131,14 @@ class MacGyvBotNode(Node):
             self.depth_projector,
             self.get_logger(),
         )
+
+        if self.display_debug_windows:
+            self.get_logger().info("OpenCV debug display windows are enabled.")
+        else:
+            self.get_logger().info(
+                "OpenCV debug display windows are disabled. "
+                "Use the command GUI detector panel instead."
+            )
         self.pick_target_resolver = PickTargetResolver(
             self.detector,
             self.grasp_point_selector,
@@ -145,6 +167,11 @@ class MacGyvBotNode(Node):
             self._publish_status_payload,
             target_label_provider=lambda: self.state.target_label,
         )
+        self.tool_hold_monitor = ToolDropStatusReporter(
+            self.gripper,
+            self._publish_tool_drop_payload,
+            self._publish_status_payload,
+        )
         self.task_controller = ToolCommandController(
             self.get_logger(),
             self.status_publisher,
@@ -153,7 +180,7 @@ class MacGyvBotNode(Node):
             clear_target=self._clear_pending_target,
             reset_search_status=self._reset_search_status,
             start_return=self.start_return_sequence,
-            release_gripper=self.gripper.open_gripper,
+            release_gripper=self.tool_hold_monitor.release_gripper,
         )
         self.frame_processor = PickFrameProcessor(
             self.state,
@@ -173,6 +200,7 @@ class MacGyvBotNode(Node):
             self.motion,
             self.gripper,
             self.state,
+            self.tool_hold_monitor,
             control_events=control_events,
         )
         self.return_runner = ReturnSequenceRunner(
@@ -180,6 +208,7 @@ class MacGyvBotNode(Node):
             self.motion,
             self.gripper,
             self.state,
+            self.tool_hold_monitor,
             control_events=control_events,
         )
         self.task_coordinator = TaskControlCoordinator(
@@ -190,6 +219,9 @@ class MacGyvBotNode(Node):
             self.pause_req,
             self.resume_req,
             self.get_logger,
+            cleanup_callbacks=[
+                lambda: self.tool_hold_monitor.stop("task_queue_finished"),
+            ],
         )
         self.task_management = TaskManagement(
             self.state,
@@ -202,9 +234,6 @@ class MacGyvBotNode(Node):
 
         self._create_subscriptions()
         self._log_startup()
-
-    def logger(self):
-        return self.get_logger()
 
     def _base_to_camera_matrix(self):
         return get_ee_matrix(self.robot) @ self.gripper2cam
@@ -244,6 +273,26 @@ class MacGyvBotNode(Node):
             .strip()
         ) or YOLO_MODEL_NAME
 
+    def _read_grasp_point_api_config(self):
+        self.declare_parameter("grasp_point_api_model", "gemini-2.5-flash")
+        self.declare_parameter("grasp_point_api_env_file", "")
+        self.declare_parameter("grasp_point_api_base_url", "")
+        self.declare_parameter("grasp_point_api_timeout_sec", 30.0)
+        return {
+            "api_model": str(
+                self.get_parameter("grasp_point_api_model").value
+            ).strip(),
+            "api_env_file": str(
+                self.get_parameter("grasp_point_api_env_file").value
+            ).strip(),
+            "api_base_url": str(
+                self.get_parameter("grasp_point_api_base_url").value
+            ).strip(),
+            "api_timeout_sec": float(
+                self.get_parameter("grasp_point_api_timeout_sec").value
+            ),
+        }
+
     def _read_force_torque_topic(self):
         self.declare_parameter("force_torque_topic", FORCE_TORQUE_TOPIC)
         return (
@@ -252,6 +301,14 @@ class MacGyvBotNode(Node):
             .string_value
             .strip()
         ) or FORCE_TORQUE_TOPIC
+
+    def _read_bool_parameter(self, name, default_value=False):
+        value = self.get_parameter(name).value
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in ("1", "true", "yes", "on")
+        return bool(value)
 
     def _create_subscriptions(self):
         self.create_subscription(
@@ -308,13 +365,17 @@ class MacGyvBotNode(Node):
             self._wrench_cb,
             10,
         )
-
-        # 정지/일시정지/재개 제어는 별도 callback group으로 분리해
-        # 고주기 image callback보다 늦게 처리될 가능성을 줄입니다.
         self.create_subscription(
             String,
             ROBOT_TASK_CONTROL_TOPIC,
             self._task_control_cb,
+            10,
+            callback_group=self.control_callback_group,
+        )
+        self.create_subscription(
+            String,
+            TOOL_DROP_TOPIC,
+            self._tool_drop_cb,
             10,
             callback_group=self.control_callback_group,
         )
@@ -329,11 +390,15 @@ class MacGyvBotNode(Node):
         )
         self.get_logger().info(f"공구 명령 토픽: {TOOL_COMMAND_TOPIC}")
         self.get_logger().info(f"로봇 상태 토픽: {ROBOT_STATUS_TOPIC}")
+        self.get_logger().info(f"공구 drop 감지 토픽: {TOOL_DROP_TOPIC}")
+        self.get_logger().info(f"작업 제어 토픽: {ROBOT_TASK_CONTROL_TOPIC}")
         self.get_logger().info(f"잡기 인식 결과 토픽: {HAND_GRASP_TOPIC}")
         self.get_logger().info(f"잡기 인식 화면 토픽: {HAND_GRASP_IMAGE_TOPIC}")
         self.get_logger().info(f"공구 mask lock 토픽: {HAND_GRASP_MASK_LOCK_TOPIC}")
+        self.get_logger().info(f"RGB 카메라 토픽: {CAMERA_COLOR_TOPIC}")
+        self.get_logger().info(f"Depth 카메라 토픽: {CAMERA_DEPTH_TOPIC}")
+        self.get_logger().info(f"CameraInfo 토픽: {CAMERA_INFO_TOPIC}")
         self.get_logger().info(f"힘/토크 입력 토픽: {self.force_torque_topic}")
-        self.get_logger().info(f"작업 제어 토픽: {ROBOT_TASK_CONTROL_TOPIC}")
 
     def _target_label_cb(self, msg):
         val = msg.data.strip()
@@ -348,13 +413,7 @@ class MacGyvBotNode(Node):
         if action is None:
             return
 
-        if action == "stop":
-            self.stop_req.set()
-        elif action == "pause":
-            self.pause_req.set()
-        elif action == "resume":
-            self.resume_req.set()
-        else:
+        if action not in ("stop", "pause", "resume"):
             self.get_logger().warn(f"지원하지 않는 task control action: {action}")
             return
 
@@ -362,13 +421,15 @@ class MacGyvBotNode(Node):
             f"task control 수신: action={action}, reason={reason}"
         )
 
-        if action in ("stop", "pause"):
+        handled = self.task_management.handle_control(action, reason=reason)
+
+        if handled and action in ("stop", "pause"):
             self.motion.cancel_current_goal(
                 self.get_logger(),
                 reason=reason or action,
             )
-
-        self.task_management.handle_control(action, reason=reason)
+        if not handled:
+            self.get_logger().warn(f"task control 처리 실패: action={action}")
 
     def _motion_interrupted(self):
         return self.stop_req.is_set() or self.pause_req.is_set()
@@ -389,6 +450,34 @@ class MacGyvBotNode(Node):
         action = str(data.get("action", "")).strip().lower()
         reason = str(data.get("reason", "")).strip()
         return action or None, reason
+
+    def _tool_drop_cb(self, msg):
+        try:
+            payload = json.loads(msg.data)
+        except json.JSONDecodeError:
+            self.get_logger().warn(f"공구 drop 이벤트 JSON 파싱 실패: {msg.data}")
+            return
+
+        if payload.get("event") != "tool_dropped":
+            return
+
+        self._handle_tool_drop_stop(payload)
+
+    def _handle_tool_drop_stop(self, payload):
+        reason = payload.get("reason") or "tool_dropped"
+        self.get_logger().warn(
+            "공구 drop 감지를 task stop으로 처리합니다: "
+            f"reason={reason}, tool={payload.get('tool_name', 'unknown')}"
+        )
+        self.motion.cancel_current_goal(
+            self.get_logger(),
+            reason=reason,
+        )
+        self.task_management.handle_control(
+            "stop",
+            reason=reason,
+            publish_status=False,
+        )
 
     def _tool_command_cb(self, msg):
         try:
@@ -559,9 +648,6 @@ class MacGyvBotNode(Node):
 
         self.display.close()
 
-    def _latest_camera_state(self):
-        return self.state.color_image, self.state.depth_image, self.state.intrinsics
-
     def _publish_robot_status(
         self,
         status,
@@ -584,6 +670,12 @@ class MacGyvBotNode(Node):
         self.robot_status_pub.publish(
             String(data=json.dumps(payload, ensure_ascii=False))
         )
+
+    def _publish_tool_drop_payload(self, payload):
+        self.tool_drop_pub.publish(
+            String(data=json.dumps(payload, ensure_ascii=False))
+        )
+
 
 def main():
     rclpy.init()

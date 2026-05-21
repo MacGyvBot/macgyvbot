@@ -24,12 +24,14 @@ class PickSequenceRunner:
         motion_controller,
         gripper,
         state,
+        tool_hold_monitor=None,
         control_events=None,
     ):
         self.robot = robot
         self.motion = motion_controller
         self.gripper = gripper
         self.state = state
+        self.tool_hold_monitor = tool_hold_monitor
         self.control_events = control_events or {}
         self.target_planner = PickTargetPlanner(robot)
         self.handoff = PickHandoffFlow(
@@ -38,6 +40,7 @@ class PickSequenceRunner:
             gripper,
             state,
             self.cooperative_wait,
+            tool_hold_monitor,
             interrupted=self._interrupted,
         )
         self.grasp = PickGraspFlow(
@@ -234,6 +237,12 @@ class PickSequenceRunner:
                 message="공구 grasp에 성공했습니다.",
                 command=self.state.current_command,
             )
+            if self.tool_hold_monitor is not None:
+                self.tool_hold_monitor.start(
+                    self.state.target_label,
+                    "bring",
+                    self.state.current_command,
+                )
             return True
 
         if self._interrupted():
@@ -335,6 +344,8 @@ class PickSequenceRunner:
 
     def _release_to_human(self):
         self.state.logger().info("10단계: 사용자 잡기 확인 후 그리퍼 오픈(놓기)")
+        if self.tool_hold_monitor is not None:
+            self.tool_hold_monitor.stop("handoff_release")
         self.gripper.open_gripper()
         self.cooperative_wait(0.8)
         return True

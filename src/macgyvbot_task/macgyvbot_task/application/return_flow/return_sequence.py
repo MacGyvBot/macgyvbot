@@ -26,12 +26,14 @@ class ReturnSequenceRunner:
         motion_controller,
         gripper,
         state,
+        tool_hold_monitor=None,
         control_events=None,
     ):
         self.robot = robot
         self.motion = motion_controller
         self.gripper = gripper
         self.state = state
+        self.tool_hold_monitor = tool_hold_monitor
         self.control_events = control_events or {}
         self.reporter = ReturnStatusReporter(state)
         self.handoff = ReturnHandoffFlow(
@@ -41,6 +43,7 @@ class ReturnSequenceRunner:
             state,
             self.reporter,
             self._cooperative_wait,
+            tool_hold_monitor,
             interrupted=self._interrupted,
         )
         self.placement = ReturnHomePlacementFlow(
@@ -50,6 +53,7 @@ class ReturnSequenceRunner:
             state,
             self.reporter,
             self._cooperative_wait,
+            tool_hold_monitor,
             interrupted=self._interrupted,
         )
 
@@ -64,7 +68,11 @@ class ReturnSequenceRunner:
             TaskStep("return/prepare", lambda: self._prepare(context)),
             TaskStep("return/receive_tool", lambda: self._receive_tool(context)),
             TaskStep("return/place_home", lambda: self._place_home(context)),
-            TaskStep("return/done", lambda: self._publish_done(context), retry_on_pause=False),
+            TaskStep(
+                "return/done",
+                lambda: self._publish_done(context),
+                retry_on_pause=False,
+            ),
         ]
 
     def _prepare(self, context):
