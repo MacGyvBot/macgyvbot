@@ -30,6 +30,7 @@ log/
 *.mov
 *.avi
 *.json
+*.jsonl
 
 # Local environment
 .env

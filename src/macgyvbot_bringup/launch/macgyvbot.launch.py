@@ -158,15 +158,6 @@ def generate_launch_description():
                 "sam_checkpoint",
                 default_value=default_sam_checkpoint,
             ),
-            DeclareLaunchArgument(
-                "full_chain_one_pass_mode",
-                default_value="false",
-                description=(
-                    "Enable full-chain one-pass validation lane. "
-                    "Uses taught joint waypoints only — requires all 7 waypoint "
-                    "constants in robot.py to be set before use."
-                ),
-            ),
             Node(
                 package="macgyvbot_task",
                 executable="macgyvbot",
@@ -183,9 +174,6 @@ def generate_launch_description():
                         "grasp_point_api_base_url": grasp_point_api_base_url,
                         "grasp_point_api_timeout_sec": grasp_point_api_timeout_sec,
                         "force_torque_topic": LaunchConfiguration("force_torque_topic"),
-                        "full_chain_one_pass_mode": LaunchConfiguration(
-                            "full_chain_one_pass_mode"
-                        ),
                         "display_debug_windows": display_debug_windows,
                     },
                 ],

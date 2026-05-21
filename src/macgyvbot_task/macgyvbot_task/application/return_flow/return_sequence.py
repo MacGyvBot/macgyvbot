@@ -61,6 +61,7 @@ class ReturnSequenceRunner:
             state,
             self.reporter,
             self._cooperative_wait,
+            tool_hold_monitor,
         )
 
     def run(self, command):

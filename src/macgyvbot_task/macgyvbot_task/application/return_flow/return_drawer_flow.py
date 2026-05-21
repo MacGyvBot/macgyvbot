@@ -13,13 +13,14 @@ from macgyvbot_task.application.drawer_flow.drawer_sequence import DrawerInterac
 class ReturnDrawerFlow:
     """Open drawer → pick tool from home → place in drawer → close drawer → home."""
 
-    def __init__(self, robot, motion_controller, gripper, state, reporter, wait_fn):
+    def __init__(self, robot, motion_controller, gripper, state, reporter, wait_fn, tool_hold_monitor=None):
         self.robot = robot
         self.motion = motion_controller
         self.gripper = gripper
         self.state = state
         self.reporter = reporter
         self.wait_fn = wait_fn
+        self.tool_hold_monitor = tool_hold_monitor
         self.force_detector = ForceReactionDetector(motion_controller, state, wait_fn)
         self.grasp_verifier = GraspVerifier(gripper, wait_fn)
         self.drawer = DrawerInteraction(
@@ -99,6 +100,8 @@ class ReturnDrawerFlow:
                 depth_m=0.0,
                 source="hardcoded_joint",
             )
+            if self.tool_hold_monitor is not None:
+                self.tool_hold_monitor.stop("drawer_return_place")
             if not self.drawer.place_tool_in_open_drawer(drawer_target, logger):
                 self.reporter.fail(
                     tool_name,
@@ -175,6 +178,9 @@ class ReturnDrawerFlow:
                 logger,
             )
             return False
+
+        if self.tool_hold_monitor is not None:
+            self.tool_hold_monitor.start(tool_name, "return_drawer", command)
 
         if not self.motion.plan_and_execute(
             logger,
