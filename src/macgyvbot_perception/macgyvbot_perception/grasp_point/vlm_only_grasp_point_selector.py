@@ -137,10 +137,17 @@ class VLMOnlyGraspPointSelector:
             )
 
         return (
-            "Choose one grasp center and in-plane yaw for a two-finger parallel "
+            "Choose one grasp center and wrist yaw for a two-finger parallel "
             "robot gripper.\n"
             "Return strict JSON only with keys: x_px, y_px, yaw_deg, confidence, reason.\n"
             f"Image size: width={width}, height={height}.\n"
+            "Yaw definition:\n"
+            "- yaw_deg is the gripper wrist rotation, not the object's long-axis angle.\n"
+            "- yaw_deg describes the direction the two fingers close across the object in the image plane.\n"
+            "- yaw_deg=0 means the gripper closes horizontally from left and right.\n"
+            "- Positive yaw_deg means rotate the gripper clockwise from horizontal.\n"
+            "- Negative yaw_deg means rotate the gripper counterclockwise from horizontal.\n"
+            "- For long tools, the closing direction should usually be perpendicular to the tool's long axis.\n"
             "Constraints:\n"
             f"- x_px must be an integer in [0, {width - 1}]\n"
             f"- y_px must be an integer in [0, {height - 1}]\n"
