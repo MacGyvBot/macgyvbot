@@ -29,6 +29,7 @@ log/
 *.mp4
 *.mov
 *.avi
+*.json
 
 # Local environment
 .env
