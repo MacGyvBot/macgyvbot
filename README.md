@@ -187,6 +187,69 @@ VLM 가중치는 `src/macgyvbot_resources/weights/vlm/` 아래에 둡니다.
 python src/macgyvbot_resources/weights/download_vlm_weights.py
 ```
 
+Qwen2.5-VL 3B/7B local weight를 받으려면:
+
+```bash
+python src/macgyvbot_resources/weights/download_Qwen_3b_weights.py
+python src/macgyvbot_resources/weights/download_Qwen_7b_weights.py
+```
+
+### VLM Grasp Dataset Collection
+
+Qwen fine-tuning용 grasp image dataset은 RealSense + YOLO collector로
+수집합니다.
+
+```bash
+python src/macgyvbot_perception/data/collect_vlm_grasp_dataset.py
+```
+
+Preview window controls:
+
+- `s`: current frame, annotated frame, YOLO detections, bbox crop, SAM overlay crop 저장
+- `q`: 종료
+
+Samples are written under:
+
+```text
+src/macgyvbot_perception/data/grasp_dataset/
+```
+
+Each sample contains `image_bgr.png`, `annotated.png`, `metadata.json`, and
+YOLO bbox crops under `crops/`. When SAM is available, metadata also includes
+the SAM overlay crop path used as the image-to-grasp-point VLM input. The
+generated dataset directory is ignored by Git.
+
+### Qwen Grasp Fine-Tuning
+
+LoRA/QLoRA training code lives at:
+
+```text
+src/macgyvbot_perception/train/train_qwen_grasp_lora.py
+```
+
+The trainer uses the exact runtime prompt from `VLMOnlyGraspPointSelector` and
+learns to output strict JSON with `x_px`, `y_px`, and `yaw_deg`.
+
+Expected CSV columns:
+
+```csv
+image_path,x_px,y_px,yaw_deg,confidence,reason
+session_.../sample/crops/00_tool_0.91_sam_crop.png,123,84,-12.5,1.0,teacher answer
+```
+
+Run:
+
+```bash
+python src/macgyvbot_perception/train/train_qwen_grasp_lora.py \
+  --csv path/to/grasp_labels.csv
+```
+
+By default, fine-tuned LoRA adapter checkpoints are saved to:
+
+```text
+src/macgyvbot_resources/weights/vlm/Qwen_finetuning/
+```
+
 ## 전체 파이프라인 실행
 
 각 터미널은 새로 열 때마다 ROS와 MacGyvBot workspace를 source합니다.

@@ -11,6 +11,7 @@ tokenizers>=0.22.2
 huggingface_hub>=1.13.0
 accelerate
 bitsandbytes
+peft
 Pillow
 jinja2>=3.1.0
 num2words
