@@ -439,7 +439,7 @@ class DrawerInteraction:
         self.wait(GRIPPER_OPEN_WAIT_SEC)
         return True
 
-    def place_tool_in_open_drawer(self, drawer_target, logger):
+    def place_tool_in_open_drawer(self, drawer_target, logger, pre_release_cb=None):
         ori = self.state.home_ori
         place_x = drawer_target.x + (
             DRAWER_OPEN_DIRECTION_X * DRAWER_PULL_DISTANCE_M * 0.5
@@ -471,6 +471,8 @@ class DrawerInteraction:
             return False
 
         logger.info("서랍 보관 3단계: 공구 놓기")
+        if pre_release_cb is not None:
+            pre_release_cb()
         self.gripper.open_gripper()
         self.wait(GRIPPER_GRASP_WAIT_SEC)
 

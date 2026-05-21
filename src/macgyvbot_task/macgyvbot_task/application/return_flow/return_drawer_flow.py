@@ -100,9 +100,11 @@ class ReturnDrawerFlow:
                 depth_m=0.0,
                 source="hardcoded_joint",
             )
-            if self.tool_hold_monitor is not None:
-                self.tool_hold_monitor.stop("drawer_return_place")
-            if not self.drawer.place_tool_in_open_drawer(drawer_target, logger):
+            if not self.drawer.place_tool_in_open_drawer(
+                drawer_target,
+                logger,
+                pre_release_cb=self._stop_monitor_before_release,
+            ):
                 self.reporter.fail(
                     tool_name,
                     "서랍에 반납 공구 배치 실패",
@@ -134,6 +136,10 @@ class ReturnDrawerFlow:
                     logger.error("그리퍼가 공구를 잡고 있어 서랍을 닫지 않습니다.")
 
             self.motion.move_to_home_joints(logger)
+
+    def _stop_monitor_before_release(self):
+        if self.tool_hold_monitor is not None:
+            self.tool_hold_monitor.stop("drawer_return_place")
 
     def _pick_from_home(self, tool_name, command, logger):
         logger.info("반납 서랍 - 홈 joint pose 이동 후 공구 파지")
