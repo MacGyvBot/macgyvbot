@@ -33,7 +33,6 @@ from macgyvbot_config.topics import (
     TOOL_COMMAND_TOPIC,
 )
 from macgyvbot_config.vlm import DEFAULT_GRASP_POINT_MODE
-from macgyvbot_manipulation.handover_targeting import move_to_observation_pose
 from macgyvbot_manipulation.moveit_controller import (
     MoveItController,
 )
@@ -63,7 +62,6 @@ from macgyvbot_task.application.pick_flow.pick_frame_processor import (
 from macgyvbot_task.application.pick_flow.pick_sequence import (
     PickSequenceRunner,
 )
-from macgyvbot_task.application.drawer_flow.drawer_sequence import DrawerInteraction
 from macgyvbot_task.application.return_flow.return_sequence import (
     ReturnSequenceRunner,
 )
@@ -460,47 +458,6 @@ class MacGyvBotNode(Node):
             daemon=True,
         )
         self.state.pending_return_thread.start()
-
-    def _open_drawer_startup(self):
-        """프로그램 시작 시 joint 이동으로 서랍 손잡이 위치를 잡고 연다."""
-        log = self.get_logger()
-        drawer = DrawerInteraction(
-            robot=self.robot,
-            motion_controller=self.motion,
-            gripper=self.gripper,
-            state=self.state,
-            detector=self.detector,
-            drawer_detector=self.drawer_detector,
-            depth_projector=self.depth_projector,
-            grasp_point_selector=self.grasp_point_selector,
-        )
-        ok, _ = move_to_observation_pose(self.motion, self.robot, log)
-        if not ok:
-            log.error("시작 서랍 이동 전 관찰 자세 이동 실패")
-            return
-
-        log.info("홈 자세에서 그리퍼 열기")
-        self.gripper.open_gripper()
-        time.sleep(0.5)
-
-        motion = drawer.build_motion_from_joints(log)
-        if motion is None:
-            log.error("시작 서랍 손잡이 joint 이동 실패")
-            return
-
-        log.info(
-            f"시작 서랍 열기: closed_x={motion.closed_x:.3f}, "
-            f"open_x={motion.open_x:.3f}, y={motion.y:.3f}"
-        )
-        if drawer.open_drawer_from_handle(motion, log) is None:
-            log.error("시작 서랍 열기 실패")
-            return
-
-        self._publish_robot_status(
-            "drawer_ready",
-            action="bring",
-            message="서랍 열기, 손잡이 release, 내부 관찰 pose 이동 완료.",
-        )
 
     def run(self):
         if not self.home_initializer.initialize():

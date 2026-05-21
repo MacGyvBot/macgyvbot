@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from macgyvbot_config.drawer import (
+    DRAWER_PICK_APPROACH_LIFT_M,
+    DRAWER_PICK_GRASP_FROM_HANDLE_Z_M,
+)
 from macgyvbot_config.pick import (
     GRASP_Z_OFFSET,
     OBJECT_Z_HEIGHT_BIAS_M,
@@ -48,4 +52,28 @@ class PickTargetPlanner:
             current_y=current_y,
             corrected_bz=corrected_bz,
             should_descend_to_grasp=abs(approach_z - grasp_z) > 0.005,
+        )
+
+    def plan_drawer(self, bx, by, drawer_handle_z, logger):
+        grasp_z = max(SAFE_Z_MIN + 0.005, drawer_handle_z + DRAWER_PICK_GRASP_FROM_HANDLE_Z_M)
+        approach_z = grasp_z + DRAWER_PICK_APPROACH_LIFT_M
+
+        current_pose = get_ee_matrix(self.robot)
+
+        logger.info(
+            f"[서랍pick] plan_drawer — "
+            f"drawer_handle_z={drawer_handle_z:.3f} "
+            f"grasp_z={grasp_z:.3f} approach_z={approach_z:.3f}"
+        )
+
+        return PickMotionPlan(
+            target_x=bx,
+            target_y=by,
+            travel_z=SAFE_Z,
+            approach_z=approach_z,
+            grasp_z=grasp_z,
+            current_x=float(current_pose[0, 3]),
+            current_y=float(current_pose[1, 3]),
+            corrected_bz=0.0,
+            should_descend_to_grasp=True,
         )

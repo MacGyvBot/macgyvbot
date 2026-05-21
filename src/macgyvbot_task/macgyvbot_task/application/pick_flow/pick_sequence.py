@@ -5,6 +5,7 @@ import time
 
 import rclpy
 
+from macgyvbot_config.drawer import DRAWER_ENTRY_GRIPPER_WIDTH_M
 from macgyvbot_config.timing import (
     GRIPPER_GRASP_WAIT_SEC,
     GRIPPER_OPEN_WAIT_SEC,
@@ -106,6 +107,8 @@ class PickSequenceRunner:
                 message="서랍 손잡이 joint 위치로 이동 중입니다.",
                 command=self.state.current_command,
             )
+            self.gripper.open_gripper()
+            self.cooperative_wait(GRIPPER_OPEN_WAIT_SEC)
             motion = drawer.build_motion_from_joints(log)
             if motion is None:
                 self.state._publish_robot_status(
@@ -160,7 +163,7 @@ class PickSequenceRunner:
                 )
                 return
 
-            pick_success = self._drawer_grasp_and_handoff(tool_target, log)
+            pick_success = self._drawer_grasp_and_handoff(tool_target, motion.handle_fk_z, log)
         finally:
             # robot_grasp_succeeded is set True only after try_robot_grasp succeeds.
             # If False, gripper never closed on the tool → safe to close drawer.
@@ -212,14 +215,14 @@ class PickSequenceRunner:
             self.state.human_grasped_tool = False
             self.state.current_command = None
 
-    def _drawer_grasp_and_handoff(self, tool_target, log):
+    def _drawer_grasp_and_handoff(self, tool_target, handle_fk_z, log):
         """서랍 전용 pick: 관찰 자세에서 approach_z로 직접 이동 → grasp_z 하강 → 파지 → 수직 리프트 → handoff.
 
         XY+Z를 approach_z까지 한 번에 이동해 lift_z 기준 XY 보정보다
         base 거리를 줄여 planning 실패를 피한다.
         """
-        plan = self.target_planner.plan(
-            tool_target.x, tool_target.y, tool_target.z, log
+        plan = self.target_planner.plan_drawer(
+            tool_target.x, tool_target.y, handle_fk_z, log
         )
         current_pose = get_ee_matrix(self.robot)
         current_x = float(current_pose[0, 3])
@@ -241,8 +244,10 @@ class PickSequenceRunner:
             f"base_dist_approach={base_dist_approach:.3f}m"
         )
 
-        # 1. Gripper pre-open
+        # 1. Gripper pre-open → narrow to drawer entry width
         self.gripper.open_gripper()
+        self.cooperative_wait(GRIPPER_OPEN_WAIT_SEC)
+        self.gripper.move_gripper(int(DRAWER_ENTRY_GRIPPER_WIDTH_M * 10000))
         self.cooperative_wait(GRIPPER_OPEN_WAIT_SEC)
 
         # 2. XY+Z 동시 이동 → approach_z (lift_z 중간 경유 없음 — base 거리 단축)
@@ -256,7 +261,6 @@ class PickSequenceRunner:
         ok = self.motion.plan_and_execute(
             log,
             pose_goal=make_safe_pose(plan.target_x, plan.target_y, plan.approach_z, ori, log),
-            clamp_z=False,
         )
         if not ok:
             log.error(
@@ -284,7 +288,6 @@ class PickSequenceRunner:
         ok = self.motion.plan_and_execute(
             log,
             pose_goal=make_safe_pose(plan.target_x, plan.target_y, plan.grasp_z, ori, log),
-            clamp_z=False,
         )
         if not ok:
             log.error(

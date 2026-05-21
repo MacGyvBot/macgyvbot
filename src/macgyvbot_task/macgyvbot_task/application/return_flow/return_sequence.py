@@ -5,6 +5,9 @@ import time
 import rclpy
 
 from macgyvbot_config.timing import SEQUENCE_WAIT_POLL_SEC
+from macgyvbot_task.application.return_flow.return_drawer_flow import (
+    ReturnDrawerFlow,
+)
 from macgyvbot_task.application.return_flow.return_handoff_flow import (
     ReturnHandoffFlow,
 )
@@ -34,6 +37,14 @@ class ReturnSequenceRunner:
             self._cooperative_wait,
         )
         self.placement = ReturnHomePlacementFlow(
+            robot,
+            motion_controller,
+            gripper,
+            state,
+            self.reporter,
+            self._cooperative_wait,
+        )
+        self.drawer_flow = ReturnDrawerFlow(
             robot,
             motion_controller,
             gripper,
@@ -91,10 +102,13 @@ class ReturnSequenceRunner:
             ):
                 return
 
+            if not self.drawer_flow.run(tool_name, command, log):
+                return
+
             self.reporter.publish(
                 "done",
                 tool_name,
-                f"{tool_name} 반납 공구를 Home에 배치했습니다.",
+                f"{tool_name} 공구를 서랍에 반납 완료했습니다.",
                 command,
             )
 

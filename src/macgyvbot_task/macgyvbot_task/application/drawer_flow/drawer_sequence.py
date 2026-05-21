@@ -54,6 +54,7 @@ class DrawerHandleMotion:
     approach_z: float
     grasp_z: float
     ori: dict
+    handle_fk_z: float
 
 
 class DrawerInteraction:
@@ -260,6 +261,7 @@ class DrawerInteraction:
             approach_z=approach_z,
             grasp_z=grasp_z,
             ori=drawer_ori,
+            handle_fk_z=z,
         )
         self.state.drawer_handle_motion = motion
         return motion

@@ -29,6 +29,7 @@ def plan_and_execute(
     pose_goal=None,
     state_goal=None,
     params=None,
+    clamp_z=True,
 ):
     arm.set_start_state_to_current_state()
 
@@ -37,9 +38,12 @@ def plan_and_execute(
         y = pose_goal.pose.position.y
         z = pose_goal.pose.position.z
         sx, sy, sz = clamp_to_safe_workspace(x, y, z, logger)
+        if clamp_z:
+            pose_goal.pose.position.z = sz
+        else:
+            pose_goal.pose.position.z = z
         pose_goal.pose.position.x = sx
         pose_goal.pose.position.y = sy
-        pose_goal.pose.position.z = sz
 
         arm.set_goal_state(
             pose_stamped_msg=pose_goal,
@@ -71,7 +75,7 @@ class MoveItController:
         self.params = params
         self.fallback_params = fallback_params
 
-    def plan_and_execute(self, logger, pose_goal=None, state_goal=None):
+    def plan_and_execute(self, logger, pose_goal=None, state_goal=None, clamp_z=True):
         ok = plan_and_execute(
             self.robot,
             self.arm,
@@ -79,6 +83,7 @@ class MoveItController:
             pose_goal=pose_goal,
             state_goal=state_goal,
             params=self.params,
+            clamp_z=clamp_z,
         )
         if not ok and self.fallback_params is not None:
             logger.warn("기본 플래너 실패, OMPL 폴백 시도")
@@ -89,6 +94,7 @@ class MoveItController:
                 pose_goal=pose_goal,
                 state_goal=state_goal,
                 params=self.fallback_params,
+                clamp_z=clamp_z,
             )
         return ok
 

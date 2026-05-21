@@ -81,7 +81,7 @@ def generate_launch_description():
                 default_value=default_drawer_yolo_model,
                 description=(
                     "YOLO model path for drawer/handle detection. "
-                    "Defaults to installed macgyvbot_resources package share."
+                    "Defaults to installed macgyvbot_resources package share. "
                 ),
             ),
             DeclareLaunchArgument(
@@ -128,6 +128,15 @@ def generate_launch_description():
                 "sam_checkpoint",
                 default_value=default_sam_checkpoint,
             ),
+            DeclareLaunchArgument(
+                "full_chain_one_pass_mode",
+                default_value="false",
+                description=(
+                    "Enable full-chain one-pass validation lane. "
+                    "Uses taught joint waypoints only — requires all 7 waypoint "
+                    "constants in robot.py to be set before use."
+                ),
+            ),
             Node(
                 package="macgyvbot_task",
                 executable="macgyvbot",
@@ -138,11 +147,10 @@ def generate_launch_description():
                     {
                         "yolo_model": LaunchConfiguration("yolo_model"),
                         "drawer_yolo_model": LaunchConfiguration("drawer_yolo_model"),
-                        "grasp_point_mode": LaunchConfiguration(
-                            "grasp_point_mode"
-                        ),
-                        "force_torque_topic": LaunchConfiguration(
-                            "force_torque_topic"
+                        "grasp_point_mode": LaunchConfiguration("grasp_point_mode"),
+                        "force_torque_topic": LaunchConfiguration("force_torque_topic"),
+                        "full_chain_one_pass_mode": LaunchConfiguration(
+                            "full_chain_one_pass_mode"
                         ),
                     },
                 ],
