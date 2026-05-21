@@ -600,6 +600,13 @@ class VLMModel:
             "Estimate grasp orientation as strict JSON only for a robot end-effector.\n"
             "Return keys: roll_deg, pitch_deg, yaw_deg, confidence, reason.\n"
             "Use degrees. Keep values in [-180, 180].\n"
+            "Yaw definition:\n"
+            "- yaw_deg is the gripper wrist rotation, not the object's long-axis angle.\n"
+            "- yaw_deg describes the direction the two fingers close across the object in the image plane.\n"
+            "- yaw_deg=0 means the gripper closes horizontally from left and right.\n"
+            "- Positive yaw_deg means rotate the gripper clockwise from horizontal.\n"
+            "- Negative yaw_deg means rotate the gripper counterclockwise from horizontal.\n"
+            "- For long tools, the closing direction should usually be perpendicular to the tool's long axis.\n"
             "If uncertain, keep roll_deg=0 and pitch_deg=0, but still output yaw_deg.\n"
             "Do not return markdown or code fences.\n"
             f"Object: {object_label}\n"
@@ -788,9 +795,16 @@ class VLMModel:
         coarse_y = int(round(coarse_point[1]))
 
         prompt = (
-            "Choose a precise grasp center and in-plane grasp yaw for a two-finger gripper.\n"
+            "Choose a precise grasp center and wrist yaw for a two-finger gripper.\n"
             "Return strict JSON only with keys: x_px, y_px, yaw_deg, confidence, reason.\n"
             f"Image size: width={width}, height={height}.\n"
+            "Yaw definition:\n"
+            "- yaw_deg is the gripper wrist rotation, not the object's long-axis angle.\n"
+            "- yaw_deg describes the direction the two fingers close across the object in the image plane.\n"
+            "- yaw_deg=0 means the gripper closes horizontally from left and right.\n"
+            "- Positive yaw_deg means rotate the gripper clockwise from horizontal.\n"
+            "- Negative yaw_deg means rotate the gripper counterclockwise from horizontal.\n"
+            "- For long tools, the closing direction should usually be perpendicular to the tool's long axis.\n"
             "Constraints:\n"
             f"- x_px must be integer in [0, {width - 1}]\n"
             f"- y_px must be integer in [0, {height - 1}]\n"
@@ -801,7 +815,8 @@ class VLMModel:
             f"Robot task: {request_text}\n"
             f"Context: {context}\n"
             f"Coarse point hint: x={coarse_x}, y={coarse_y}\n"
-            f"Coarse yaw hint(deg): {coarse_yaw_deg:.2f}\n"
+            f"Weak yaw hint from coarse geometry(deg): {coarse_yaw_deg:.2f}. "
+            "Override it if it follows the object's long axis instead of the gripper closing direction.\n"
         )
 
         for attempt in range(1, retry_limit + 1):
