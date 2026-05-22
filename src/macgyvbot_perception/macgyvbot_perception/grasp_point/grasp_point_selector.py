@@ -7,6 +7,9 @@ from macgyvbot_config.vlm import (
     GRASP_POINT_MODE_API,
     GRASP_POINT_MODE_CENTER,
     GRASP_POINT_MODE_VLM,
+    GRASP_POINT_MODE_VLM_ONLY,
+    VLM_ONLY_MODEL_BY_MODE,
+    VLM_ONLY_MODES,
 )
 
 
@@ -21,6 +24,11 @@ class GraspPointSelector:
         api_env_file="",
         api_base_url="",
         api_timeout_sec=30.0,
+        sam_enabled=True,
+        sam_checkpoint="",
+        sam_backend="mobile_sam",
+        sam_model_type="vit_t",
+        sam_device="cuda",
     ):
         self.mode = mode
         self.logger = logger
@@ -28,8 +36,65 @@ class GraspPointSelector:
         self.api_env_file = api_env_file
         self.api_base_url = api_base_url
         self.api_timeout_sec = api_timeout_sec
+        self.sam_enabled = sam_enabled
+        self.sam_checkpoint = sam_checkpoint
+        self.sam_backend = sam_backend
+        self.sam_model_type = sam_model_type
+        self.sam_device = sam_device
         self.vlm_grasp_point_selector = None
+        self.vlm_only_grasp_point_selector = None
         self.api_grasp_point_selector = None
+
+    def preload_vlm_if_needed(self):
+        if not self._uses_vlm():
+            return
+
+        if (
+            self.mode in VLM_ONLY_MODES
+            or (
+                self.mode == GRASP_POINT_MODE_API
+                and DEFAULT_GRASP_POINT_MODE in VLM_ONLY_MODES
+            )
+        ):
+            self._preload_vlm_only()
+            return
+
+        try:
+            from macgyvbot_perception.grasp_point.vlm_grasp_point_selector import (
+                VLMGraspPointSelector,
+            )
+        except ImportError as exc:
+            self.logger.warn(f"VLM grasp module import failed: {exc}")
+            return
+
+        if self.vlm_grasp_point_selector is None:
+            self.vlm_grasp_point_selector = VLMGraspPointSelector(
+                self.logger,
+                sam_enabled=self.sam_enabled,
+                sam_checkpoint=self.sam_checkpoint,
+                sam_backend=self.sam_backend,
+                sam_model_type=self.sam_model_type,
+                sam_device=self.sam_device,
+            )
+
+        try:
+            self.vlm_grasp_point_selector.preload()
+        except Exception as exc:
+            self.logger.warn(f"VLM preload failed: {exc}")
+
+    def _uses_vlm(self):
+        return (
+            self.mode == GRASP_POINT_MODE_VLM
+            or self.mode in VLM_ONLY_MODES
+            or (
+                self.mode == GRASP_POINT_MODE_API
+                and DEFAULT_GRASP_POINT_MODE
+                in (GRASP_POINT_MODE_VLM, *VLM_ONLY_MODES)
+            )
+        )
+
+    def should_defer_vlm_until_top_view(self):
+        return self.mode == GRASP_POINT_MODE_VLM or self.mode in VLM_ONLY_MODES
 
     def select(
         self,
@@ -56,6 +121,22 @@ class GraspPointSelector:
 
             self.logger.warn(
                 "VLM grasp point failed. Falling back to bbox center."
+            )
+
+        if self.mode in VLM_ONLY_MODES:
+            vlm_only_pixel = self._select_vlm_only_grasp_pixel(
+                bbox,
+                label,
+                color_image,
+                depth_image,
+                intrinsics,
+                target_label,
+            )
+            if vlm_only_pixel is not None:
+                return vlm_only_pixel
+
+            self.logger.warn(
+                "VLM-only grasp point failed. Falling back to bbox center."
             )
 
         if self.mode == GRASP_POINT_MODE_API:
@@ -98,6 +179,10 @@ class GraspPointSelector:
         v = int((bbox[1] + bbox[3]) / 2)
         return u, v, GRASP_POINT_MODE_CENTER, None
 
+    def select_bbox_center(self, box):
+        bbox = box.xyxy[0].cpu().numpy()
+        return self._select_bbox_center_pixel(bbox)
+
     def _select_default_grasp_pixel(
         self,
         bbox,
@@ -109,6 +194,16 @@ class GraspPointSelector:
     ):
         if DEFAULT_GRASP_POINT_MODE == GRASP_POINT_MODE_VLM:
             return self._select_vlm_grasp_pixel(
+                bbox,
+                label,
+                color_image,
+                depth_image,
+                intrinsics,
+                target_label,
+            )
+
+        if DEFAULT_GRASP_POINT_MODE in VLM_ONLY_MODES:
+            return self._select_vlm_only_grasp_pixel(
                 bbox,
                 label,
                 color_image,
@@ -140,7 +235,14 @@ class GraspPointSelector:
             return None
 
         if self.vlm_grasp_point_selector is None:
-            self.vlm_grasp_point_selector = VLMGraspPointSelector(self.logger)
+            self.vlm_grasp_point_selector = VLMGraspPointSelector(
+                self.logger,
+                sam_enabled=self.sam_enabled,
+                sam_checkpoint=self.sam_checkpoint,
+                sam_backend=self.sam_backend,
+                sam_model_type=self.sam_model_type,
+                sam_device=self.sam_device,
+            )
 
         return self.vlm_grasp_point_selector.select_grasp_pixel(
             bbox,
@@ -149,6 +251,77 @@ class GraspPointSelector:
             depth_image,
             intrinsics,
             target_label,
+        )
+
+    def _preload_vlm_only(self):
+        try:
+            from macgyvbot_perception.grasp_point.vlm_only_grasp_point_selector import (
+                VLMOnlyGraspPointSelector,
+            )
+        except ImportError as exc:
+            self.logger.warn(f"VLM-only grasp module import failed: {exc}")
+            return
+
+        if self.vlm_only_grasp_point_selector is None:
+            self.vlm_only_grasp_point_selector = VLMOnlyGraspPointSelector(
+                self.logger,
+                sam_enabled=self.sam_enabled,
+                sam_checkpoint=self.sam_checkpoint,
+                sam_backend=self.sam_backend,
+                sam_model_type=self.sam_model_type,
+                sam_device=self.sam_device,
+                model_id=self._vlm_only_model_id(),
+            )
+
+        try:
+            self.vlm_only_grasp_point_selector.preload()
+        except Exception as exc:
+            self.logger.warn(f"VLM-only preload failed: {exc}")
+
+    def _select_vlm_only_grasp_pixel(
+        self,
+        bbox,
+        label,
+        color_image,
+        depth_image,
+        intrinsics,
+        target_label,
+    ):
+        try:
+            from macgyvbot_perception.grasp_point.vlm_only_grasp_point_selector import (
+                VLMOnlyGraspPointSelector,
+            )
+        except ImportError as exc:
+            self.logger.warn(f"VLM-only grasp module import failed: {exc}")
+            return None
+
+        if self.vlm_only_grasp_point_selector is None:
+            self.vlm_only_grasp_point_selector = VLMOnlyGraspPointSelector(
+                self.logger,
+                sam_enabled=self.sam_enabled,
+                sam_checkpoint=self.sam_checkpoint,
+                sam_backend=self.sam_backend,
+                sam_model_type=self.sam_model_type,
+                sam_device=self.sam_device,
+                model_id=self._vlm_only_model_id(),
+            )
+
+        return self.vlm_only_grasp_point_selector.select_grasp_pixel(
+            bbox,
+            label,
+            color_image,
+            depth_image,
+            intrinsics,
+            target_label,
+        )
+
+    def _vlm_only_model_id(self):
+        mode = self.mode
+        if mode == GRASP_POINT_MODE_API:
+            mode = DEFAULT_GRASP_POINT_MODE
+        return VLM_ONLY_MODEL_BY_MODE.get(
+            mode,
+            VLM_ONLY_MODEL_BY_MODE[GRASP_POINT_MODE_VLM_ONLY],
         )
 
     def _select_api_grasp_pixel(
@@ -189,9 +362,17 @@ class GraspPointSelector:
 
 def normalize_grasp_point_mode(mode, logger):
     """Return a supported grasp point mode, falling back to center."""
+    if mode == "grasp_point_mode_vlm_only":
+        return GRASP_POINT_MODE_VLM_ONLY
+    if mode == "vlm_only_qwen_3b":
+        return "vlm_only_qwen3b"
+    if mode == "vlm_only_qwen_7b":
+        return "vlm_only_qwen7b"
+
     if mode in (
         GRASP_POINT_MODE_CENTER,
         GRASP_POINT_MODE_VLM,
+        *VLM_ONLY_MODES,
         GRASP_POINT_MODE_API,
     ):
         return mode

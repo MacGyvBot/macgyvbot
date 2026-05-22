@@ -38,3 +38,6 @@ log/
 # Local VLM model cache under the workspace resource package
 src/macgyvbot_resources/weights/vlm/*
 !src/macgyvbot_resources/weights/vlm/.gitkeep
+
+# Local collected VLM grasp datasets
+src/macgyvbot_perception/data/grasp_dataset/
