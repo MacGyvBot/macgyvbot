@@ -218,7 +218,6 @@ def generate_launch_description():
                 output="screen",
                 parameters=[
                     {
-                        "use_gui": True,
                         "enable_microphone": use_stt,
                         "enable_tts": use_tts,
                         "tts_engine": tts_engine,
@@ -230,9 +229,22 @@ def generate_launch_description():
                         "use_local_parser": True,
                         "use_llm_fallback": True,
                         "parser_mode": parser_mode,
-                        "detector_image_topic": detector_image_topic,
                         "timeout_sec": llm_timeout_sec,
                         "min_confidence": 0.55,
+                    },
+                ],
+                condition=IfCondition(use_voice_command),
+            ),
+            Node(
+                package="macgyvbot_ui",
+                executable="operator_ui_node",
+                name="operator_ui_node",
+                output="screen",
+                parameters=[
+                    {
+                        "camera_status_topic": CAMERA_COLOR_TOPIC,
+                        "detector_image_topic": detector_image_topic,
+                        "robot_status_topic": ROBOT_STATUS_TOPIC,
                     },
                 ],
                 condition=IfCondition(use_voice_command),

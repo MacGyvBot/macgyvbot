@@ -146,7 +146,7 @@ launch 파일에서는 repository path를 하드코딩하지 않는다.
 - STT helper
 - TTS helper
 - command feedback 처리
-- command-coupled GUI widget
+- `/tool_command`, `/command_feedback` 발행
 
 수동 LLM 평가 스크립트는 `src/macgyvbot_command/test/`에 둔다.
 
@@ -209,11 +209,20 @@ task 패키지는 orchestration 계층이다. robot adapter 세부 구현이나 
 
 ### `macgyvbot_ui`
 
-미래의 독립 UI 경계로 예약된 패키지다.
+operator-facing GUI 계층을 소유한다.
 
-현재 command와 강하게 결합된 GUI는 `macgyvbot_command` 안에 둔다. UI 코드가
-command 입력과 분리되어 독립적으로 재사용되거나, 별도 operator UI로 커질 때
-`macgyvbot_ui`로 이동한다.
+여기에 둘 항목:
+
+- `operator_ui_node`
+- PyQt window/widget 구현
+- detector image panel
+- robot/camera/detector 연결 상태 표시
+- command feedback, robot task status, Task Log 표시
+
+`macgyvbot_ui`는 command parser, STT, TTS 내부 구현을 import하지 않는다.
+`/stt_text`, `/tool_command`, `/command_feedback`, `/robot_task_status`,
+`/hand_grasp_detection/annotated_image` 같은 ROS topic 계약으로만 다른
+패키지와 연결한다.
 
 ## 현재 적용 중인 규칙
 
@@ -398,9 +407,9 @@ macgyvbot_ui
      둔다.
    - launch/config/linter 테스트는 `macgyvbot_bringup/test`에 둔다.
 
-6. `macgyvbot_ui`는 미래의 독립 UI 경계로 다룬다.
-   - UI 코드가 command-specific이면 `macgyvbot_command`에 둔다.
-   - UI 코드가 독립 operator UI로 커지면 `macgyvbot_ui`로 이동한다.
+6. `macgyvbot_ui`는 독립 operator UI 경계로 다룬다.
+   - command/parser/STT/TTS 구현을 import하지 않는다.
+   - 다른 패키지와는 ROS topic 계약으로만 연결한다.
 
 7. 구조 변경 후에는 반드시 검증한다.
    - 최소한 영향을 받은 package build와 test를 실행한다.

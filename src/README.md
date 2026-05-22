@@ -48,15 +48,14 @@ Current status:
 - `macgyvbot_resources` owns shared calibration and model asset installation.
 - `macgyvbot_bringup` owns the primary `macgyvbot.launch.py` entrypoint.
   `macgyvbot_compat.launch.py` is a package-local alias for transition testing.
-- `macgyvbot_command` now owns the command input node, parser, STT/TTS helpers,
-  and command-coupled GUI widget.
+- `macgyvbot_command` now owns the headless command input node, parser, and
+  STT/TTS helpers.
 - `macgyvbot_perception` now owns perception helpers and the hand grasp
   detection node for the migrated launch path.
 - `macgyvbot_manipulation` now owns robot control helpers.
 - `macgyvbot_task` now owns the main task node and application workflows for
   the migrated launch path.
-- UI package is still a future boundary; command-coupled UI currently lives in
-  `macgyvbot_command`.
+- `macgyvbot_ui` owns the operator-facing GUI node and window components.
 
 ## Package Responsibilities
 
@@ -69,4 +68,4 @@ Current status:
 - `macgyvbot_perception`: camera input, detection, depth projection, pick target resolution, and hand-grasp perception.
 - `macgyvbot_manipulation`: MoveIt, gripper, force sensing, safe workspace, and low-level robot adapters.
 - `macgyvbot_task`: pick/return workflows, command routing, status publishing, and task-domain models.
-- `macgyvbot_ui`: operator UI widgets and UI-facing presenters.
+- `macgyvbot_ui`: operator UI node, GUI widgets, detector/status/chat panels, and UI-facing presenters.
