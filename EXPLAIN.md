@@ -61,6 +61,7 @@ macgyvbot_command.command_input_node
   -> command parser로 자연어 명령 해석
   -> bring/return은 /tool_command로 발행
   -> stop/pause/resume은 /robot_task_control로 발행
+  -> 최신 exit 요청은 /robot_task_control의 exit action으로 발행
   -> /command_feedback, /stt_text 발행
 
 macgyvbot_task.macgyvbot_main_node
@@ -85,11 +86,14 @@ macgyvbot_perception.hand_grasp_detection_node
   순차 실행됩니다.
 - `/robot_task_control`은 실행 중인 queue에 `stop`, `pause`, `resume`을 적용합니다.
   `stop`은 현재 MoveIt trajectory goal을 cancel하고 대기 중인 step queue를 비웁니다.
+- 최신 구현에서는 `exit` action이 task queue를 종료하고 MoveIt goal을 cancel한 뒤
+  Home joint pose로 복귀하며, 복귀 성공 후 OnRobot RG2 그리퍼를 open합니다.
 - `pause`는 현재 MoveIt trajectory goal을 cancel하지만 대기 중인 queue는 유지합니다.
   pause로 중단된 retry 가능 step은 queue 앞에 다시 들어가고, `resume` 이후 계속됩니다.
 - `/tool_drop_detected`의 `event=tool_dropped` payload는 자동 `stop`으로 해석합니다.
   이때 queue clear와 MoveIt goal cancel은 수행하되 `/robot_task_status`의
   `tool_dropped` 상태가 `cancelled`로 덮이지 않도록 처리합니다.
+- 최신 구현에서는 `tool_dropped`도 내부적으로 `exit` 제어 흐름을 사용합니다.
 
 ## Assets
 
