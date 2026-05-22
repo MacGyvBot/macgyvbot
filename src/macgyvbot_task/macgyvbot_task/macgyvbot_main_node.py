@@ -2,6 +2,7 @@
 """Main ROS wiring node for the MacGyvBot pick pipeline."""
 
 import json
+import math
 import threading
 import time
 from pathlib import Path
@@ -18,8 +19,9 @@ from rclpy.node import Node
 from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import String
 
+from macgyvbot_config.drawer import DRAWER_OBSERVATION_J6_DEG
 from macgyvbot_config.models import YOLO_MODEL_NAME
-from macgyvbot_config.robot import GROUP_NAME
+from macgyvbot_config.robot import GROUP_NAME, HOME_JOINTS, WRIST_JOINT_NAME
 from macgyvbot_config.topics import (
     CAMERA_COLOR_TOPIC,
     CAMERA_DEPTH_TOPIC,
@@ -39,7 +41,10 @@ from macgyvbot_manipulation.moveit_controller import (
 )
 from macgyvbot_manipulation.drawer_motion import DrawerMotionFlow
 from macgyvbot_manipulation.onrobot_gripper import RG
-from macgyvbot_manipulation.robot_pose import get_ee_matrix
+from macgyvbot_manipulation.robot_pose import (
+    get_ee_matrix,
+    orientation_from_joint_positions,
+)
 from macgyvbot_perception.depth_projection import DepthProjector
 from macgyvbot_perception.grasp_point.grasp_point_selector import (
     GraspPointSelector,
@@ -216,7 +221,7 @@ class MacGyvBotNode(Node):
             self.motion,
             self.gripper,
             self._cooperative_wait,
-            observation_orientation_provider=lambda: self.state.home_ori,
+            observation_orientation_provider=self._drawer_observation_orientation,
         )
         self.home_initializer = RobotHomeInitializer(
             self.robot,
@@ -311,6 +316,13 @@ class MacGyvBotNode(Node):
 
     def _base_to_camera_matrix(self):
         return get_ee_matrix(self.robot) @ self.gripper2cam
+
+    def _drawer_observation_orientation(self):
+        joint_positions = dict(HOME_JOINTS)
+        joint_positions[WRIST_JOINT_NAME] = math.radians(
+            DRAWER_OBSERVATION_J6_DEG
+        )
+        return orientation_from_joint_positions(self.robot, joint_positions)
 
     @staticmethod
     def _resolve_calibration_file(filename):
