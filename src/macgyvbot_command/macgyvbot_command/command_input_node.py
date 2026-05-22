@@ -299,10 +299,13 @@ class CommandInputNode(Node):
         command = result.get('command')
         if command is not None:
             action = command.get("action")
-            if action in {"stop", "pause", "resume"}:
+            if action in {"pause", "resume"}:
                 self._send_task_control_request(action=action, reason=text)
+
             elif action == 'exit':
                 self._show_local_control_command(command)
+                self._send_task_control_request(action=action, reason=text)
+
             else:
                 self._publish_command(command)
 
@@ -402,10 +405,10 @@ class CommandInputNode(Node):
             if command.get('action') == 'exit':
                 exit_message = (
                     message
-                    or '종료 요청을 이해했습니다. 창 닫기 버튼이나 Ctrl+C로 종료해주세요.'
+                    or '종료 요청을 이해했습니다. 현재 작업 중단을 로봇에 전달했습니다.'
                 )
                 self._append_bot(exit_message)
-                self._append_log('info', '종료 명령 해석 완료: 로봇 명령으로는 발행하지 않음')
+                self._append_log('info', '종료 명령 해석 완료: 로봇 작업 중단 요청 발행')
                 self._set_status('종료 요청 확인')
                 return
 

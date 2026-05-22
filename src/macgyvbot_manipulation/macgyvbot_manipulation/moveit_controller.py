@@ -204,7 +204,7 @@ class MoveItController:
             result_future = goal_handle.get_result_async()
             while not result_future.done():
                 if self.should_interrupt is not None and self.should_interrupt():
-                    self.cancel_current_goal(logger, reason="stop/pause")
+                    self.cancel_current_goal(logger, reason="exit/pause")
                     self._wait_for_future(
                         result_future,
                         timeout_sec=1.0,

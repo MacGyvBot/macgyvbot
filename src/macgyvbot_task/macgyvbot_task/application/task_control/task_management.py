@@ -1,4 +1,4 @@
-"""Task control side effects for stop, pause, and resume requests."""
+"""Task control side effects for exit, pause, and resume requests."""
 
 from __future__ import annotations
 
@@ -10,14 +10,14 @@ class TaskManagement:
         self,
         state,
         coordinator,
-        stop_event,
+        exit_event,
         pause_event,
         resume_event,
         logger_provider,
     ):
         self.state = state
         self.coordinator = coordinator
-        self.stop_event = stop_event
+        self.exit_event = exit_event
         self.pause_event = pause_event
         self.resume_event = resume_event
         self.logger_provider = logger_provider
@@ -25,8 +25,9 @@ class TaskManagement:
     def handle_control(self, action, reason="", publish_status=True):
         action = (action or "").strip().lower()
 
-        if action == "stop":
-            return self._handle_stop(reason, publish_status=publish_status)
+        if action == "exit":
+            return self._handle_exit(reason, publish_status=publish_status)
+
         if action == "pause":
             return self._handle_pause(reason)
         if action == "resume":
@@ -35,8 +36,8 @@ class TaskManagement:
         self.logger().warn(f"지원하지 않는 task control action: {action}")
         return False
 
-    def _handle_stop(self, reason, publish_status=True):
-        self.stop_event.set()
+    def _handle_exit(self, reason, publish_status=True):
+        self.exit_event.set()
         self.pause_event.clear()
         self.resume_event.clear()
         self._clear_task_queue()
@@ -44,13 +45,13 @@ class TaskManagement:
             self.state._publish_robot_status(
                 "cancelled",
                 message="사용자 요청으로 작업을 중단합니다.",
-                reason=reason or "stop_requested",
+                reason=reason or "exit_requested",
                 command=self.state.current_command,
             )
         return True
 
     def _handle_pause(self, reason):
-        if self.stop_event.is_set():
+        if self.exit_event.is_set():
             return False
 
         self.pause_event.set()

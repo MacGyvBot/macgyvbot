@@ -73,6 +73,9 @@ from macgyvbot_task.application.robot.robot_home_initializer import (
 from macgyvbot_task.application.task_control.task_control_coordinator import (
     TaskControlCoordinator,
 )
+from macgyvbot_task.application.task_control.exit_home_recovery import (
+    ExitHomeRecovery,
+)
 from macgyvbot_task.application.task_control.task_management import TaskManagement
 
 
@@ -133,7 +136,7 @@ class MacGyvBotNode(Node):
             False,
         )
         self.display = DebugDisplay(enabled=self.display_debug_windows)
-        self.stop_req = threading.Event()
+        self.exit_req = threading.Event()
         self.pause_req = threading.Event()
         self.resume_req = threading.Event()
         self.control_callback_group = MutuallyExclusiveCallbackGroup()
@@ -240,7 +243,7 @@ class MacGyvBotNode(Node):
             self.get_logger(),
         )
         control_events = {
-            "stop": self.stop_req,
+            "exit": self.exit_req,
             "pause": self.pause_req,
             "resume": self.resume_req,
         }
@@ -264,7 +267,7 @@ class MacGyvBotNode(Node):
             self.pick_runner,
             self.return_runner,
             self.state,
-            self.stop_req,
+            self.exit_req,
             self.pause_req,
             self.resume_req,
             self.get_logger,
@@ -275,10 +278,18 @@ class MacGyvBotNode(Node):
         self.task_management = TaskManagement(
             self.state,
             self.task_coordinator,
-            self.stop_req,
+            self.exit_req,
             self.pause_req,
             self.resume_req,
             self.get_logger,
+        )
+        self.exit_home_recovery = ExitHomeRecovery(
+            self.motion,
+            self.exit_req,
+            self.task_coordinator,
+            self._publish_robot_status,
+            self.get_logger,
+            lambda: self.state.current_command,
         )
 
         self._create_subscriptions()
@@ -462,7 +473,7 @@ class MacGyvBotNode(Node):
         if action is None:
             return
 
-        if action not in ("stop", "pause", "resume"):
+        if action not in ("pause", "resume", "exit"):
             self.get_logger().warn(f"지원하지 않는 task control action: {action}")
             return
 
@@ -471,17 +482,20 @@ class MacGyvBotNode(Node):
         )
 
         handled = self.task_management.handle_control(action, reason=reason)
+        if not handled:
+            self.get_logger().warn(f"task control 처리 실패: action={action}")
+            return
 
-        if handled and action in ("stop", "pause"):
+        if action in ("pause", "exit"):
             self.motion.cancel_current_goal(
                 self.get_logger(),
                 reason=reason or action,
             )
-        if not handled:
-            self.get_logger().warn(f"task control 처리 실패: action={action}")
+        if action == "exit":
+            self.exit_home_recovery.move_home_after_exit(reason)
 
     def _motion_interrupted(self):
-        return self.stop_req.is_set() or self.pause_req.is_set()
+        return self.exit_req.is_set() or self.pause_req.is_set()
 
     def _parse_task_control_payload(self, payload):
         raw = (payload or "").strip()
@@ -510,12 +524,12 @@ class MacGyvBotNode(Node):
         if payload.get("event") != "tool_dropped":
             return
 
-        self._handle_tool_drop_stop(payload)
+        self._handle_tool_drop_exit(payload)
 
-    def _handle_tool_drop_stop(self, payload):
+    def _handle_tool_drop_exit(self, payload):
         reason = payload.get("reason") or "tool_dropped"
         self.get_logger().warn(
-            "공구 drop 감지를 task stop으로 처리합니다: "
+            "공구 drop 감지를 task exit으로 처리합니다: "
             f"reason={reason}, tool={payload.get('tool_name', 'unknown')}"
         )
         self.motion.cancel_current_goal(
@@ -523,7 +537,7 @@ class MacGyvBotNode(Node):
             reason=reason,
         )
         self.task_management.handle_control(
-            "stop",
+            "exit",
             reason=reason,
             publish_status=False,
         )

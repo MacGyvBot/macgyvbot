@@ -179,7 +179,7 @@ class ReturnSequenceRunner:
         return any(
             event is not None and event.is_set()
             for event in (
-                self.control_events.get("stop"),
+                self.control_events.get("exit"),
                 self.control_events.get("pause"),
             )
         )

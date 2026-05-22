@@ -21,7 +21,7 @@ class TaskControlCoordinator:
         pick_sequence,
         return_sequence,
         state,
-        stop_event,
+        exit_event,
         pause_event,
         resume_event,
         logger_provider,
@@ -30,7 +30,7 @@ class TaskControlCoordinator:
         self.pick_sequence = pick_sequence
         self.return_sequence = return_sequence
         self.state = state
-        self.stop_event = stop_event
+        self.exit_event = exit_event
         self.pause_event = pause_event
         self.resume_event = resume_event
         self.logger_provider = logger_provider
@@ -72,7 +72,7 @@ class TaskControlCoordinator:
             )
             return False
 
-        self.stop_event.clear()
+        self.exit_event.clear()
         self.resume_event.clear()
         self._thread = threading.Thread(
             target=self._run,
@@ -85,7 +85,7 @@ class TaskControlCoordinator:
     def _run(self, task_name, step_builder):
         log = self.logger()
         completed = False
-        stopped = False
+        exited = False
         failed = False
         failure_status_published = False
 
@@ -114,8 +114,8 @@ class TaskControlCoordinator:
 
             log.info(f"{task_name} task queue 로딩 완료: {len(steps)} steps")
             while rclpy.ok():
-                if self.stop_event.is_set():
-                    stopped = True
+                if self.exit_event.is_set():
+                    exited = True
                     break
 
                 if self.pause_event.is_set():
@@ -155,8 +155,8 @@ class TaskControlCoordinator:
                     self._push_front(step)
                     continue
 
-                if self.stop_event.is_set():
-                    stopped = True
+                if self.exit_event.is_set():
+                    exited = True
                     break
 
                 log.error(f"task step 실패: {step.name}")
@@ -164,8 +164,8 @@ class TaskControlCoordinator:
                 break
 
         finally:
-            if stopped:
-                log.info(f"{task_name} task queue 중단")
+            if exited:
+                log.info(f"{task_name} task queue 종료 요청으로 중단")
             elif failed:
                 if not failure_status_published:
                     log.warn(
@@ -177,7 +177,7 @@ class TaskControlCoordinator:
 
             self._run_cleanup_callbacks(log)
             self._clear_task_state()
-            self.stop_event.clear()
+            self.exit_event.clear()
             self.resume_event.clear()
 
     def _pop_step(self):
