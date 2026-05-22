@@ -216,6 +216,7 @@ class MacGyvBotNode(Node):
             self.motion,
             self.gripper,
             self._cooperative_wait,
+            observation_orientation_provider=lambda: self.state.home_ori,
         )
         self.home_initializer = RobotHomeInitializer(
             self.robot,

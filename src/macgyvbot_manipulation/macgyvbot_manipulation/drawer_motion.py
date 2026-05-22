@@ -30,12 +30,14 @@ class DrawerMotionFlow:
         motion_controller,
         gripper,
         wait_fn,
+        observation_orientation_provider=None,
         dry_run=False,
     ):
         self.robot = robot
         self.motion = motion_controller
         self.gripper = gripper
         self.wait_fn = wait_fn
+        self.observation_orientation_provider = observation_orientation_provider
         self.dry_run = dry_run
         self._opened_drawers = {}
 
@@ -85,9 +87,10 @@ class DrawerMotionFlow:
             logger.error(f"drawer {drawer_id} opened pose가 없어 관찰할 수 없습니다.")
             return False
 
+        observe_ori = self._observation_orientation(opened["ori"], logger)
         return self._move_by_offset(
             opened["xyz"],
-            opened["ori"],
+            observe_ori,
             DRAWER_OBSERVE_OFFSET_XYZ_M,
             f"drawer {drawer_id} observe",
             logger,
@@ -185,6 +188,21 @@ class DrawerMotionFlow:
                 logger,
             ),
         )
+
+    def _observation_orientation(self, fallback_ori, logger):
+        if self.observation_orientation_provider is None:
+            return fallback_ori
+
+        observe_ori = self.observation_orientation_provider()
+        if observe_ori is None:
+            logger.warn(
+                "drawer observe orientation이 없어 "
+                "handle orientation을 사용합니다."
+            )
+            return fallback_ori
+
+        logger.info("drawer observe orientation: home/approach orientation 사용")
+        return observe_ori
 
     def _close_gripper(self, label, logger):
         logger.info(f"{label}: 그리퍼 닫기")
