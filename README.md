@@ -298,6 +298,14 @@ ros2 launch macgyvbot_bringup macgyvbot.launch.py
 ros2 launch macgyvbot_bringup macgyvbot.launch.py grasp_point_mode:=vlm
 ```
 
+단일 호출 VLM-only mode는 사용할 모델을 명시해서 실행합니다:
+
+```bash
+ros2 launch macgyvbot_bringup macgyvbot.launch.py grasp_point_mode:=vlm_only_smol
+ros2 launch macgyvbot_bringup macgyvbot.launch.py grasp_point_mode:=vlm_only_qwen3b
+ros2 launch macgyvbot_bringup macgyvbot.launch.py grasp_point_mode:=vlm_only_qwen7b
+```
+
 VLM 없이 bbox center mode:
 
 ```bash
@@ -400,7 +408,7 @@ ros2 run macgyvbot_command command_input_node --ros-args \
 
 | Argument | Default | 설명 |
 | --- | --- | --- |
-| `grasp_point_mode` | `vlm` | `vlm`, `center`, or `api` |
+| `grasp_point_mode` | `vlm` | `vlm`, `vlm_only_smol`, `vlm_only_qwen3b`, `vlm_only_qwen7b`, `vlm_only`, `center`, or `api` |
 | `grasp_point_api_model` | `gemini-2.5-flash` | Gemini API mode model name |
 | `grasp_point_api_env_file` | `macgyvbot_resources/.env` | Local Gemini `.env` file |
 | `grasp_point_api_base_url` | Gemini API default | Override Gemini API base URL |
