@@ -42,6 +42,7 @@ class ReturnHandoffFlow:
         reporter,
         wait_fn,
         tool_hold_monitor=None,
+        interrupted=None,
     ):
         self.robot = robot
         self.motion = motion_controller
@@ -50,7 +51,12 @@ class ReturnHandoffFlow:
         self.reporter = reporter
         self.wait_fn = wait_fn
         self.tool_hold_monitor = tool_hold_monitor
-        self.grasp_verifier = GraspVerifier(gripper, wait_fn)
+        self.interrupted = interrupted or (lambda: False)
+        self.grasp_verifier = GraspVerifier(
+            gripper,
+            wait_fn,
+            interrupted=self.interrupted,
+        )
 
     def receive_from_candidate(self, tool_name, candidate, command, logger):
         ok, reason = self.move_to_candidate(tool_name, candidate, command, logger)
@@ -77,6 +83,7 @@ class ReturnHandoffFlow:
             logger,
             x_offset_m=HANDOVER_HAND_X_OFFSET_M,
             z_offset_m=HANDOVER_HAND_Z_OFFSET_M,
+            should_interrupt=self.interrupted,
         )
         logger.info(
             "감지된 사용자 손 위치로 수령 이동: "
@@ -218,6 +225,10 @@ class ReturnHandoffFlow:
 
         grasp_result = self.wait_for_user_held_tool(requested_tool, logger)
         if grasp_result is None:
+            if self.interrupted():
+                logger.info("사용자 반납 공구 대기 중 stop/pause 요청으로 중단합니다.")
+                return None, "interrupted"
+
             self.reporter.fail(
                 requested_tool,
                 "전방 20cm 위치에서 사용자가 들고 있는 공구를 확인하지 못했습니다.",
@@ -232,6 +243,10 @@ class ReturnHandoffFlow:
 
         logger.info("사용자 hand-tool grasp 확인. 공구 grasp를 시도합니다.")
         if not self.try_robot_grasp(tool_name, command, logger):
+            if self.interrupted():
+                logger.info("반납 공구 grasp 중 stop/pause 요청으로 중단합니다.")
+                return None, "interrupted"
+
             self.reporter.fail(
                 tool_name,
                 "반납 공구 grasp에 실패했습니다.",
@@ -255,6 +270,10 @@ class ReturnHandoffFlow:
         start_time = time.monotonic()
 
         while rclpy.ok():
+            if self.interrupted():
+                logger.info("사용자 반납 공구 인식 대기를 stop/pause 요청으로 중단합니다.")
+                return None
+
             result = self.state.last_grasp_result
             if self.state.human_grasped_tool and result is not None:
                 logger.info(
@@ -311,6 +330,10 @@ class ReturnHandoffFlow:
         return "unknown"
 
     def advance_for_return_detection(self, tool_name, command, logger):
+        if self.interrupted():
+            logger.info("반납 관찰 자세 이동 시작 전 stop/pause 요청으로 중단합니다.")
+            return False, "interrupted"
+
         ok, start_pose = move_to_observation_pose(self.motion, self.robot, logger)
 
         self.reporter.publish(
@@ -323,6 +346,10 @@ class ReturnHandoffFlow:
             "반납 1단계: 공구 감지 전 관찰 자세 이동 "
             f"pose=({start_pose.x:.3f},{start_pose.y:.3f},{start_pose.z:.3f})"
         )
+        if self.interrupted():
+            logger.info("반납 관찰 자세 이동 후 stop/pause 요청으로 중단합니다.")
+            return False, "interrupted"
+
         if not ok:
             self.reporter.fail(
                 tool_name,
@@ -337,8 +364,28 @@ class ReturnHandoffFlow:
             self.state,
             logger,
             timeout_sec=OBSERVATION_TIMEOUT_SEC,
+            should_interrupt=self.interrupted,
         )
-        candidate = future.result()
+        while not future.done():
+            if self.interrupted():
+                future.cancel()
+                logger.info("반납 위치 관측 중 stop/pause 요청으로 중단합니다.")
+                return False, "interrupted"
+            self.wait_fn(0.1)
+
+        try:
+            candidate = future.result()
+        except Exception as exc:
+            if self.interrupted():
+                logger.info("반납 위치 관측 future를 stop/pause 요청으로 중단합니다.")
+                return False, "interrupted"
+            logger.error(f"반납 위치 관측 future 실패: {exc}")
+            return False, "return_search_failed"
+
+        if self.interrupted():
+            logger.info("반납 위치 관측 후 stop/pause 요청으로 중단합니다.")
+            return False, "interrupted"
+
         if not candidate.found:
             self.reporter.fail(
                 tool_name,
@@ -366,7 +413,12 @@ class ReturnHandoffFlow:
             logger,
             x_offset_m=HANDOVER_HAND_X_OFFSET_M,
             z_offset_m=HANDOVER_HAND_Z_OFFSET_M,
+            should_interrupt=self.interrupted,
         )
+        if self.interrupted() or reason == "interrupted":
+            logger.info("반납 위치 이동 중 stop/pause 요청으로 중단합니다.")
+            return False, "interrupted"
+
         logger.info(
             "반납 손/공구 위치로 수령 이동: "
             f"source={candidate.source}, frame={candidate.frame_id}, "

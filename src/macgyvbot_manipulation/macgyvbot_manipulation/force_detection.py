@@ -14,10 +14,11 @@ from macgyvbot_manipulation.robot_safezone import SAFE_Z_MIN
 class ForceReactionDetector:
     """Descend along Z until an upward reaction force is detected."""
 
-    def __init__(self, motion_controller, state, wait_fn):
+    def __init__(self, motion_controller, state, wait_fn, interrupted=None):
         self.motion = motion_controller
         self.state = state
         self.wait = wait_fn
+        self.interrupted = interrupted or (lambda: False)
 
     def descend_until_z_reaction(self, target_x, target_y, start_z, ori, logger):
         self.state.latest_wrench = None
@@ -30,6 +31,10 @@ class ForceReactionDetector:
         )
 
         while rclpy.ok():
+            if self.interrupted():
+                logger.info("Z force 하강을 stop/pause 요청으로 중단합니다.")
+                return None
+
             force_z = self._latest_force_z()
             if force_z is not None and force_z >= RETURN_HOME_FORCE_THRESHOLD_N:
                 logger.info(
@@ -51,6 +56,10 @@ class ForceReactionDetector:
                 pose_goal=make_safe_pose(target_x, target_y, next_z, ori, logger),
             )
             if not ok:
+                if self.interrupted():
+                    logger.info("Z force 하강 motion 중 stop/pause 요청을 확인했습니다.")
+                    return None
+
                 logger.error("Z force 하강 motion 계획/실행 실패")
                 return None
 

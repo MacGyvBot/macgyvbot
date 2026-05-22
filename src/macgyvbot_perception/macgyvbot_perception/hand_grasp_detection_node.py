@@ -56,6 +56,7 @@ from macgyvbot_perception.hand_tool_grasp.sam_tool_mask import (
     LockedToolMask,
     compute_mask_contact,
     create_bbox_locked_mask,
+    mask_to_roi,
 )
 from macgyvbot_perception.hand_tool_grasp.visualization import (
     draw_grasp_overlay,
@@ -426,17 +427,13 @@ class HandGraspDetectionNode(Node):
             return
 
         if self.frame_index % max(1, self.sam_track_interval) != 0:
-            if self.latest_tool_mask is None:
-                self.latest_tool_mask = create_bbox_locked_mask(
-                    tool_detection.roi,
-                    frame.shape[:2],
-                )
             return
 
         mask = self.sam_segmenter.segment(frame, tool_detection.roi)
         if mask is not None and int(mask.sum()) > 0:
+            roi = mask_to_roi(mask) or tool_detection.roi
             self.latest_tool_mask = LockedToolMask(
-                roi=tool_detection.roi,
+                roi=roi,
                 mask=mask,
                 source="SAM_TRACKED",
             )
@@ -461,30 +458,42 @@ class HandGraspDetectionNode(Node):
         frame,
         tool_detection: Optional[ToolDetection],
     ) -> Optional[LockedToolMask]:
-        if self.latest_tool_mask is not None:
+        if (
+            self.latest_tool_mask is not None
+            and self.latest_tool_mask.source == "SAM_TRACKED"
+        ):
             return LockedToolMask(
                 roi=self.latest_tool_mask.roi,
                 mask=self.latest_tool_mask.mask.copy(),
-                source=(
-                    "SAM_LOCKED"
-                    if self.latest_tool_mask.source == "SAM_TRACKED"
-                    else self.latest_tool_mask.source
-                ),
+                source="SAM_LOCKED",
             )
 
         if tool_detection is None:
-            self.get_logger().warn("Tool mask lock requested, but no YOLO tool ROI is available.")
+            if self.latest_tool_mask is not None and self.allow_bbox_lock:
+                self.get_logger().warn(
+                    "Tool mask lock requested without YOLO ROI; "
+                    "using latest bbox fallback."
+                )
+                return LockedToolMask(
+                    roi=self.latest_tool_mask.roi,
+                    mask=self.latest_tool_mask.mask.copy(),
+                    source=self.latest_tool_mask.source,
+                )
+            self.get_logger().warn(
+                "Tool mask lock requested, but no YOLO tool ROI is available."
+            )
             return None
 
         if self.sam_segmenter is not None:
             mask = self.sam_segmenter.segment(frame, tool_detection.roi)
             if mask is not None and int(mask.sum()) > 0:
+                roi = mask_to_roi(mask) or tool_detection.roi
                 self.get_logger().info(
                     f"Locked SAM tool mask: label={tool_detection.label}, "
-                    f"roi={tool_detection.roi}"
+                    f"roi={roi}"
                 )
                 return LockedToolMask(
-                    roi=tool_detection.roi,
+                    roi=roi,
                     mask=mask,
                     source="SAM_LOCKED",
                 )

@@ -12,7 +12,9 @@ from difflib import SequenceMatcher
 
 from macgyvbot_command.input_mapping.command_vocabulary import (
     BRING_KEYWORDS,
+    EXIT_KEYWORDS,
     RELEASE_KEYWORDS,
+    RESUME_KEYWORDS,
     RETURN_KEYWORDS,
     STOP_KEYWORDS,
     TOOL_KEYWORDS,
@@ -93,7 +95,15 @@ def find_action(text):
 
     for keyword in STOP_KEYWORDS:
         if normalize_text(keyword) in normalized:
-            return 'stop'
+            return 'pause'
+
+    for keyword in RESUME_KEYWORDS:
+        if normalize_text(keyword) in normalized:
+            return 'resume'
+
+    for keyword in EXIT_KEYWORDS:
+        if normalize_text(keyword) in normalized:
+            return 'exit'
 
     # "가져다가 놔", "정리해"는 사용자에게 전달이 아니라 보관 위치로 반납하는 명령이다.
     for keyword in RETURN_KEYWORDS:

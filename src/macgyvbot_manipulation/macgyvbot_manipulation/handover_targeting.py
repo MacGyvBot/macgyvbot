@@ -80,6 +80,7 @@ def start_async_observation_search(
     logger,
     timeout_sec: float = HANDOVER_SEARCH_TIMEOUT_SEC,
     poll_sec: float = SEQUENCE_WAIT_POLL_SEC,
+    should_interrupt=None,
 ) -> Future:
     """Start an async, observation-only target search from grasp results."""
     return _SEARCH_EXECUTOR.submit(
@@ -88,6 +89,7 @@ def start_async_observation_search(
         logger,
         timeout_sec,
         poll_sec,
+        should_interrupt,
     )
 
 
@@ -96,6 +98,7 @@ def observe_target_candidate(
     logger,
     timeout_sec: float = HANDOVER_SEARCH_TIMEOUT_SEC,
     poll_sec: float = SEQUENCE_WAIT_POLL_SEC,
+    should_interrupt=None,
 ) -> TargetCandidate:
     """Observe a hand target only after its position is stable long enough."""
     return _observe_stable_candidate(
@@ -103,6 +106,7 @@ def observe_target_candidate(
         logger,
         timeout_sec,
         poll_sec,
+        should_interrupt=should_interrupt,
     )
 
 
@@ -139,6 +143,7 @@ def _observe_stable_candidate(
     poll_sec: float,
     stable_duration_sec: float = HAND_POSE_WAIT_AFTER_DETECTION_SEC,
     stable_tolerance_m: float = HAND_POSE_STABLE_TOLERANCE_M,
+    should_interrupt=None,
 ) -> TargetCandidate:
     deadline = time.monotonic() + max(0.0, float(timeout_sec))
     sleep_step = min(max(0.01, float(poll_sec)), 0.1)
@@ -148,6 +153,18 @@ def _observe_stable_candidate(
     last_log_time = 0.0
 
     while time.monotonic() < deadline:
+        if should_interrupt is not None and should_interrupt():
+            logger.info("관측 기반 목표 탐색을 stop/pause 요청으로 중단합니다.")
+            return TargetCandidate(
+                found=False,
+                x=0.0,
+                y=0.0,
+                z=0.0,
+                frame_id="world",
+                source="observation_interrupted",
+                observed_at_sec=time.monotonic(),
+            )
+
         result = getattr(state, "last_grasp_result", None) or {}
         candidate = _candidate_from_grasp_result(result)
         if candidate is None:
@@ -217,6 +234,7 @@ def move_to_candidate_with_offset(
     logger,
     x_offset_m: float,
     z_offset_m: float,
+    should_interrupt=None,
 ) -> tuple[bool, SearchStartPose, str]:
     """
     Move to the final handover pose derived from a candidate.
@@ -248,6 +266,10 @@ def move_to_candidate_with_offset(
         attempts,
         start=1,
     ):
+        if should_interrupt is not None and should_interrupt():
+            logger.info("stop/pause 요청으로 사용자 손 위치 이동을 중단합니다.")
+            return False, last_pose, "interrupted"
+
         logger.info(
             "사용자 손 위치 전달 플래닝 시도: "
             f"{attempt_index}/{total_attempts}, "
@@ -265,6 +287,10 @@ def move_to_candidate_with_offset(
         )
         if ok:
             return True, last_pose, ""
+
+        if should_interrupt is not None and should_interrupt():
+            logger.info("사용자 손 위치 이동 중 stop/pause 요청을 확인했습니다.")
+            return False, last_pose, "interrupted"
 
         if attempt_index < total_attempts:
             logger.warn(

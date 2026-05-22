@@ -41,6 +41,8 @@ def generate_launch_description():
     llm_model = LaunchConfiguration("llm_model")
     llm_timeout_sec = LaunchConfiguration("llm_timeout_sec")
     parser_mode = LaunchConfiguration("parser_mode")
+    detector_image_topic = LaunchConfiguration("detector_image_topic")
+    display_debug_windows = LaunchConfiguration("display_debug_windows")
     sam_enabled = LaunchConfiguration("sam_enabled")
     sam_checkpoint = LaunchConfiguration("sam_checkpoint")
     grasp_point_api_model = LaunchConfiguration("grasp_point_api_model")
@@ -103,9 +105,24 @@ def generate_launch_description():
             DeclareLaunchArgument("llm_timeout_sec", default_value="25.0"),
             DeclareLaunchArgument("parser_mode", default_value="llm_primary"),
             DeclareLaunchArgument(
+                "detector_image_topic",
+                default_value=HAND_GRASP_IMAGE_TOPIC,
+                description="Annotated detector image topic shown in the GUI.",
+            ),
+            DeclareLaunchArgument(
+                "display_debug_windows",
+                default_value="false",
+                description=(
+                    "Show legacy OpenCV debug windows from macgyvbot_main_node."
+                ),
+            ),
+            DeclareLaunchArgument(
                 "grasp_point_mode",
                 default_value="vlm",
-                description="Grasp point selection mode: center, vlm, or api",
+                description=(
+                    "Grasp point selection mode: center, vlm, vlm_only_smol, "
+                    "vlm_only_qwen3b, vlm_only_qwen7b, vlm_only, or api"
+                ),
             ),
             DeclareLaunchArgument(
                 "grasp_point_api_model",
@@ -152,6 +169,12 @@ def generate_launch_description():
                         "force_torque_topic": LaunchConfiguration(
                             "force_torque_topic"
                         ),
+                        "display_debug_windows": display_debug_windows,
+                        "sam_enabled": sam_enabled,
+                        "sam_checkpoint": sam_checkpoint,
+                        "sam_backend": "mobile_sam",
+                        "sam_model_type": "vit_t",
+                        "sam_device": "cuda",
                     },
                 ],
             ),
@@ -215,6 +238,7 @@ def generate_launch_description():
                         "use_local_parser": True,
                         "use_llm_fallback": True,
                         "parser_mode": parser_mode,
+                        "detector_image_topic": detector_image_topic,
                         "timeout_sec": llm_timeout_sec,
                         "min_confidence": 0.55,
                     },

@@ -15,7 +15,11 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
 
-from macgyvbot_config.topics import CAMERA_COLOR_TOPIC
+from macgyvbot_config.topics import (
+    CAMERA_COLOR_TOPIC,
+    HAND_GRASP_IMAGE_TOPIC,
+    ROBOT_TASK_CONTROL_TOPIC,
+)
 from macgyvbot_command.ui.voice_command_window import (
     QApplication,
     QTimer,
@@ -49,8 +53,10 @@ class CommandInputNode(Node):
         self.declare_parameter('command_feedback_topic', '/command_feedback')
         self.declare_parameter('robot_status_topic', '/robot_task_status')
         self.declare_parameter('camera_status_topic', CAMERA_COLOR_TOPIC)
+        self.declare_parameter('detector_image_topic', HAND_GRASP_IMAGE_TOPIC)
         self.declare_parameter('connection_check_period_sec', 1.0)
         self.declare_parameter('camera_timeout_sec', 3.0)
+        self.declare_parameter('detector_timeout_sec', 3.0)
         self.declare_parameter(
             'robot_node_names',
             'macgyvbot_main_node,macgyvbot',
@@ -97,13 +103,16 @@ class CommandInputNode(Node):
         command_feedback_topic = self.get_parameter('command_feedback_topic').value
         robot_status_topic = self.get_parameter('robot_status_topic').value
         camera_status_topic = self.get_parameter('camera_status_topic').value
+        detector_image_topic = self.get_parameter('detector_image_topic').value
 
         self.window = None
         self._last_gui_text = ''
         self._last_target_label = ''
         self._last_camera_stamp_ns = None
+        self._last_detector_stamp_ns = None
         self._last_connection_text = ''
         self._last_robot_status_key = None
+        self._last_robot_log_key = None
         self._robot_node_names = {
             name.strip()
             for name in str(self.get_parameter('robot_node_names').value).split(',')
@@ -111,6 +120,9 @@ class CommandInputNode(Node):
         }
         self._camera_timeout_ns = int(
             float(self.get_parameter('camera_timeout_sec').value) * 1_000_000_000
+        )
+        self._detector_timeout_ns = int(
+            float(self.get_parameter('detector_timeout_sec').value) * 1_000_000_000
         )
 
         self._stt_pub = self.create_publisher(String, stt_text_topic, 10)
@@ -121,12 +133,23 @@ class CommandInputNode(Node):
         )
         self._tool_command_pub = self.create_publisher(String, tool_command_topic, 10)
         self._feedback_pub = self.create_publisher(String, command_feedback_topic, 10)
+        self._task_control_pub = self.create_publisher(
+            String,
+            ROBOT_TASK_CONTROL_TOPIC,
+            10,
+        )
 
         self.create_subscription(String, stt_text_topic, self._text_cb, 10)
         self.create_subscription(String, tool_command_topic, self._tool_command_cb, 10)
         self.create_subscription(String, command_feedback_topic, self._feedback_cb, 10)
         self.create_subscription(String, robot_status_topic, self._robot_status_cb, 10)
         self.create_subscription(Image, camera_status_topic, self._camera_status_cb, 10)
+        self.create_subscription(
+            Image,
+            detector_image_topic,
+            self._detector_image_cb,
+            10,
+        )
         self.create_timer(
             float(self.get_parameter('connection_check_period_sec').value),
             self._update_connection_status,
@@ -189,10 +212,12 @@ class CommandInputNode(Node):
             self.get_logger().info('GUI 모드 활성화: command_input_node가 UI를 직접 연결합니다.')
         if self._tts_service.enabled:
             self.get_logger().info('TTS 모드 활성화: MacGyvBot 응답을 음성으로 출력합니다.')
+        self._append_log('info', 'command_input_node 초기화 완료')
 
     def attach_window(self, window):
         self.window = window
         self._update_connection_status()
+        self._append_log('info', 'GUI 연결 완료')
 
     def publish_user_text(self, text):
         text = (text or '').strip()
@@ -273,7 +298,16 @@ class CommandInputNode(Node):
 
         command = result.get('command')
         if command is not None:
-            self._publish_command(command)
+            action = command.get("action")
+            if action in {"pause", "resume"}:
+                self._send_task_control_request(action=action, reason=text)
+
+            elif action == 'exit':
+                self._show_local_control_command(command)
+                self._send_task_control_request(action=action, reason=text)
+
+            else:
+                self._publish_command(command)
 
         for payload in result.get('feedbacks', []):
             self._publish_feedback_payload(payload)
@@ -282,6 +316,9 @@ class CommandInputNode(Node):
         command_msg = String()
         command_msg.data = json.dumps(command, ensure_ascii=False)
         self._tool_command_pub.publish(command_msg)
+        action = command.get('action', 'unknown')
+        tool_name = command.get('tool_name', 'unknown')
+        self._append_log('info', f'/tool_command 발행: action={action}, tool={tool_name}')
 
     def _publish_feedback_payload(self, payload):
         msg = String()
@@ -300,6 +337,10 @@ class CommandInputNode(Node):
         target_mode = command.get('target_mode', 'named')
         method = command.get('match_method', 'unknown')
         confidence = command.get('confidence', 0.0)
+
+        if action == 'pause':
+            self._append_log('warn', '정지 명령을 로봇 노드로 전달했습니다.')
+            return
 
         try:
             confidence_text = f'{float(confidence):.2f}'
@@ -327,7 +368,53 @@ class CommandInputNode(Node):
         reason = feedback.get('reason', 'unknown')
 
         if status == 'accepted':
-            self._append_bot(message or '명령을 이해했습니다.')
+            command = feedback.get('command') or {}
+            if command.get('action') == 'pause':
+                stop_message = '정지 요청을 로봇에 전달했습니다.'
+                self._append_bot(stop_message)
+                self._append_log('warn', stop_message)
+                followup_message = '작업을 재개할까요, 아니면 종료할까요?'
+                if (
+                    self.window is not None
+                    and hasattr(self.window, 'append_control_actions')
+                ):
+                    self.window.append_bot(followup_message)
+                    self._speak_bot(followup_message)
+                    self.window.append_control_actions(
+                        (
+                            ('재개', '재개'),
+                            ('종료', '종료'),
+                        )
+                    )
+                else:
+                    self._append_bot(followup_message)
+                self._append_log('info', followup_message)
+                self._set_status('정지 요청 전달')
+                return
+
+            if command.get('action') == 'resume':
+                resume_message = (
+                    message
+                    or '재개 요청을 로봇에 전달했습니다.'
+                )
+                self._append_bot(resume_message)
+                self._append_log('info', '재개 명령을 로봇 제어 토픽으로 전달했습니다.')
+                self._set_status('재개 요청 전달')
+                return
+
+            if command.get('action') == 'exit':
+                exit_message = (
+                    message
+                    or '종료 요청을 이해했습니다. 현재 작업 중단을 로봇에 전달했습니다.'
+                )
+                self._append_bot(exit_message)
+                self._append_log('info', '종료 명령 해석 완료: 로봇 작업 중단 요청 발행')
+                self._set_status('종료 요청 확인')
+                return
+
+            accepted_message = message or '명령을 이해했습니다.'
+            self._append_bot(accepted_message)
+            self._append_log('info', accepted_message)
             self._set_status('명령 해석 완료')
             return
 
@@ -340,21 +427,28 @@ class CommandInputNode(Node):
                 self._speak_bot(confirmation_message)
             else:
                 self._append_bot(confirmation_message)
+            self._append_log('info', confirmation_message)
             self._set_status('확인 응답 대기')
             return
 
         if status == 'cancelled':
-            self._append_bot(message or '알겠습니다. 실행하지 않겠습니다.')
+            cancel_message = message or '알겠습니다. 실행하지 않겠습니다.'
+            self._append_bot(cancel_message)
+            self._append_log('warn', cancel_message)
             self._set_status('명령 취소')
             return
 
         if status == 'assistant_response':
-            self._append_bot(message or '네, 필요한 공구가 있으면 말해주세요.')
+            response_message = message or '네, 필요한 공구가 있으면 말해주세요.'
+            self._append_bot(response_message)
+            self._append_log('info', response_message)
             self._set_status('대화 응답')
             return
 
         if status == 'rejected':
-            self._append_bot(self._build_rejected_message(reason, message))
+            rejected_message = self._build_rejected_message(reason, message)
+            self._append_bot(rejected_message)
+            self._append_log('warn', rejected_message)
             self._set_status('재입력 필요')
             return
 
@@ -380,11 +474,22 @@ class CommandInputNode(Node):
         self._set_status(view['panel_status'])
         self._set_task_status(view['target_label'], view['stage_text'])
 
+        if view['show_log']:
+            self._append_log(view['severity'], view['log_message'], ros=False)
+
         if view['show_chat']:
-            self._append_bot(view['message'], speak=view['speak'])
+            self._append_bot(view['chat_message'], speak=view['speak'])
 
     def _camera_status_cb(self, _msg):
         self._last_camera_stamp_ns = self.get_clock().now().nanoseconds
+
+    def _detector_image_cb(self, msg):
+        self._last_detector_stamp_ns = self.get_clock().now().nanoseconds
+        if self.window is not None and hasattr(self.window, 'set_detector_image'):
+            try:
+                self.window.set_detector_image(msg)
+            except ValueError as exc:
+                self.get_logger().warn(f'detector image 표시 실패: {exc}')
 
     def _update_connection_status(self):
         if self.window is None:
@@ -392,14 +497,20 @@ class CommandInputNode(Node):
 
         robot_text = self._robot_connection_text()
         camera_text = self._camera_connection_text()
-        connection_text = f'{robot_text}|{camera_text}|연결됨'
+        detector_text = self._detector_connection_text()
+        connection_text = f'{robot_text}|{camera_text}|{detector_text}|연결됨'
 
         if connection_text == self._last_connection_text:
             return
 
         self._last_connection_text = connection_text
         if hasattr(self.window, 'set_connection_status'):
-            self.window.set_connection_status(robot_text, camera_text)
+            self.window.set_connection_status(
+                robot_text,
+                camera_text,
+                gui_text='연결됨',
+                detector_text=detector_text,
+            )
 
     def _robot_connection_text(self):
         node_names = set(self.get_node_names())
@@ -417,6 +528,15 @@ class CommandInputNode(Node):
         elapsed_ns = self.get_clock().now().nanoseconds - self._last_camera_stamp_ns
         if elapsed_ns <= self._camera_timeout_ns:
             return '연결됨'
+        return '미수신'
+
+    def _detector_connection_text(self):
+        if self._last_detector_stamp_ns is None:
+            return '대기 중'
+
+        elapsed_ns = self.get_clock().now().nanoseconds - self._last_detector_stamp_ns
+        if elapsed_ns <= self._detector_timeout_ns:
+            return '수신 중'
         return '미수신'
 
     def _build_rejected_message(self, reason, message):
@@ -448,6 +568,17 @@ class CommandInputNode(Node):
             )
         return message or '명령을 이해하지 못했습니다. 다시 입력해주세요.'
 
+    def _show_local_control_command(self, command):
+        if self.window is not None and hasattr(self.window, 'append_command_result'):
+            self.window.append_command_result(command)
+
+        action = command.get('action', 'unknown')
+        raw_text = command.get('raw_text', '')
+        self._append_log(
+            'info',
+            f'제어 명령 해석: action={action}, raw_text="{raw_text}"',
+        )
+
     def _build_robot_status_view(self, status):
         state = str(status.get('status', status.get('state', 'unknown'))).strip()
         if not state:
@@ -462,22 +593,34 @@ class CommandInputNode(Node):
         message = self._robot_status_message(state, target_label, raw_message, reason)
         panel_status = self._robot_panel_status(state, message)
         stage_text = self._robot_stage_text(state, message)
-        speak = self._should_speak_robot_status(state)
+        severity = self._robot_status_severity(state)
+        log_message = self._robot_log_message(state, target_label, message, reason)
+        chat_message = message
 
         key = (state, str(tool_name), raw_message or message)
+        chat_state = state in self._chat_robot_statuses()
         force_show = state in self._always_show_robot_statuses()
-        show_chat = force_show or key != self._last_robot_status_key
+        show_chat = chat_state and (force_show or key != self._last_robot_status_key)
         if show_chat:
             self._last_robot_status_key = key
+
+        log_key = (state, str(tool_name), raw_message or message, reason)
+        show_log = log_key != self._last_robot_log_key
+        if show_log:
+            self._last_robot_log_key = log_key
 
         return {
             'state': state,
             'message': message,
+            'chat_message': chat_message,
+            'log_message': log_message,
             'panel_status': panel_status,
             'stage_text': stage_text,
             'target_label': target_label,
-            'speak': speak and show_chat,
+            'severity': severity,
+            'speak': self._should_speak_robot_status(state) and show_chat,
             'show_chat': show_chat,
+            'show_log': show_log,
         }
 
     def _robot_status_message(self, state, target_label, raw_message, reason):
@@ -516,12 +659,18 @@ class CommandInputNode(Node):
             'success': '작업이 완료되었습니다.',
             'failed': '작업에 실패했습니다.',
             'error': '작업 중 오류가 발생했습니다.',
+            'tool_dropped': '공구 drop이 감지되었습니다.',
             'busy': '이미 다른 작업을 수행 중입니다.',
             'paused': '로봇이 일시정지되었습니다.',
             'resumed': '작업을 다시 시작합니다.',
             'cancelled': '작업이 취소되었습니다.',
             'returned': '반납 작업을 완료했습니다.',
             'rejected': '요청을 수행할 수 없습니다.',
+            'tool_dropped': '공구 drop이 감지되었습니다.',
+            'vlm_loading': 'VLM grasp 모델을 로드하는 중입니다. 잠시만 기다려주세요.',
+            'vlm_ready': 'VLM grasp 모델 준비가 완료되었습니다.',
+            'vlm_warning': 'VLM grasp 모델 상태를 확인해야 합니다.',
+            'vlm_error': 'VLM grasp 모델 처리 중 오류가 발생했습니다.',
         }
 
         message = templates.get(state, f'현재 작업 상태는 {state}입니다.')
@@ -560,12 +709,18 @@ class CommandInputNode(Node):
             'success': '완료',
             'failed': '실패',
             'error': '오류',
+            'tool_dropped': '공구 이탈',
             'busy': '작업 중',
             'paused': '일시정지',
             'resumed': '재개',
             'cancelled': '취소',
             'returned': '반납 완료',
             'rejected': '거절',
+            'tool_dropped': '공구 낙하 감지',
+            'vlm_loading': 'VLM 로드 중',
+            'vlm_ready': 'VLM 준비 완료',
+            'vlm_warning': 'VLM 경고',
+            'vlm_error': 'VLM 오류',
         }
         return labels.get(state, message)
 
@@ -600,12 +755,18 @@ class CommandInputNode(Node):
             'success': '작업 완료',
             'failed': '작업 실패',
             'error': '작업 오류',
+            'tool_dropped': '공구 이탈 감지',
             'busy': '다른 작업 수행 중',
             'paused': '작업 일시정지',
             'resumed': '작업 재개',
             'cancelled': '작업 취소',
             'returned': '반납 완료',
             'rejected': '작업 거절',
+            'tool_dropped': '공구 낙하 감지',
+            'vlm_loading': 'VLM 모델 로드 중',
+            'vlm_ready': 'VLM 모델 준비 완료',
+            'vlm_warning': 'VLM 상태 경고',
+            'vlm_error': 'VLM 상태 오류',
         }
         return stage_labels.get(state, message)
 
@@ -618,6 +779,7 @@ class CommandInputNode(Node):
             'success',
             'failed',
             'error',
+            'tool_dropped',
             'busy',
             'paused',
             'resumed',
@@ -625,7 +787,7 @@ class CommandInputNode(Node):
             'rejected',
         }
 
-    def _always_show_robot_statuses(self):
+    def _chat_robot_statuses(self):
         return {
             'waiting_handoff',
             'waiting_return_handoff',
@@ -639,9 +801,48 @@ class CommandInputNode(Node):
             'resumed',
             'cancelled',
             'rejected',
-            'grasp_success',
+            'tool_dropped',
             'handoff_complete',
+            'vlm_loading',
+            'vlm_ready',
+            'vlm_warning',
+            'vlm_error',
         }
+
+    def _always_show_robot_statuses(self):
+        return {
+            'waiting_handoff',
+            'waiting_return_handoff',
+            'done',
+            'completed',
+            'success',
+            'failed',
+            'error',
+            'tool_dropped',
+            'busy',
+            'paused',
+            'resumed',
+            'cancelled',
+            'rejected',
+            'handoff_complete',
+            'tool_dropped',
+            'vlm_loading',
+            'vlm_ready',
+            'vlm_warning',
+            'vlm_error',
+        }
+
+    def _robot_status_severity(self, state):
+        if state in ('failed', 'error', 'tool_dropped', 'vlm_error'):
+            return 'error'
+        if state in ('busy', 'paused', 'cancelled', 'rejected', 'vlm_warning'):
+            return 'warn'
+        return 'info'
+
+    def _robot_log_message(self, state, target_label, message, reason):
+        if reason:
+            return f'robot_status={state}, target={target_label}, message={message}, reason={reason}'
+        return f'robot_status={state}, target={target_label}, message={message}'
 
     def _tool_display_name(self, tool_name):
         label = str(tool_name or 'unknown').strip()
@@ -670,6 +871,26 @@ class CommandInputNode(Node):
         if self.window is not None:
             self.window.append_system(text)
 
+    def _append_log(self, level, message, ros=True):
+        level = str(level or 'info').lower()
+        message = str(message or '').strip()
+        if not message:
+            return
+
+        if self.window is not None and hasattr(self.window, 'append_task_log'):
+            self.window.append_task_log(level, message)
+
+        if not ros:
+            return
+
+        logger = self.get_logger()
+        if level == 'error':
+            logger.error(message)
+        elif level in ('warn', 'warning'):
+            logger.warn(message)
+        else:
+            logger.info(message)
+
     def _speak_bot(self, text):
         if hasattr(self, '_tts_service') and self._tts_service is not None:
             self._tts_service.speak(text)
@@ -681,6 +902,22 @@ class CommandInputNode(Node):
     def _set_task_status(self, target_text, stage_text):
         if self.window is not None and hasattr(self.window, 'set_task_status'):
             self.window.set_task_status(target_text, stage_text)
+
+    def _send_task_control_request(self, action, reason):
+        msg = String()
+        msg.data = json.dumps(
+            {
+                "action": action,
+                "reason": reason,
+                "source": "command_input",
+            },
+            ensure_ascii=False,
+        )
+        self._task_control_pub.publish(msg)
+        self._append_log(
+            "info",
+            f"/robot_task_control 발행: action={action}, reason={reason}",
+        )
 
     def destroy_node(self):
         if self._stt_service is not None:
