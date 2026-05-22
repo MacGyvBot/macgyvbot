@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 
 class ToolCommandController:
     """Route parsed tool commands to pick, return, release, or pause actions."""
@@ -27,6 +29,9 @@ class ToolCommandController:
         self.start_return = start_return
         self.release_gripper = release_gripper
         self.move_home = move_home
+        self._last_busy_command_key = None
+        self._last_busy_command_sec = 0.0
+        self._busy_command_dedupe_sec = 2.0
 
     def handle_target_label(self, tool_name, source="/target_label", command=None):
         val = (tool_name or "").strip()
@@ -42,6 +47,8 @@ class ToolCommandController:
             return False
 
         if self.is_busy():
+            if self._is_duplicate_busy_command("bring", val):
+                return False
             self.logger.warn(
                 f"현재 pick 동작 중이라 새 타겟 '{val}' 입력은 무시합니다."
             )
@@ -65,6 +72,18 @@ class ToolCommandController:
             command=command,
         )
         return True
+
+    def _is_duplicate_busy_command(self, action, tool_name):
+        key = (action, tool_name)
+        now = time.monotonic()
+        if (
+            key == self._last_busy_command_key
+            and now - self._last_busy_command_sec < self._busy_command_dedupe_sec
+        ):
+            return True
+        self._last_busy_command_key = key
+        self._last_busy_command_sec = now
+        return False
 
     def handle_command(self, command):
         action = command.get("action", "unknown")
