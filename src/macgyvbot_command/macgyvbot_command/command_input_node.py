@@ -112,9 +112,6 @@ class CommandInputNode(Node):
         self._last_feedback_key = None
         self._last_feedback_stamp_ns = 0
         self._feedback_dedupe_ns = 2_000_000_000
-        self._last_command_key = None
-        self._last_command_stamp_ns = 0
-        self._command_dedupe_ns = 8_000_000_000
         self._recent_bot_texts = {}
         self._bot_echo_ignore_ns = 10_000_000_000
         self._last_gui_text = ''
@@ -300,7 +297,7 @@ class CommandInputNode(Node):
         if self._consume_if_self_published(text):
             return
 
-        if self._is_recent_bot_echo(text) or self._looks_like_assistant_echo(text):
+        if self._is_recent_bot_echo(text):
             self.get_logger().info(f'TTS echo로 보이는 입력을 무시합니다: "{text}"')
             return
 
@@ -313,7 +310,6 @@ class CommandInputNode(Node):
         result = self._parser.interpret(text)
 
         command = result.get('command')
-        command_published = True
         if command is not None:
             if command.get('action') == 'exit':
                 self._handle_exit_command(command)
@@ -321,49 +317,18 @@ class CommandInputNode(Node):
             if command.get('action') == 'resume':
                 self._show_local_control_command(command)
             else:
-                command_published = self._publish_command(command)
-
-        if not command_published:
-            return
+                self._publish_command(command)
 
         for payload in result.get('feedbacks', []):
             self._publish_feedback_payload(payload)
 
     def _publish_command(self, command):
-        if self._is_duplicate_outgoing_command(command):
-            action = command.get('action', 'unknown')
-            tool_name = command.get('tool_name', 'unknown')
-            self._append_log(
-                'warn',
-                f'중복 /tool_command 발행 방지: action={action}, tool={tool_name}',
-            )
-            return False
-
         command_msg = String()
         command_msg.data = json.dumps(command, ensure_ascii=False)
         self._tool_command_pub.publish(command_msg)
         action = command.get('action', 'unknown')
         tool_name = command.get('tool_name', 'unknown')
         self._append_log('info', f'/tool_command 발행: action={action}, tool={tool_name}')
-        return True
-
-    def _is_duplicate_outgoing_command(self, command):
-        if command.get('match_method') == 'exit_sequence':
-            return False
-        key = (
-            command.get('action', 'unknown'),
-            command.get('tool_name', 'unknown'),
-            command.get('target_mode', 'unknown'),
-        )
-        now = self.get_clock().now().nanoseconds
-        if (
-            key == self._last_command_key
-            and now - self._last_command_stamp_ns < self._command_dedupe_ns
-        ):
-            return True
-        self._last_command_key = key
-        self._last_command_stamp_ns = now
-        return False
 
     def _handle_exit_command(self, command):
         if self._exit_in_progress:
@@ -501,7 +466,7 @@ class CommandInputNode(Node):
             command = feedback.get('command') or {}
             if command.get('action') == 'pause':
                 stop_message = '정지 요청을 로봇에 전달했습니다.'
-                self._append_bot(stop_message, speak=False)
+                self._append_bot(stop_message)
                 self._append_log('warn', stop_message)
                 followup_message = '작업을 재개할까요, 아니면 종료할까요?'
                 if (
@@ -542,7 +507,7 @@ class CommandInputNode(Node):
                 return
 
             accepted_message = message or '명령을 이해했습니다.'
-            self._append_bot(accepted_message, speak=False)
+            self._append_bot(accepted_message)
             self._append_log('info', accepted_message)
             self._set_status('명령 해석 완료')
             return
@@ -1094,28 +1059,6 @@ class CommandInputNode(Node):
     @staticmethod
     def _normalize_echo_text(text):
         return ''.join(str(text or '').split()).lower()
-
-    def _looks_like_assistant_echo(self, text):
-        normalized = self._normalize_echo_text(text)
-        if not normalized:
-            return False
-        echo_tokens = (
-            '뜻으로이해',
-            '이해했습니다',
-            '명령해석완료',
-            '요청을로봇에전달',
-            '정지요청',
-            '작업을재개할까요',
-            '아니면종료할까요',
-            '어떤공구를',
-            '다시말해주세요',
-            '명확히말해주세요',
-            '현재로봇이',
-            '작업중이라',
-            'home복귀',
-            'gui를종료',
-        )
-        return any(token in normalized for token in echo_tokens)
 
     def _append_system(self, text):
         if self.window is not None:
