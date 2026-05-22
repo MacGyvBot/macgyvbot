@@ -6,6 +6,7 @@ import json
 import math
 import sys
 import threading
+import time
 
 import rclpy
 from moveit.core.robot_state import RobotState
@@ -17,6 +18,7 @@ from std_msgs.msg import String
 from macgyvbot_config.robot import GROUP_NAME
 from macgyvbot_config.topics import DRAWER_COMMAND_TOPIC
 from macgyvbot_manipulation.moveit_controller import MoveItController
+from macgyvbot_manipulation.onrobot_gripper import RG
 from macgyvbot_manipulation.robot_pose import (
     current_ee_orientation,
     get_ee_matrix,
@@ -40,6 +42,9 @@ DRAWER_HANDLE_JOINT_DEGREES = {
 DEFAULT_ZERO_OFFSET_XYZ_M = [0.0, 0.0, 0.0]
 DEFAULT_OPEN_OFFSET_XYZ_M = [0.0, 0.0, 0.0]
 DEFAULT_OBSERVE_OFFSET_XYZ_M = [0.0, 0.0, 0.12]
+DEFAULT_GRIPPER_IP = "192.168.1.1"
+DEFAULT_GRIPPER_PORT = 502
+DEFAULT_GRIPPER_SETTLE_SEC = 0.8
 
 
 class DrawerMotionTestNode(Node):
@@ -57,6 +62,9 @@ class DrawerMotionTestNode(Node):
         self.use_reverse_open_for_close = self.get_parameter(
             "use_reverse_open_for_close"
         ).value
+        self.gripper_settle_sec = float(
+            self.get_parameter("gripper_settle_sec").value
+        )
 
         self.robot = MoveItPy(node_name="drawer_motion_test_moveit_py")
         self.arm = self.robot.get_planning_component(GROUP_NAME)
@@ -75,6 +83,7 @@ class DrawerMotionTestNode(Node):
             self.params,
             node=self,
         )
+        self.gripper = self._create_gripper()
         self._busy_lock = threading.Lock()
         self._active_worker = None
         self.create_subscription(
@@ -95,6 +104,9 @@ class DrawerMotionTestNode(Node):
         self.declare_parameter("observe_offset_xyz", DEFAULT_OBSERVE_OFFSET_XYZ_M)
         self.declare_parameter("close_offset_xyz", DEFAULT_ZERO_OFFSET_XYZ_M)
         self.declare_parameter("use_reverse_open_for_close", True)
+        self.declare_parameter("gripper_ip", DEFAULT_GRIPPER_IP)
+        self.declare_parameter("gripper_port", DEFAULT_GRIPPER_PORT)
+        self.declare_parameter("gripper_settle_sec", DEFAULT_GRIPPER_SETTLE_SEC)
         self.declare_parameter(
             "planning_pipeline",
             "pilz_industrial_motion_planner",
@@ -157,6 +169,9 @@ class DrawerMotionTestNode(Node):
         handle_ori = current_ee_orientation(self.robot)
         log.info(f"손잡이 기준 pose: xyz={self._format_xyz(handle_xyz)}")
 
+        if not self._close_gripper("손잡이 파지"):
+            return False
+
         if not self._move_by_offset(
             handle_xyz,
             handle_ori,
@@ -171,6 +186,10 @@ class DrawerMotionTestNode(Node):
             float(opened_pose[1, 3]),
             float(opened_pose[2, 3]),
         ]
+
+        if not self._open_gripper("서랍 열기 후 손잡이 release"):
+            return False
+
         if not self._move_by_offset(
             opened_xyz,
             handle_ori,
@@ -187,12 +206,21 @@ class DrawerMotionTestNode(Node):
         ):
             return False
 
+        if not self._close_gripper("닫기 전 손잡이 재파지"):
+            return False
+
         if not self._move_by_offset(
             opened_xyz,
             handle_ori,
             self._close_offset_xyz(),
             label="서랍 닫기 offset",
         ):
+            return False
+
+        if not self._open_gripper("서랍 닫기 후 손잡이 release"):
+            return False
+
+        if not self._move_home():
             return False
 
         log.info("drawer motion test 완료")
@@ -214,6 +242,51 @@ class DrawerMotionTestNode(Node):
         state_goal.joint_positions = joint_positions
         state_goal.update()
         return self.motion.plan_and_execute(self.get_logger(), state_goal=state_goal)
+
+    def _create_gripper(self):
+        if self.dry_run:
+            self.get_logger().info("dry_run=true라 그리퍼 연결을 생략합니다.")
+            return None
+
+        gripper_ip = self.get_parameter("gripper_ip").value
+        gripper_port = int(self.get_parameter("gripper_port").value)
+        self.get_logger().info(
+            f"OnRobot gripper 연결: ip={gripper_ip}, port={gripper_port}"
+        )
+        return RG("rg2", gripper_ip, gripper_port)
+
+    def _close_gripper(self, label):
+        self.get_logger().info(f"{label}: 그리퍼 닫기")
+        if self.dry_run:
+            return True
+
+        try:
+            self.gripper.close_gripper()
+            time.sleep(self.gripper_settle_sec)
+        except Exception as exc:
+            self.get_logger().error(f"그리퍼 닫기 실패: {exc}")
+            return False
+        return True
+
+    def _open_gripper(self, label):
+        self.get_logger().info(f"{label}: 그리퍼 열기")
+        if self.dry_run:
+            return True
+
+        try:
+            self.gripper.open_gripper()
+            time.sleep(self.gripper_settle_sec)
+        except Exception as exc:
+            self.get_logger().error(f"그리퍼 열기 실패: {exc}")
+            return False
+        return True
+
+    def _move_home(self):
+        self.get_logger().info("Home 위치로 이동")
+        if self.dry_run:
+            return True
+
+        return self.motion.move_to_home_joints(self.get_logger())
 
     def _move_by_offset(self, base_xyz, ori, offset_xyz, label):
         target_xyz = [
