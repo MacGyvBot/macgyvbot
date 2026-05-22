@@ -11,12 +11,9 @@ from macgyvbot_manipulation.robot_safezone import (
 
 from macgyvbot_config.robot import (
     DRAWER_CLOSED_JOINTS,
-    DRAWER_FLOOR_STEP_CLOSED_JOINT_DELTAS,
-    DRAWER_FLOOR_STEP_OBSERVATION_JOINT_DELTAS,
-    DRAWER_FLOOR_STEP_OPEN_JOINT_DELTAS,
-    DRAWER_INSIDE_OBSERVATION_JOINTS,
-    DRAWER_OPEN_JOINTS,
-    DRAWER_OPEN_JOINT_SEQUENCE,
+    DRAWER_CLOSED_TO_OBSERVATION_JOINT_DELTAS,
+    DRAWER_CLOSED_TO_OPEN_JOINT_DELTAS,
+    DRAWER_FLOOR_STEP_JOINT_DELTAS,
     apply_joint_deltas,
     EE_LINK,
     GROUP_NAME,
@@ -113,46 +110,21 @@ class MoveItController:
         return self._move_to_joint_positions(DRAWER_CLOSED_JOINTS, logger)
 
     def move_to_drawer_open_joints(self, logger):
-        """Move to the configured drawer open-handle joint pose."""
-        logger.info("서랍 손잡이(열린) joint pose로 이동합니다.")
-        return self._move_to_joint_positions(DRAWER_OPEN_JOINTS, logger)
+        """Move to the drawer open-handle pose for floor 1."""
+        return self.move_to_drawer_floor_open_joints(logger, floor=1)
 
     def move_to_drawer_open_joint_sequence(self, logger, after_waypoint=None):
-        """Move through taught drawer-open waypoints in order."""
-        for name, joint_positions in DRAWER_OPEN_JOINT_SEQUENCE:
-            logger.info(f"서랍 열기 waypoint 이동: {name}")
-            if not self._move_to_joint_positions(joint_positions, logger):
-                logger.error(f"서랍 열기 waypoint 실패: {name}")
-                return False
-            if after_waypoint is not None:
-                after_waypoint(name)
-        return True
+        """Move to the drawer open pose for floor 1 (single waypoint)."""
+        return self.move_to_drawer_floor_open_joint_sequence(logger, floor=1, after_waypoint=after_waypoint)
 
     def move_to_drawer_inside_observation_joints(self, logger):
-        """Move to the taught post-open drawer observation pose, if configured.
-
-        Returns:
-            True: configured joint pose reached.
-            False: configured joint pose failed.
-            None: no taught joint pose configured; caller may use a fallback.
-        """
-        if DRAWER_INSIDE_OBSERVATION_JOINTS is None:
-            logger.warn(
-                "DRAWER_INSIDE_OBSERVATION_JOINTS가 아직 설정되지 않아 "
-                "FK+offset 관찰 pose fallback을 사용합니다."
-            )
-            return None
-
-        logger.info("서랍 내부 관찰 joint pose로 이동합니다.")
-        return self._move_to_joint_positions(
-            DRAWER_INSIDE_OBSERVATION_JOINTS,
-            logger,
-        )
+        """Move to the drawer observation pose for floor 1."""
+        return self.move_to_drawer_floor_inside_observation_joints(logger, floor=1)
 
     def move_to_drawer_floor_closed_joints(self, logger, floor):
         scale = floor - 1
         try:
-            joints = apply_joint_deltas(DRAWER_CLOSED_JOINTS, DRAWER_FLOOR_STEP_CLOSED_JOINT_DELTAS, scale)
+            joints = apply_joint_deltas(DRAWER_CLOSED_JOINTS, DRAWER_FLOOR_STEP_JOINT_DELTAS, scale)
         except ValueError as exc:
             logger.error(f"서랍 {floor}층 닫힌 joint delta 설정 오류: {exc}")
             return False
@@ -162,7 +134,8 @@ class MoveItController:
     def move_to_drawer_floor_open_joints(self, logger, floor):
         scale = floor - 1
         try:
-            joints = apply_joint_deltas(DRAWER_OPEN_JOINTS, DRAWER_FLOOR_STEP_OPEN_JOINT_DELTAS, scale)
+            closed_joints = apply_joint_deltas(DRAWER_CLOSED_JOINTS, DRAWER_FLOOR_STEP_JOINT_DELTAS, scale)
+            joints = apply_joint_deltas(closed_joints, DRAWER_CLOSED_TO_OPEN_JOINT_DELTAS)
         except ValueError as exc:
             logger.error(f"서랍 {floor}층 열린 joint delta 설정 오류: {exc}")
             return False
@@ -170,32 +143,27 @@ class MoveItController:
         return self._move_to_joint_positions(joints, logger)
 
     def move_to_drawer_floor_open_joint_sequence(self, logger, floor, after_waypoint=None):
+        name = "DRAWER_OPEN" if floor == 1 else f"DRAWER_OPEN_FLOOR{floor}"
         scale = floor - 1
-        for base_name, base_joints in DRAWER_OPEN_JOINT_SEQUENCE:
-            name = base_name if scale == 0 else f"{base_name}_FLOOR{floor}"
-            try:
-                joints = apply_joint_deltas(base_joints, DRAWER_FLOOR_STEP_OPEN_JOINT_DELTAS, scale)
-            except ValueError as exc:
-                logger.error(f"서랍 열기 waypoint '{name}' joint delta 설정 오류: {exc}")
-                return False
-            logger.info(f"서랍 열기 waypoint 이동: {name}")
-            if not self._move_to_joint_positions(joints, logger):
-                logger.error(f"서랍 열기 waypoint 실패: {name}")
-                return False
-            if after_waypoint is not None:
-                after_waypoint(name)
+        try:
+            closed_joints = apply_joint_deltas(DRAWER_CLOSED_JOINTS, DRAWER_FLOOR_STEP_JOINT_DELTAS, scale)
+            joints = apply_joint_deltas(closed_joints, DRAWER_CLOSED_TO_OPEN_JOINT_DELTAS)
+        except ValueError as exc:
+            logger.error(f"서랍 열기 waypoint '{name}' joint delta 설정 오류: {exc}")
+            return False
+        logger.info(f"서랍 열기 waypoint 이동: {name}")
+        if not self._move_to_joint_positions(joints, logger):
+            logger.error(f"서랍 열기 waypoint 실패: {name}")
+            return False
+        if after_waypoint is not None:
+            after_waypoint(name)
         return True
 
     def move_to_drawer_floor_inside_observation_joints(self, logger, floor):
-        if DRAWER_INSIDE_OBSERVATION_JOINTS is None:
-            return None  # caller uses FK fallback
         scale = floor - 1
         try:
-            joints = apply_joint_deltas(
-                DRAWER_INSIDE_OBSERVATION_JOINTS,
-                DRAWER_FLOOR_STEP_OBSERVATION_JOINT_DELTAS,
-                scale,
-            )
+            closed_joints = apply_joint_deltas(DRAWER_CLOSED_JOINTS, DRAWER_FLOOR_STEP_JOINT_DELTAS, scale)
+            joints = apply_joint_deltas(closed_joints, DRAWER_CLOSED_TO_OBSERVATION_JOINT_DELTAS)
         except ValueError as exc:
             logger.error(f"서랍 {floor}층 관찰 joint delta 설정 오류: {exc}")
             return False

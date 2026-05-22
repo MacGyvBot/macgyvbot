@@ -12,7 +12,6 @@ from macgyvbot_config.drawer import (
     DRAWER_APPROACH_Z_OFFSET,
     DRAWER_DETECTION_POLL_SEC,
     DRAWER_DETECTION_TIMEOUT_SEC,
-    DRAWER_INSIDE_OBSERVATION_Z_OFFSET,
     DRAWER_LABEL,
     DRAWER_HANDLE_APPROACH_Z_OFFSET,
     DRAWER_HANDLE_GRASP_Z_OFFSET,
@@ -272,7 +271,7 @@ class DrawerInteraction:
         """이미 핸들 위치에 있을 때(gripper 열린 상태) 바로 파지하고 당기기.
 
         build_motion_from_joints() 직후 호출 전용:
-        파지 → DRAWER_OPEN_JOINTS로 joint 이동 → 그리퍼 열기.
+        파지 → floor-N open joint(closed+delta)으로 이동 → 그리퍼 열기.
         Cartesian IK 대신 사전 기록된 joint 목표를 사용해 안정적으로 이동.
         """
         logger.info("서랍 열기 1단계: 손잡이 파지")
@@ -306,27 +305,7 @@ class DrawerInteraction:
         return motion
 
     def move_to_inside_observation_pose(self, logger, floor=1):
-        result = self.motion.move_to_drawer_floor_inside_observation_joints(logger, floor)
-        if result is True:
-            return True
-        if result is False:
-            return False
-
-        # None: taught joints 미설정 — FK + Z offset fallback
-        transform = get_ee_matrix(self.robot)
-        x = float(transform[0, 3])
-        y = float(transform[1, 3])
-        z = max(float(transform[2, 3]) + DRAWER_INSIDE_OBSERVATION_Z_OFFSET, SAFE_Z_MIN)
-        qx, qy, qz, qw = Rotation.from_matrix(transform[:3, :3]).as_quat()
-        ori = {"x": float(qx), "y": float(qy), "z": float(qz), "w": float(qw)}
-        logger.info(
-            f"서랍 내부 관찰 fallback pose 이동: x={x:.3f}, y={y:.3f}, z={z:.3f} "
-            f"(current_open_fk_z+{DRAWER_INSIDE_OBSERVATION_Z_OFFSET:.3f})"
-        )
-        return self.motion.plan_and_execute(
-            logger,
-            pose_goal=make_safe_pose(x, y, z, ori, logger),
-        )
+        return self.motion.move_to_drawer_floor_inside_observation_joints(logger, floor)
 
     def _log_orientation_delta(self, reference_rotation, label, logger):
         current_rotation = Rotation.from_matrix(get_ee_matrix(self.robot)[:3, :3])

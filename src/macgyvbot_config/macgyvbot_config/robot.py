@@ -32,48 +32,46 @@ OBSERVATION_JOINTS = {
 
 # TODO: DART Studio에서 서랍 손잡이(닫힌 상태) 위치로 조그 후 관절값 입력
 DRAWER_CLOSED_JOINTS = {
-    "joint_1": math.radians(4.02),
-    "joint_2": math.radians(47.76),
-    "joint_3": math.radians(47.17),
-    "joint_4": math.radians(-3.79),
-    "joint_5": math.radians(87.74),
-    "joint_6": math.radians(1.34),
+    "joint_1": math.radians(0.86),
+    "joint_2": math.radians(21.67),
+    "joint_3": math.radians(90.70),
+    "joint_4": math.radians(21.2),
+    "joint_5": math.radians(67.65),
+    "joint_6": math.radians(-6.05),
 }
 
-DRAWER_OPEN_JOINTS = {
-    "joint_1": math.radians(-8.39),
-    "joint_2": math.radians(50.33),
-    "joint_3": math.radians(44.20),
-    "joint_4": math.radians(-5.51),
-    "joint_5": math.radians(88.91),
-    "joint_6": math.radians(0.12),
+# 층간 이동 delta (도 단위, 0-indexed). closed 기준으로 모든 pose에 동일하게 적용.
+# floor-N closed      = DRAWER_CLOSED_JOINTS + (N-1) * DRAWER_FLOOR_STEP_JOINT_DELTAS
+# floor-N open        = floor-N-closed + DRAWER_CLOSED_TO_OPEN_JOINT_DELTAS
+# floor-N observation = floor-N-closed + DRAWER_CLOSED_TO_OBSERVATION_JOINT_DELTAS
+DRAWER_FLOOR_STEP_JOINT_DELTAS: dict[int, float] = {
+    0: 0.0,
+    1: 2.92,
+    2: -7.5,
+    3: 0.0,
+    4: 10.0,
+    5: 4.0,
 }
 
-# Optional taught waypoint sequence for opening the drawer without twisting the
-# handle. Add intermediate joint dictionaries here after hardware teaching if a
-# direct DRAWER_CLOSED_JOINTS -> DRAWER_OPEN_JOINTS move rotates the gripper.
-DRAWER_OPEN_JOINT_SEQUENCE = [
-    ("DRAWER_OPEN_JOINTS", DRAWER_OPEN_JOINTS),
-]
-
-# Optional hardware-taught view pose for looking into the opened drawer.
-# Leave as None until measured; drawer flow falls back to a conservative
-# current-open-handle FK + Z offset observation pose for software validation.
-DRAWER_INSIDE_OBSERVATION_JOINTS = {
-    "joint_1": math.radians(-1.62),
-    "joint_2": math.radians(31.59),
-    "joint_3": math.radians(52.82),
-    "joint_4": math.radians(-1.21),
-    "joint_5": math.radians(97.25),
-    "joint_6": math.radians(87.13),
+# closed → open 전환 delta (도 단위, 0-indexed). 하드웨어 티칭 후 채울 것.
+DRAWER_CLOSED_TO_OPEN_JOINT_DELTAS: dict[int, float] = {
+    0: 0.0,
+    1: 0.0,
+    2: 0.0,
+    3: 21.4,
+    4: 0.0,
+    5: 0.0,
 }
 
-
-# Per-floor-step joint deltas (degrees, 0-indexed).
-# floor N joints = base + (N-1) * step_delta.  Measure on hardware and fill in.
-DRAWER_FLOOR_STEP_CLOSED_JOINT_DELTAS: dict[int, float] = {}
-DRAWER_FLOOR_STEP_OPEN_JOINT_DELTAS: dict[int, float] = {}
-DRAWER_FLOOR_STEP_OBSERVATION_JOINT_DELTAS: dict[int, float] = {}
+# closed → 서랍 내부 관찰 pose 전환 delta (도 단위, 0-indexed). 하드웨어 티칭 후 채울 것.
+DRAWER_CLOSED_TO_OBSERVATION_JOINT_DELTAS: dict[int, float] = {
+    0: 6.77,
+    1: -18.74,
+    2: 8.62,
+    3: -16.9,
+    4: 8.34,
+    5: 87.0,
+}
 
 
 def apply_joint_deltas(base_joints: dict, step_deltas: dict, scale: int = 1) -> dict:
