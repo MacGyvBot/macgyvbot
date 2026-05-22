@@ -28,12 +28,19 @@ try:
 except ImportError:
     get_package_share_directory = None
 
+from macgyvbot_config.models import HAND_GRASP_SAM_CHECKPOINT_NAME
 from macgyvbot_config.vlm import (
     GRASP_POINT_MODE_VLM,
+    VLM_MODEL_SMOL,
     VLM_GRASP_GRID_SIZES,
 )
+from macgyvbot_perception.hand_tool_grasp.sam_tool_mask import (
+    BBoxPromptSegmenter,
+    LockedToolMask,
+    overlay_locked_mask,
+)
 
-DEFAULT_VLM_MODEL = "HuggingFaceTB__SmolVLM2-2.2B-Instruct"
+DEFAULT_VLM_MODEL = VLM_MODEL_SMOL
 DEFAULT_MAX_IMAGE_SIZE = 640
 DEFAULT_GRID_SIZES = ((3, 3), (4, 4), (5, 5))
 
@@ -120,9 +127,29 @@ class DepthRefinementResult:
 class VLMGraspPointSelector:
     """Select grasp pixels using a VLM and optional depth refinement."""
 
-    def __init__(self, logger):
+    def __init__(
+        self,
+        logger,
+        sam_enabled=True,
+        sam_checkpoint="",
+        sam_backend="mobile_sam",
+        sam_model_type="vit_t",
+        sam_device="cuda",
+    ):
         self.logger = logger
         self.model = None
+        self.sam_enabled = bool(sam_enabled)
+        self.sam_checkpoint = sam_checkpoint or str(
+            Path("weights") / HAND_GRASP_SAM_CHECKPOINT_NAME
+        )
+        self.sam_backend = sam_backend
+        self.sam_model_type = sam_model_type
+        self.sam_device = sam_device
+        self.sam_segmenter = None
+        self.sam_unavailable = False
+
+    def preload(self):
+        self._ensure_model_loaded()
 
     def select_grasp_pixel(
         self,
@@ -141,15 +168,25 @@ class VLMGraspPointSelector:
 
         self._ensure_model_loaded()
 
-        crop_bgr = color_image[y1:y2, x1:x2]
+        vlm_image, sam_source = self._build_vlm_input_image(
+            color_image,
+            (x1, y1, x2, y2),
+        )
+        crop_bgr = vlm_image[y1:y2, x1:x2]
         crop_rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
         crop_image = Image.fromarray(crop_rgb)
+        request_text = target_label
+        if sam_source is not None:
+            request_text = (
+                f"{target_label}. The green translucent overlay is the "
+                "SAM-segmented tool mask; choose the grasp point inside that mask."
+            )
 
         try:
             result = self.model.select_grasp_region(
                 crop_image,
                 object_label=label,
-                user_request=target_label,
+                user_request=request_text,
                 grid_sizes=VLM_GRASP_GRID_SIZES,
             )
         except Exception as exc:
@@ -172,10 +209,59 @@ class VLMGraspPointSelector:
         self.logger.info(
             f"VLM grasp point 선택: pixel=({u}, {v}), "
             f"angle={result.angle_deg:.1f}deg, "
-            f"rpy_deg={result.orientation_rpy_deg}, source={source}"
+            f"rpy_deg={result.orientation_rpy_deg}, source={source}, "
+            f"sam_input={sam_source or 'none'}"
         )
 
         return u, v, source, result.orientation_rpy_deg
+
+    def _build_vlm_input_image(self, color_image, roi):
+        segmenter = self._ensure_sam_segmenter()
+        if segmenter is None:
+            return color_image, None
+
+        try:
+            mask = segmenter.segment(color_image, roi)
+        except Exception as exc:
+            self.logger.warn(f"SAM mask for VLM input failed: {exc}")
+            return color_image, None
+
+        if mask is None or int(mask.sum()) <= 0:
+            self.logger.warn("SAM mask for VLM input is empty. Using plain RGB crop.")
+            return color_image, None
+
+        masked_image = color_image.copy()
+        overlay_locked_mask(
+            masked_image,
+            LockedToolMask(roi=roi, mask=mask, source="SAM_VLM_INPUT"),
+        )
+        return masked_image, "SAM_VLM_INPUT"
+
+    def _ensure_sam_segmenter(self):
+        if not self.sam_enabled or self.sam_unavailable:
+            return None
+        if self.sam_segmenter is not None:
+            return self.sam_segmenter
+
+        try:
+            self.sam_segmenter = BBoxPromptSegmenter(
+                backend=self.sam_backend,
+                checkpoint_path=self.sam_checkpoint,
+                model_type=self.sam_model_type,
+                device=self.sam_device,
+            )
+        except Exception as exc:
+            self.sam_unavailable = True
+            self.logger.warn(
+                f"SAM VLM input disabled; segmenter init failed: {exc}"
+            )
+            return None
+
+        self.logger.info(
+            "SAM VLM input enabled: "
+            f"backend={self.sam_backend}, checkpoint={self.sam_checkpoint}"
+        )
+        return self.sam_segmenter
 
     def _ensure_model_loaded(self):
         if self.model is not None:
@@ -515,6 +601,13 @@ class VLMModel:
             "Estimate grasp orientation as strict JSON only for a robot end-effector.\n"
             "Return keys: roll_deg, pitch_deg, yaw_deg, confidence, reason.\n"
             "Use degrees. Keep values in [-180, 180].\n"
+            "Yaw definition:\n"
+            "- yaw_deg is the additional robot wrist rotation from the current pose.\n"
+            "- Positive yaw_deg means rotate the wrist left/counterclockwise in the image.\n"
+            "- Negative yaw_deg means rotate the wrist right/clockwise in the image.\n"
+            "- For long tools, rotate until the two gripper fingers close across the tool width.\n"
+            "- If a long tool axis is about 45 degrees in the image, yaw_deg should be about 45 or -135.\n"
+            "- If a long tool axis is about -45 degrees in the image, yaw_deg should be about -45 or 135.\n"
             "If uncertain, keep roll_deg=0 and pitch_deg=0, but still output yaw_deg.\n"
             "Do not return markdown or code fences.\n"
             f"Object: {object_label}\n"
@@ -703,9 +796,16 @@ class VLMModel:
         coarse_y = int(round(coarse_point[1]))
 
         prompt = (
-            "Choose a precise grasp center and in-plane grasp yaw for a two-finger gripper.\n"
+            "Choose a precise grasp center and wrist yaw for a two-finger gripper.\n"
             "Return strict JSON only with keys: x_px, y_px, yaw_deg, confidence, reason.\n"
             f"Image size: width={width}, height={height}.\n"
+            "Yaw definition:\n"
+            "- yaw_deg is the additional robot wrist rotation from the current pose.\n"
+            "- Positive yaw_deg means rotate the wrist left/counterclockwise in the image.\n"
+            "- Negative yaw_deg means rotate the wrist right/clockwise in the image.\n"
+            "- For long tools, rotate until the two gripper fingers close across the tool width.\n"
+            "- If a long tool axis is about 45 degrees in the image, yaw_deg should be about 45 or -135.\n"
+            "- If a long tool axis is about -45 degrees in the image, yaw_deg should be about -45 or 135.\n"
             "Constraints:\n"
             f"- x_px must be integer in [0, {width - 1}]\n"
             f"- y_px must be integer in [0, {height - 1}]\n"
@@ -716,7 +816,8 @@ class VLMModel:
             f"Robot task: {request_text}\n"
             f"Context: {context}\n"
             f"Coarse point hint: x={coarse_x}, y={coarse_y}\n"
-            f"Coarse yaw hint(deg): {coarse_yaw_deg:.2f}\n"
+            f"Weak yaw hint from coarse geometry(deg): {coarse_yaw_deg:.2f}. "
+            "Override it if it follows the object's long axis instead of the gripper closing direction.\n"
         )
 
         for attempt in range(1, retry_limit + 1):
@@ -1081,7 +1182,11 @@ class VLMModel:
             if value is not None and math.isfinite(value):
                 return value
 
-        yaw_match = re.search(r"yaw(?:_deg)?\s*[:=]?\s*(-?\d+(?:\.\d+)?)", raw_text, re.IGNORECASE)
+        yaw_match = re.search(
+            r'"?yaw(?:_deg)?"?\s*[:=]\s*(-?\d+(?:\.\d+)?)',
+            raw_text,
+            re.IGNORECASE,
+        )
         if yaw_match:
             try:
                 return float(yaw_match.group(1))
@@ -1115,8 +1220,16 @@ class VLMModel:
             y = y_norm * (height - 1)
             return self._clamp_point_to_image(x, y, width, height)
 
-        x_match = re.search(r"x(?:_px)?\s*[:=]?\s*(-?\d+(?:\.\d+)?)", raw_text, re.IGNORECASE)
-        y_match = re.search(r"y(?:_px)?\s*[:=]?\s*(-?\d+(?:\.\d+)?)", raw_text, re.IGNORECASE)
+        x_match = re.search(
+            r'"?x(?:_px)?"?\s*[:=]\s*(-?\d+(?:\.\d+)?)',
+            raw_text,
+            re.IGNORECASE,
+        )
+        y_match = re.search(
+            r'"?y(?:_px)?"?\s*[:=]\s*(-?\d+(?:\.\d+)?)',
+            raw_text,
+            re.IGNORECASE,
+        )
         if x_match and y_match:
             try:
                 x = float(x_match.group(1))

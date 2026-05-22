@@ -27,6 +27,7 @@ class PickSequenceRunner:
         gripper,
         state,
         tool_hold_monitor=None,
+        refine_pick_target=None,
         control_events=None,
         drawer_flow=None,
     ):
@@ -35,6 +36,7 @@ class PickSequenceRunner:
         self.gripper = gripper
         self.state = state
         self.tool_hold_monitor = tool_hold_monitor
+        self.refine_pick_target = refine_pick_target
         self.control_events = control_events or {}
         self.drawer_flow = drawer_flow
         self.target_planner = PickTargetPlanner(robot)
@@ -122,6 +124,45 @@ class PickSequenceRunner:
                     "pick/apply_vlm_yaw",
                     lambda: self._rotate_wrist(vlm_yaw_deg, context),
                 )
+            )
+
+            refined_target = self._refine_target_after_xy_move(log)
+            if refined_target is not None:
+                bx, by, bz = refined_target.base_xyz
+                z_m = refined_target.depth_m
+                vlm_yaw_deg = refined_target.yaw_deg
+                plan = self.target_planner.plan(bx, by, bz, log)
+                log.info(
+                    "상단 view VLM 결과로 pick target 갱신: "
+                    f"pixel={refined_target.pixel}, "
+                    f"base=({plan.target_x:.3f}, {plan.target_y:.3f}, "
+                    f"{bz:.3f}), depth={z_m:.3f}, "
+                    f"yaw={vlm_yaw_deg}"
+                )
+
+            if vlm_yaw_deg is not None:
+                ok = self.motion.rotate_wrist_by_yaw_deg(vlm_yaw_deg, log)
+                if not ok:
+                    log.error("J6 회전 실패. Pick 시퀀스 중단")
+                    self.state._publish_robot_status(
+                        "failed",
+                        message="J6 회전 실패",
+                        reason="wrist_rotation_failed",
+                        command=self.state.current_command,
+                    )
+                    return
+                ori = current_ee_orientation(self.robot)
+
+            log.info("3단계: 타겟 상단 접근")
+            ok = self.motion.plan_and_execute(
+                log,
+                pose_goal=make_safe_pose(
+                    plan.target_x,
+                    plan.target_y,
+                    plan.approach_z,
+                    ori,
+                    log,
+                ),
             )
 
         steps.extend(
@@ -428,3 +469,28 @@ class PickSequenceRunner:
         while rclpy.ok() and time.monotonic() < end_time:
             remaining = end_time - time.monotonic()
             time.sleep(min(SEQUENCE_WAIT_POLL_SEC, max(0.0, remaining)))
+
+    def _refine_target_after_xy_move(self, log):
+        if self.refine_pick_target is None:
+            return None
+
+        target_label = self.state.target_label
+        if not target_label:
+            return None
+
+        self.cooperative_wait(0.2)
+        try:
+            target = self.refine_pick_target(target_label)
+        except Exception as exc:
+            log.warn(f"상단 view VLM target 갱신 실패: {exc}")
+            return None
+
+        if target is None or not target.found:
+            reason = getattr(target, "reason", "unknown") if target else "unknown"
+            log.warn(
+                "상단 view VLM target을 얻지 못해 bbox center plan을 유지합니다. "
+                f"reason={reason}"
+            )
+            return None
+
+        return target

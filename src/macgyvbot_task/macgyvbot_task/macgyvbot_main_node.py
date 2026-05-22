@@ -174,7 +174,9 @@ class MacGyvBotNode(Node):
             self.grasp_point_mode,
             self.grasp_point_logger,
             **self._read_grasp_point_api_config(),
+            **self._read_vlm_sam_config(),
         )
+        self.grasp_point_selector.preload_vlm_if_needed()
 
         calib_file = self._resolve_calibration_file("T_gripper2camera.npy")
         self.gripper2cam = np.load(str(calib_file)).astype(float)
@@ -268,6 +270,7 @@ class MacGyvBotNode(Node):
             self.gripper,
             self.state,
             self.tool_hold_monitor,
+            refine_pick_target=self._refine_pick_target_after_centering,
             control_events=control_events,
             drawer_flow=self.drawer_flow,
         )
@@ -377,6 +380,23 @@ class MacGyvBotNode(Node):
             "api_timeout_sec": float(
                 self.get_parameter("grasp_point_api_timeout_sec").value
             ),
+        }
+
+    def _read_vlm_sam_config(self):
+        self.declare_parameter("sam_enabled", True)
+        self.declare_parameter(
+            "sam_checkpoint",
+            str(Path("weights") / "mobile_sam.pt"),
+        )
+        self.declare_parameter("sam_backend", "mobile_sam")
+        self.declare_parameter("sam_model_type", "vit_t")
+        self.declare_parameter("sam_device", "cuda")
+        return {
+            "sam_enabled": self._read_bool_parameter("sam_enabled", True),
+            "sam_checkpoint": str(self.get_parameter("sam_checkpoint").value).strip(),
+            "sam_backend": str(self.get_parameter("sam_backend").value).strip(),
+            "sam_model_type": str(self.get_parameter("sam_model_type").value).strip(),
+            "sam_device": str(self.get_parameter("sam_device").value).strip(),
         }
 
     def _read_force_torque_topic(self):
@@ -775,6 +795,27 @@ class MacGyvBotNode(Node):
                 reason="task_queue_busy",
                 command=self.state.current_command,
             )
+
+    def _refine_pick_target_after_centering(self, target_label):
+        if not self.pick_target_resolver.should_defer_vlm_until_top_view():
+            return None
+
+        if not self.frame_processor.has_camera_state():
+            self.get_logger().warn("상단 view VLM 갱신을 위한 camera state가 없습니다.")
+            return None
+
+        color_image = self.state.color_image.copy()
+        depth_image = self.state.depth_image.copy()
+        intrinsics = dict(self.state.intrinsics)
+        results = self.detector.detect(color_image)
+
+        return self.pick_target_resolver.target_from_boxes(
+            results[0].boxes,
+            target_label,
+            color_image,
+            depth_image,
+            intrinsics,
+        )
 
     def start_return_sequence(self, command):
         if self.state.picking:

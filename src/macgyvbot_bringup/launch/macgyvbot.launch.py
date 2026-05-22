@@ -119,7 +119,10 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "grasp_point_mode",
                 default_value="vlm",
-                description="Grasp point selection mode: center, vlm, or api",
+                description=(
+                    "Grasp point selection mode: center, vlm, vlm_only_smol, "
+                    "vlm_only_qwen3b, vlm_only_qwen7b, vlm_only, or api"
+                ),
             ),
             DeclareLaunchArgument(
                 "grasp_point_api_model",
@@ -167,6 +170,11 @@ def generate_launch_description():
                             "force_torque_topic"
                         ),
                         "display_debug_windows": display_debug_windows,
+                        "sam_enabled": sam_enabled,
+                        "sam_checkpoint": sam_checkpoint,
+                        "sam_backend": "mobile_sam",
+                        "sam_model_type": "vit_t",
+                        "sam_device": "cuda",
                     },
                 ],
             ),

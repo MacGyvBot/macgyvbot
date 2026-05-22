@@ -12,6 +12,15 @@ from macgyvbot_config.handoff import (
     HANDOVER_HAND_Z_OFFSET_M,
     OBSERVATION_TIMEOUT_SEC,
 )
+from macgyvbot_config.return_flow import (
+    RETURN_HAND_CLOSE_DEPTH_MAX_MM,
+    RETURN_HAND_CLOSE_DEPTH_MIN_MM,
+    RETURN_HAND_CLOSE_ROI_CENTER_X,
+    RETURN_HAND_CLOSE_ROI_CENTER_Y,
+    RETURN_HAND_CLOSE_ROI_HEIGHT_RATIO,
+    RETURN_HAND_CLOSE_ROI_TIMEOUT_SEC,
+    RETURN_HAND_CLOSE_ROI_WIDTH_RATIO,
+)
 from macgyvbot_config.robot import BASE_FRAME
 from macgyvbot_manipulation.grasp_verifier import GraspVerifier
 from macgyvbot_manipulation.handover_targeting import (
@@ -47,6 +56,162 @@ class ReturnHandoffFlow:
             gripper,
             wait_fn,
             interrupted=self.interrupted,
+        )
+
+    def receive_from_candidate(self, tool_name, candidate, command, logger):
+        ok, reason = self.move_to_candidate(tool_name, candidate, command, logger)
+        if not ok:
+            return None, reason
+
+        return self.grasp_at_current_position(tool_name, command, logger)
+
+    def move_to_candidate(self, tool_name, candidate, command, logger):
+        if candidate.frame_id not in ("world", BASE_FRAME):
+            self.reporter.fail(
+                tool_name,
+                f"반납 위치 frame이 planning frame이 아닙니다: {candidate.frame_id}",
+                "return_unsupported_frame",
+                command,
+                logger,
+            )
+            return False, "return_unsupported_frame"
+
+        ok, final_pose, reason = move_to_candidate_with_offset(
+            self.motion,
+            candidate,
+            self.state.home_ori,
+            logger,
+            x_offset_m=HANDOVER_HAND_X_OFFSET_M,
+            z_offset_m=HANDOVER_HAND_Z_OFFSET_M,
+            should_interrupt=self.interrupted,
+        )
+        logger.info(
+            "감지된 사용자 손 위치로 수령 이동: "
+            f"source={candidate.source}, frame={candidate.frame_id}, "
+            f"raw=({candidate.x:.3f},{candidate.y:.3f},{candidate.z:.3f}), "
+            f"safe=({final_pose.x:.3f},{final_pose.y:.3f},{final_pose.z:.3f})"
+        )
+        self.reporter.publish(
+            "moving_return_detected_pose",
+            tool_name,
+            "탐색된 사용자 손 위치로 이동합니다.",
+            command,
+        )
+        if not ok:
+            failure_reason = (
+                "return_detected_pose_move_failed"
+                if reason == "target_move_failed"
+                else reason
+            )
+            self.reporter.fail(
+                tool_name,
+                "탐색된 반납 위치로 이동하지 못했습니다.",
+                failure_reason,
+                command,
+                logger,
+            )
+            return False, failure_reason
+
+        return True, ""
+
+    def grasp_at_current_position(self, tool_name, command, logger):
+        if not self.wait_for_tool_in_close_roi(logger):
+            self.reporter.fail(
+                tool_name,
+                "그리퍼 전방 영역에서 반납 공구를 확인하지 못했습니다.",
+                "return_close_roi_timeout",
+                command,
+                logger,
+            )
+            return None, "return_close_roi_timeout"
+
+        logger.info("사용자 손 위치에 접근했습니다. 반납 공구 grasp를 시도합니다.")
+        if not self.try_robot_grasp(tool_name, command, logger):
+            self.reporter.fail(
+                tool_name,
+                "반납 공구 grasp에 실패했습니다.",
+                "return_grasp_failed",
+                command,
+                logger,
+            )
+            return None, "return_grasp_failed"
+
+        self.reporter.publish(
+            "grasp_success",
+            tool_name,
+            "반납 공구 grasp에 성공했습니다.",
+            command,
+        )
+        if self.tool_hold_monitor is not None:
+            self.tool_hold_monitor.start(tool_name, "return", command)
+        return tool_name, ""
+
+    def wait_for_tool_in_close_roi(self, logger):
+        start_time = time.monotonic()
+
+        while rclpy.ok():
+            result = self.state.last_grasp_result or {}
+            tool_roi = result.get("tool_roi")
+            tool_depth_mm = result.get("tool_depth_mm")
+            if (
+                self._tool_roi_in_close_region(tool_roi)
+                and self._tool_depth_in_close_range(tool_depth_mm)
+            ):
+                logger.info(
+                    "그리퍼 close ROI/depth 범위 안에서 공구 확인: "
+                    f"tool_roi={tool_roi}, tool_depth_mm={tool_depth_mm}"
+                )
+                return True
+
+            if time.monotonic() - start_time >= RETURN_HAND_CLOSE_ROI_TIMEOUT_SEC:
+                logger.warn(
+                    "그리퍼 close ROI/depth 범위 안에서 공구를 확인하지 못했습니다: "
+                    f"timeout={RETURN_HAND_CLOSE_ROI_TIMEOUT_SEC:.1f}s"
+                )
+                return False
+
+            self.wait_fn(0.1)
+
+        return False
+
+    def _tool_roi_in_close_region(self, tool_roi):
+        if self.state.color_image is None:
+            return False
+        if not isinstance(tool_roi, (list, tuple)) or len(tool_roi) != 4:
+            return False
+
+        height, width = self.state.color_image.shape[:2]
+        if width <= 0 or height <= 0:
+            return False
+
+        try:
+            x1, y1, x2, y2 = [float(value) for value in tool_roi]
+        except (TypeError, ValueError):
+            return False
+
+        center_u = (x1 + x2) * 0.5
+        center_v = (y1 + y2) * 0.5
+        roi_center_u = width * RETURN_HAND_CLOSE_ROI_CENTER_X
+        roi_center_v = height * RETURN_HAND_CLOSE_ROI_CENTER_Y
+        half_width = width * RETURN_HAND_CLOSE_ROI_WIDTH_RATIO * 0.5
+        half_height = height * RETURN_HAND_CLOSE_ROI_HEIGHT_RATIO * 0.5
+
+        return (
+            abs(center_u - roi_center_u) <= half_width
+            and abs(center_v - roi_center_v) <= half_height
+        )
+
+    @staticmethod
+    def _tool_depth_in_close_range(tool_depth_mm):
+        try:
+            depth_mm = float(tool_depth_mm)
+        except (TypeError, ValueError):
+            return False
+
+        return (
+            RETURN_HAND_CLOSE_DEPTH_MIN_MM
+            <= depth_mm
+            <= RETURN_HAND_CLOSE_DEPTH_MAX_MM
         )
 
     def receive(self, requested_tool, command, logger):
