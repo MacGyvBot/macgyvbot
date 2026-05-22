@@ -4,8 +4,10 @@
 # std_msgs, moveit, launch, and ament_index_python are provided by the ROS
 # Humble apt environment, not by pip.
 #
-# System packages still needed on the robot PC include ffmpeg or mpg123 for
-# edge-tts playback, and PortAudio headers if PyAudio is built from source.
+# System packages still needed on the robot PC:
+#   sudo apt update
+#   sudo apt install portaudio19-dev python3-pyaudio ffmpeg
+# portaudio19-dev is required when pip builds PyAudio from source.
 
 accelerate==1.13.0
 bitsandbytes==0.49.2

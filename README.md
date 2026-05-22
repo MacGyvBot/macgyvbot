@@ -118,8 +118,14 @@ Python 의존성:
 
 ```bash
 cd ~/macgyvbot
+sudo apt update
+sudo apt install portaudio19-dev python3-pyaudio ffmpeg
 python3 -m pip install -r requirements.txt
 ```
+
+`portaudio19-dev`는 pip가 `PyAudio`를 source build할 때 필요한
+PortAudio header를 제공합니다. `python3-pyaudio`는 Ubuntu 패키지로
+PyAudio를 함께 설치하며, `ffmpeg`는 `edge-tts` 음성 재생에 사용됩니다.
 
 워크스페이스 빌드:
 
