@@ -9,12 +9,8 @@ from macgyvbot_manipulation.robot_safezone import (
     clamp_to_safe_workspace,
 )
 
+from macgyvbot_config.drawer import get_drawer_handle_joints
 from macgyvbot_config.robot import (
-    DRAWER_CLOSED_JOINTS,
-    DRAWER_CLOSED_TO_OBSERVATION_JOINT_DELTAS,
-    DRAWER_CLOSED_TO_OPEN_JOINT_DELTAS,
-    DRAWER_FLOOR_STEP_JOINT_DELTAS,
-    apply_joint_deltas,
     EE_LINK,
     GROUP_NAME,
     HOME_JOINTS,
@@ -104,70 +100,14 @@ class MoveItController:
         logger.info("Home joint pose로 복귀합니다.")
         return self._move_to_joint_positions(HOME_JOINTS, logger)
 
-    def move_to_drawer_closed_joints(self, logger):
-        """Move to the configured drawer closed-handle joint pose."""
-        logger.info("서랍 손잡이(닫힌) joint pose로 이동합니다.")
-        return self._move_to_joint_positions(DRAWER_CLOSED_JOINTS, logger)
-
-    def move_to_drawer_open_joints(self, logger):
-        """Move to the drawer open-handle pose for floor 1."""
-        return self.move_to_drawer_floor_open_joints(logger, floor=1)
-
-    def move_to_drawer_open_joint_sequence(self, logger, after_waypoint=None):
-        """Move to the drawer open pose for floor 1 (single waypoint)."""
-        return self.move_to_drawer_floor_open_joint_sequence(logger, floor=1, after_waypoint=after_waypoint)
-
-    def move_to_drawer_inside_observation_joints(self, logger):
-        """Move to the drawer observation pose for floor 1."""
-        return self.move_to_drawer_floor_inside_observation_joints(logger, floor=1)
-
-    def move_to_drawer_floor_closed_joints(self, logger, floor):
-        scale = floor - 1
+    def move_to_drawer_handle_joints(self, logger, drawer_id):
+        """Move to the configured drawer handle joint pose for the given drawer ID."""
         try:
-            joints = apply_joint_deltas(DRAWER_CLOSED_JOINTS, DRAWER_FLOOR_STEP_JOINT_DELTAS, scale)
+            joints = get_drawer_handle_joints(drawer_id)
         except ValueError as exc:
-            logger.error(f"서랍 {floor}층 닫힌 joint delta 설정 오류: {exc}")
+            logger.error(f"서랍 {drawer_id}번 joint 설정 오류: {exc}")
             return False
-        logger.info(f"서랍 {floor}층 손잡이(닫힌) joint pose로 이동합니다.")
-        return self._move_to_joint_positions(joints, logger)
-
-    def move_to_drawer_floor_open_joints(self, logger, floor):
-        scale = floor - 1
-        try:
-            closed_joints = apply_joint_deltas(DRAWER_CLOSED_JOINTS, DRAWER_FLOOR_STEP_JOINT_DELTAS, scale)
-            joints = apply_joint_deltas(closed_joints, DRAWER_CLOSED_TO_OPEN_JOINT_DELTAS)
-        except ValueError as exc:
-            logger.error(f"서랍 {floor}층 열린 joint delta 설정 오류: {exc}")
-            return False
-        logger.info(f"서랍 {floor}층 손잡이(열린) joint pose로 이동합니다.")
-        return self._move_to_joint_positions(joints, logger)
-
-    def move_to_drawer_floor_open_joint_sequence(self, logger, floor, after_waypoint=None):
-        name = "DRAWER_OPEN" if floor == 1 else f"DRAWER_OPEN_FLOOR{floor}"
-        scale = floor - 1
-        try:
-            closed_joints = apply_joint_deltas(DRAWER_CLOSED_JOINTS, DRAWER_FLOOR_STEP_JOINT_DELTAS, scale)
-            joints = apply_joint_deltas(closed_joints, DRAWER_CLOSED_TO_OPEN_JOINT_DELTAS)
-        except ValueError as exc:
-            logger.error(f"서랍 열기 waypoint '{name}' joint delta 설정 오류: {exc}")
-            return False
-        logger.info(f"서랍 열기 waypoint 이동: {name}")
-        if not self._move_to_joint_positions(joints, logger):
-            logger.error(f"서랍 열기 waypoint 실패: {name}")
-            return False
-        if after_waypoint is not None:
-            after_waypoint(name)
-        return True
-
-    def move_to_drawer_floor_inside_observation_joints(self, logger, floor):
-        scale = floor - 1
-        try:
-            closed_joints = apply_joint_deltas(DRAWER_CLOSED_JOINTS, DRAWER_FLOOR_STEP_JOINT_DELTAS, scale)
-            joints = apply_joint_deltas(closed_joints, DRAWER_CLOSED_TO_OBSERVATION_JOINT_DELTAS)
-        except ValueError as exc:
-            logger.error(f"서랍 {floor}층 관찰 joint delta 설정 오류: {exc}")
-            return False
-        logger.info(f"서랍 {floor}층 내부 관찰 joint pose로 이동합니다.")
+        logger.info(f"서랍 {drawer_id}번 손잡이 joint pose로 이동합니다.")
         return self._move_to_joint_positions(joints, logger)
 
     def _move_to_joint_positions(self, joint_positions, logger):
@@ -238,4 +178,25 @@ class MoveItController:
         state_goal.set_joint_group_positions(GROUP_NAME, target_positions)
         state_goal.update()
 
+        return self.plan_and_execute(logger, state_goal=state_goal)
+
+    def reset_wrist_to_home(self, logger):
+        """J6를 홈 joint 값으로 절대 설정한다."""
+        robot_model = self.robot.get_robot_model()
+        joint_names = list(
+            robot_model.get_joint_model_group(GROUP_NAME).active_joint_model_names
+        )
+        if WRIST_JOINT_NAME not in joint_names:
+            logger.error(f"{WRIST_JOINT_NAME}이 그룹에 없어 wrist 정규화를 수행할 수 없습니다.")
+            return False
+        psm = self.robot.get_planning_scene_monitor()
+        with psm.read_only() as scene:
+            positions = np.array(
+                scene.current_state.get_joint_group_positions(GROUP_NAME), dtype=float
+            )
+        positions[joint_names.index(WRIST_JOINT_NAME)] = HOME_JOINTS[WRIST_JOINT_NAME]
+        state_goal = RobotState(robot_model)
+        state_goal.set_joint_group_positions(GROUP_NAME, positions)
+        state_goal.update()
+        logger.info(f"wrist 정규화: J6 → {math.degrees(HOME_JOINTS[WRIST_JOINT_NAME]):.1f}deg")
         return self.plan_and_execute(logger, state_goal=state_goal)

@@ -1,7 +1,7 @@
 """Store a returned tool in the hardcoded drawer."""
 from __future__ import annotations
 
-from macgyvbot_config.drawer import get_tool_drawer_floor
+from macgyvbot_config.drawer import get_tool_drawer_id
 from macgyvbot_config.timing import GRIPPER_OPEN_WAIT_SEC
 from macgyvbot_domain import DetectedTarget
 from macgyvbot_manipulation.force_detection import ForceReactionDetector
@@ -42,11 +42,11 @@ class ReturnDrawerFlow:
 
         try:
             try:
-                floor = get_tool_drawer_floor(tool_name)
+                drawer_id = get_tool_drawer_id(tool_name)
             except ValueError as exc:
                 self.reporter.fail(
                     tool_name,
-                    f"서랍 층수 설정 오류: {exc}",
+                    f"서랍 ID 설정 오류: {exc}",
                     "invalid_drawer_floor_config",
                     command,
                     logger,
@@ -66,7 +66,7 @@ class ReturnDrawerFlow:
             self.reporter.publish(
                 "opening_drawer", tool_name, "반납 서랍을 여는 중입니다.", command,
             )
-            motion = self.drawer.build_motion_from_joints(logger, floor=floor)
+            motion = self.drawer.build_motion(logger, drawer_id=drawer_id)
             if motion is None:
                 self.reporter.fail(
                     tool_name,
@@ -107,13 +107,13 @@ class ReturnDrawerFlow:
             drawer_target = DetectedTarget(
                 label="drawer",
                 x=motion.closed_x,
-                y=motion.y,
+                y=motion.closed_y,
                 z=motion.grasp_z,
                 depth_m=0.0,
                 source="hardcoded_joint",
             )
             logger.info(
-                f"서랍 반납 층 선택: tool={tool_name}, floor={floor}, "
+                f"서랍 반납 선택: tool={tool_name}, drawer_id={drawer_id}, "
                 f"target_z={drawer_target.z:.3f}"
             )
             if not self.drawer.place_tool_in_open_drawer(
@@ -144,8 +144,11 @@ class ReturnDrawerFlow:
                         self.reporter.publish(
                             "closing_drawer", tool_name, "반납 서랍을 닫는 중입니다.", command,
                         )
-                        if not self.drawer.close_drawer(motion, logger):
-                            logger.error("반납 서랍 닫기 실패")
+                        if self.motion.move_to_drawer_handle_joints(logger, motion.drawer_id):
+                            if not self.drawer.close_drawer(motion, logger):
+                                logger.error("반납 서랍 닫기 실패")
+                        else:
+                            logger.error("서랍 닫기 전 손잡이 joint 복귀 실패")
                     else:
                         logger.error("서랍 닫기 전 관찰 자세 이동 실패")
                 else:

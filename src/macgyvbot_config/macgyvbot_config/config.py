@@ -47,9 +47,6 @@ from macgyvbot_config.return_flow import (
 )
 from macgyvbot_config.robot import (
     BASE_FRAME,
-    DRAWER_CLOSED_JOINTS,
-    DRAWER_CLOSED_TO_OPEN_JOINT_DELTAS,
-    DRAWER_FLOOR_STEP_JOINT_DELTAS,
     EE_LINK,
     GROUP_NAME,
     HOME_JOINTS,
@@ -90,9 +87,6 @@ from macgyvbot_config.drawer import (
     DRAWER_HANDLE_OFFSET_X,
     DRAWER_HANDLE_OFFSET_Y,
     DRAWER_HANDLE_OFFSET_Z,
-    DRAWER_PULL_DISTANCE_M,
-    DRAWER_ORIENTATION_DELTA_WARN_DEG,
-    DRAWER_OPEN_DIRECTION_X,
     DRAWER_TOOL_PLACE_APPROACH_Z_OFFSET,
     DRAWER_TOOL_PLACE_Z_OFFSET,
 )

@@ -7,7 +7,7 @@ import rclpy
 
 from macgyvbot_config.drawer import (
     DRAWER_ENTRY_GRIPPER_WIDTH_M,
-    get_tool_drawer_floor,
+    get_tool_drawer_id,
 )
 from macgyvbot_config.timing import (
     GRIPPER_GRASP_WAIT_SEC,
@@ -88,13 +88,13 @@ class PickSequenceRunner:
         pick_success = False
         try:
             try:
-                floor = get_tool_drawer_floor(requested_tool)
+                drawer_id = get_tool_drawer_id(requested_tool)
             except ValueError as exc:
                 self.state._publish_robot_status(
                     "failed",
                     tool_name=requested_tool,
                     action="bring",
-                    message=f"서랍 층수 설정 오류: {exc}",
+                    message=f"서랍 ID 설정 오류: {exc}",
                     reason="invalid_drawer_floor_config",
                     command=self.state.current_command,
                 )
@@ -127,7 +127,7 @@ class PickSequenceRunner:
             )
             self.gripper.open_gripper()
             self.cooperative_wait(GRIPPER_OPEN_WAIT_SEC)
-            motion = drawer.build_motion_from_joints(log, floor=floor)
+            motion = drawer.build_motion(log, drawer_id=drawer_id)
             if motion is None:
                 self.state._publish_robot_status(
                     "failed",
@@ -158,12 +158,12 @@ class PickSequenceRunner:
                 motion = None
                 return
 
-            log.info(f"서랍 픽업 층 선택: tool={requested_tool}, floor={floor}")
+            log.info(f"서랍 픽업 선택: tool={requested_tool}, drawer_id={drawer_id}")
             self.state._publish_robot_status(
                 "searching",
                 tool_name=requested_tool,
                 action="bring",
-                message=f"열린 서랍 {floor}층에서 {requested_tool} 탐색 중입니다.",
+                message=f"열린 서랍 {drawer_id}번에서 {requested_tool} 탐색 중입니다.",
                 command=self.state.current_command,
             )
             tool_target = drawer.wait_for_target(
@@ -182,7 +182,7 @@ class PickSequenceRunner:
                 )
                 return
 
-            pick_success = self._drawer_grasp_and_handoff(tool_target, motion.handle_fk_z, floor, log)
+            pick_success = self._drawer_grasp_and_handoff(tool_target, motion.handle_fk_z, log)
         finally:
             # robot_grasp_succeeded is set True only after try_robot_grasp succeeds.
             # If False, gripper never closed on the tool → safe to close drawer.
@@ -234,14 +234,14 @@ class PickSequenceRunner:
             self.state.human_grasped_tool = False
             self.state.current_command = None
 
-    def _drawer_grasp_and_handoff(self, tool_target, handle_fk_z, floor, log):
+    def _drawer_grasp_and_handoff(self, tool_target, handle_fk_z, log):
         """서랍 전용 pick: 관찰 자세에서 approach_z로 직접 이동 → grasp_z 하강 → 파지 → 수직 리프트 → handoff.
 
         XY+Z를 approach_z까지 한 번에 이동해 lift_z 기준 XY 보정보다
         base 거리를 줄여 planning 실패를 피한다.
         """
         plan = self.target_planner.plan_drawer(
-            tool_target.x, tool_target.y, handle_fk_z, floor, log
+            tool_target.x, tool_target.y, handle_fk_z, log
         )
         current_pose = get_ee_matrix(self.robot)
         current_x = float(current_pose[0, 3])
