@@ -290,6 +290,7 @@ class MacGyvBotNode(Node):
             self._publish_robot_status,
             self.get_logger,
             lambda: self.state.current_command,
+            release_gripper=self.tool_hold_monitor.release_gripper,
         )
 
         self._create_subscriptions()

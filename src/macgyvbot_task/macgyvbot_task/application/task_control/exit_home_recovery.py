@@ -16,6 +16,7 @@ class ExitHomeRecovery:
         publish_robot_status,
         logger_provider,
         current_command_provider,
+        release_gripper=None,
     ):
         self.motion = motion
         self.exit_event = exit_event
@@ -23,6 +24,7 @@ class ExitHomeRecovery:
         self.publish_robot_status = publish_robot_status
         self.logger_provider = logger_provider
         self.current_command_provider = current_command_provider
+        self.release_gripper = release_gripper
 
     def move_home_after_exit(self, reason):
         logger = self.logger()
@@ -49,10 +51,20 @@ class ExitHomeRecovery:
 
         ok = self.motion.move_to_home_joints(logger)
         if ok:
+            if not self._release_gripper_after_home(logger):
+                self.publish_robot_status(
+                    "failed",
+                    action="exit",
+                    message="종료 요청 후 Home 복귀는 완료했지만 그리퍼 열기에 실패했습니다.",
+                    reason="exit_gripper_release_failed",
+                    command=command,
+                )
+                return False
+
             self.publish_robot_status(
                 "done",
                 action="exit",
-                message="종료 요청 후 Home 위치로 복귀했습니다.",
+                message="종료 요청 후 Home 위치로 복귀하고 그리퍼를 열었습니다.",
                 reason=reason or "exit_home_completed",
                 command=command,
             )
@@ -76,6 +88,20 @@ class ExitHomeRecovery:
             logger.warn("exit 요청 후 task queue 종료 대기 시간이 초과되었습니다.")
             return False
 
+        return True
+
+    def _release_gripper_after_home(self, logger):
+        if self.release_gripper is None:
+            logger.warn("exit Home 복귀 후 실행할 그리퍼 release callback이 없습니다.")
+            return False
+
+        try:
+            self.release_gripper("exit_home_completed")
+        except Exception as exc:
+            logger.warn(f"exit Home 복귀 후 그리퍼 열기 실패: {exc}")
+            return False
+
+        logger.info("exit Home 복귀 후 그리퍼를 열었습니다.")
         return True
 
     def logger(self):
