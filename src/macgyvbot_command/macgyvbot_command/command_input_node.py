@@ -74,6 +74,7 @@ class CommandInputNode(Node):
         self.declare_parameter('tts_edge_rate', '+25%')
         self.declare_parameter('tts_pitch', '+35Hz')
         self.declare_parameter('tts_timeout_sec', 20.0)
+        self.declare_parameter('exit_shutdown_delay_sec', 4.0)
 
         self._use_gui = bool(self.get_parameter('use_gui').value)
         self._enable_microphone = bool(self.get_parameter('enable_microphone').value)
@@ -102,6 +103,8 @@ class CommandInputNode(Node):
         detector_image_topic = self.get_parameter('detector_image_topic').value
 
         self.window = None
+        self._shutdown_callback = None
+        self._exit_in_progress = False
         self._last_gui_text = ''
         self._last_target_label = ''
         self._last_camera_stamp_ns = None
@@ -119,6 +122,9 @@ class CommandInputNode(Node):
         )
         self._detector_timeout_ns = int(
             float(self.get_parameter('detector_timeout_sec').value) * 1_000_000_000
+        )
+        self._exit_shutdown_delay_ms = int(
+            float(self.get_parameter('exit_shutdown_delay_sec').value) * 1000
         )
 
         self._stt_pub = self.create_publisher(String, stt_text_topic, 10)
@@ -210,6 +216,9 @@ class CommandInputNode(Node):
         self._update_connection_status()
         self._append_log('info', 'GUI 연결 완료')
 
+    def set_shutdown_callback(self, callback):
+        self._shutdown_callback = callback
+
     def publish_user_text(self, text):
         text = (text or '').strip()
         if not text:
@@ -289,7 +298,10 @@ class CommandInputNode(Node):
 
         command = result.get('command')
         if command is not None:
-            if command.get('action') in ('resume', 'exit'):
+            if command.get('action') == 'exit':
+                self._handle_exit_command(command)
+                return
+            if command.get('action') == 'resume':
                 self._show_local_control_command(command)
             else:
                 self._publish_command(command)
@@ -304,6 +316,54 @@ class CommandInputNode(Node):
         action = command.get('action', 'unknown')
         tool_name = command.get('tool_name', 'unknown')
         self._append_log('info', f'/tool_command 발행: action={action}, tool={tool_name}')
+
+    def _handle_exit_command(self, command):
+        if self._exit_in_progress:
+            return
+        self._exit_in_progress = True
+
+        raw_text = command.get('raw_text', '종료')
+        self._append_bot(
+            '종료 요청을 확인했습니다. 작업을 정지하고 Home 위치로 복귀한 뒤 GUI를 종료합니다.'
+        )
+        self._append_log('info', '종료 시퀀스 시작: pause -> home -> GUI 종료')
+
+        pause_command = {
+            'tool_name': 'unknown',
+            'action': 'pause',
+            'target_mode': 'unknown',
+            'raw_text': raw_text,
+            'match_method': 'exit_sequence',
+            'match_score': 1.0,
+            'confidence': 1.0,
+            'status': 'accepted',
+        }
+        home_command = {
+            'tool_name': 'unknown',
+            'action': 'home',
+            'target_mode': 'unknown',
+            'raw_text': raw_text,
+            'match_method': 'exit_sequence',
+            'match_score': 1.0,
+            'confidence': 1.0,
+            'status': 'accepted',
+        }
+        self._publish_command(pause_command)
+        self._publish_command(home_command)
+        self._set_status('종료 준비')
+
+        if QTimer is not None:
+            QTimer.singleShot(self._exit_shutdown_delay_ms, self.request_shutdown)
+        else:
+            self.request_shutdown()
+
+    def request_shutdown(self):
+        if self._shutdown_callback is not None:
+            self._shutdown_callback()
+            return
+        self.get_logger().info('종료 요청을 받아 command_input_node를 종료합니다.')
+        if rclpy.ok():
+            rclpy.shutdown()
 
     def _publish_feedback_payload(self, payload):
         msg = String()
@@ -388,13 +448,11 @@ class CommandInputNode(Node):
                 return
 
             if command.get('action') == 'exit':
-                exit_message = (
-                    message
-                    or '종료 요청을 이해했습니다. 창 닫기 버튼이나 Ctrl+C로 종료해주세요.'
-                )
-                self._append_bot(exit_message)
-                self._append_log('info', '종료 명령 해석 완료: 로봇 명령으로는 발행하지 않음')
-                self._set_status('종료 요청 확인')
+                if not self._exit_in_progress:
+                    exit_message = message or '종료 요청을 이해했습니다.'
+                    self._append_bot(exit_message)
+                    self._append_log('info', '종료 명령 해석 완료')
+                    self._set_status('종료 요청 확인')
                 return
 
             accepted_message = message or '명령을 이해했습니다.'
@@ -899,6 +957,7 @@ def main(args=None):
             window.close()
             app.quit()
 
+        node.set_shutdown_callback(request_shutdown)
         signal.signal(signal.SIGINT, request_shutdown)
         signal.signal(signal.SIGTERM, request_shutdown)
 
