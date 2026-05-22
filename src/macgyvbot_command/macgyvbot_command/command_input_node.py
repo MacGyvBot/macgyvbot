@@ -15,7 +15,11 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
 
-from macgyvbot_config.topics import CAMERA_COLOR_TOPIC, HAND_GRASP_IMAGE_TOPIC
+from macgyvbot_config.topics import (
+    CAMERA_COLOR_TOPIC,
+    HAND_GRASP_IMAGE_TOPIC,
+    ROBOT_TASK_CONTROL_TOPIC,
+)
 from macgyvbot_command.ui.voice_command_window import (
     QApplication,
     QTimer,
@@ -74,7 +78,6 @@ class CommandInputNode(Node):
         self.declare_parameter('tts_edge_rate', '+25%')
         self.declare_parameter('tts_pitch', '+35Hz')
         self.declare_parameter('tts_timeout_sec', 20.0)
-        self.declare_parameter('exit_shutdown_delay_sec', 4.0)
 
         self._use_gui = bool(self.get_parameter('use_gui').value)
         self._enable_microphone = bool(self.get_parameter('enable_microphone').value)
@@ -104,11 +107,6 @@ class CommandInputNode(Node):
 
         self.window = None
         self._shutdown_callback = None
-        self._exit_in_progress = False
-        self._exit_home_sent = False
-        self._exit_shutdown_scheduled = False
-        self._exit_blocked_reported = False
-        self._exit_raw_text = ''
         self._last_feedback_key = None
         self._last_feedback_stamp_ns = 0
         self._feedback_dedupe_ns = 2_000_000_000
@@ -132,10 +130,6 @@ class CommandInputNode(Node):
         self._detector_timeout_ns = int(
             float(self.get_parameter('detector_timeout_sec').value) * 1_000_000_000
         )
-        self._exit_shutdown_delay_ms = int(
-            float(self.get_parameter('exit_shutdown_delay_sec').value) * 1000
-        )
-
         self._stt_pub = self.create_publisher(String, stt_text_topic, 10)
         self._compat_pub = (
             self.create_publisher(String, compat_topic, 10)
@@ -144,6 +138,11 @@ class CommandInputNode(Node):
         )
         self._tool_command_pub = self.create_publisher(String, tool_command_topic, 10)
         self._feedback_pub = self.create_publisher(String, command_feedback_topic, 10)
+        self._task_control_pub = self.create_publisher(
+            String,
+            ROBOT_TASK_CONTROL_TOPIC,
+            10,
+        )
 
         self.create_subscription(String, stt_text_topic, self._text_cb, 10)
         self.create_subscription(String, tool_command_topic, self._tool_command_cb, 10)
@@ -311,11 +310,21 @@ class CommandInputNode(Node):
 
         command = result.get('command')
         if command is not None:
-            if command.get('action') == 'exit':
-                self._handle_exit_command(command)
-                return
-            if command.get('action') == 'resume':
+            action = command.get("action")
+            if action in {"pause", "resume"}:
                 self._show_local_control_command(command)
+                self._send_task_control_request(action=action, reason=text)
+                return
+
+            elif action == 'exit':
+                self._show_local_control_command(command)
+                self._send_task_control_request(action=action, reason=text)
+                if QTimer is not None:
+                    QTimer.singleShot(500, self.request_shutdown)
+                else:
+                    self.request_shutdown()
+                return
+
             else:
                 self._publish_command(command)
 
@@ -329,80 +338,6 @@ class CommandInputNode(Node):
         action = command.get('action', 'unknown')
         tool_name = command.get('tool_name', 'unknown')
         self._append_log('info', f'/tool_command 발행: action={action}, tool={tool_name}')
-
-    def _handle_exit_command(self, command):
-        if self._exit_in_progress:
-            return
-        self._exit_in_progress = True
-        self._exit_home_sent = False
-        self._exit_shutdown_scheduled = False
-        self._exit_blocked_reported = False
-
-        raw_text = command.get('raw_text', '종료')
-        self._exit_raw_text = raw_text
-        self._append_bot(
-            '종료 요청을 확인했습니다. 먼저 로봇 정지를 요청하고, 안전하게 멈추면 Home 복귀 후 GUI를 종료합니다.'
-        )
-        self._append_log('info', '종료 시퀀스 시작: pause 요청 후 로봇 상태 대기')
-
-        pause_command = {
-            'tool_name': 'unknown',
-            'action': 'pause',
-            'target_mode': 'unknown',
-            'raw_text': raw_text,
-            'match_method': 'exit_sequence',
-            'match_score': 1.0,
-            'confidence': 1.0,
-            'status': 'accepted',
-        }
-        self._publish_command(pause_command)
-        self._set_status('종료 대기')
-
-        if QTimer is not None:
-            QTimer.singleShot(self._exit_shutdown_delay_ms * 2, self._handle_exit_timeout)
-
-    def _make_exit_home_command(self):
-        return {
-            'tool_name': 'unknown',
-            'action': 'home',
-            'target_mode': 'unknown',
-            'raw_text': self._exit_raw_text or '종료',
-            'match_method': 'exit_sequence',
-            'match_score': 1.0,
-            'confidence': 1.0,
-            'status': 'accepted',
-        }
-
-    def _handle_exit_timeout(self):
-        if not self._exit_in_progress or self._exit_shutdown_scheduled:
-            return
-
-        if self._exit_home_sent:
-            self._append_log('info', '종료 시퀀스: Home 복귀 완료 상태 대기 중')
-            return
-
-        self._append_bot(
-            '로봇 정지 확인이 아직 오지 않아 종료를 보류합니다. 작업이 멈춘 뒤 다시 종료해주세요.'
-        )
-        self._append_log('warn', '종료 보류: pause 완료 상태를 받지 못함')
-        self._set_status('종료 보류')
-        self._reset_exit_sequence()
-
-    def _reset_exit_sequence(self):
-        self._exit_in_progress = False
-        self._exit_home_sent = False
-        self._exit_shutdown_scheduled = False
-        self._exit_blocked_reported = False
-        self._exit_raw_text = ''
-
-    def _schedule_shutdown(self, delay_ms=700):
-        if self._exit_shutdown_scheduled:
-            return
-        self._exit_shutdown_scheduled = True
-        if QTimer is not None:
-            QTimer.singleShot(delay_ms, self.request_shutdown)
-        else:
-            self.request_shutdown()
 
     def request_shutdown(self):
         if self._shutdown_callback is not None:
@@ -491,19 +426,21 @@ class CommandInputNode(Node):
             if command.get('action') == 'resume':
                 resume_message = (
                     message
-                    or '재개 요청을 이해했습니다. 제어 인터페이스 연결 후 사용할 수 있습니다.'
+                    or '재개 요청을 로봇에 전달했습니다.'
                 )
                 self._append_bot(resume_message)
-                self._append_log('info', '재개 명령 해석 완료: 로봇 명령으로는 발행하지 않음')
-                self._set_status('재개 대기')
+                self._append_log('info', '재개 명령을 로봇 제어 토픽으로 전달했습니다.')
+                self._set_status('재개 요청 전달')
                 return
 
             if command.get('action') == 'exit':
-                if not self._exit_in_progress:
-                    exit_message = message or '종료 요청을 이해했습니다.'
-                    self._append_bot(exit_message)
-                    self._append_log('info', '종료 명령 해석 완료')
-                    self._set_status('종료 요청 확인')
+                exit_message = (
+                    message
+                    or '종료 요청을 이해했습니다. 현재 작업 중단을 로봇에 전달했습니다.'
+                )
+                self._append_bot(exit_message)
+                self._append_log('info', '종료 명령 해석 완료: 로봇 작업 중단 요청 발행')
+                self._set_status('종료 요청 확인')
                 return
 
             accepted_message = message or '명령을 이해했습니다.'
@@ -605,63 +542,6 @@ class CommandInputNode(Node):
 
         if view['show_chat']:
             self._append_bot(view['chat_message'], speak=view['speak'])
-
-        self._handle_exit_robot_status(status)
-
-    def _handle_exit_robot_status(self, status):
-        if not self._exit_in_progress:
-            return
-
-        state = str(status.get('status', '')).lower()
-        action = str(status.get('action', '')).lower()
-        command = status.get('command') or {}
-        command_action = str(command.get('action', '')).lower()
-        current_action = command_action or action
-
-        if state == 'busy':
-            if not self._exit_blocked_reported:
-                self._append_log('warn', f'종료 보류: {status.get("reason", "robot_busy")}')
-                self._set_status('종료 보류')
-                self._exit_blocked_reported = True
-            self._reset_exit_sequence()
-            return
-
-        if not self._exit_home_sent:
-            pause_done_states = {
-                'cancelled',
-                'paused',
-                'done',
-                'completed',
-                'success',
-                'failed',
-                'error',
-                'rejected',
-            }
-            if state not in pause_done_states:
-                return
-
-            self._append_log('info', f'종료 시퀀스: {state} 상태 확인 후 Home 복귀 요청')
-            self._publish_command(self._make_exit_home_command())
-            self._exit_home_sent = True
-            self._set_status('Home 복귀 대기')
-            return
-
-        if current_action != 'home':
-            return
-
-        if state in {'done', 'completed', 'success'}:
-            self._append_bot('Home 복귀가 완료되어 GUI를 종료합니다.', speak=False)
-            self._append_log('info', '종료 시퀀스 완료: GUI 종료')
-            self._set_status('종료')
-            self._schedule_shutdown()
-            return
-
-        if state in {'failed', 'error', 'rejected', 'busy'}:
-            message = status.get('message') or 'Home 복귀가 완료되지 않아 GUI 종료를 취소합니다.'
-            self._append_bot(message)
-            self._append_log('warn', f'종료 취소: home status={state}')
-            self._set_status('종료 취소')
-            self._reset_exit_sequence()
 
     def _camera_status_cb(self, _msg):
         self._last_camera_stamp_ns = self.get_clock().now().nanoseconds
@@ -777,7 +657,7 @@ class CommandInputNode(Node):
         panel_status = self._robot_panel_status(state, message)
         stage_text = self._robot_stage_text(state, message)
         severity = self._robot_status_severity(state)
-        log_message = self._robot_log_message(state, target_label, message, reason)
+        log_message = self._robot_log_message(status, state, target_label, message, reason)
         chat_message = message
 
         key = (state, str(tool_name), raw_message or message)
@@ -838,6 +718,7 @@ class CommandInputNode(Node):
             'success': '작업이 완료되었습니다.',
             'failed': '작업에 실패했습니다.',
             'error': '작업 중 오류가 발생했습니다.',
+            'tool_dropped': '공구 drop이 감지되었습니다.',
             'busy': '이미 다른 작업을 수행 중입니다.',
             'paused': '로봇이 일시정지되었습니다.',
             'resumed': '작업을 다시 시작합니다.',
@@ -883,6 +764,7 @@ class CommandInputNode(Node):
             'success': '완료',
             'failed': '실패',
             'error': '오류',
+            'tool_dropped': '공구 이탈',
             'busy': '작업 중',
             'paused': '일시정지',
             'resumed': '재개',
@@ -924,6 +806,7 @@ class CommandInputNode(Node):
             'success': '작업 완료',
             'failed': '작업 실패',
             'error': '작업 오류',
+            'tool_dropped': '공구 이탈 감지',
             'busy': '다른 작업 수행 중',
             'paused': '작업 일시정지',
             'resumed': '작업 재개',
@@ -947,6 +830,7 @@ class CommandInputNode(Node):
             'success',
             'failed',
             'error',
+            'tool_dropped',
             'busy',
             'paused',
             'resumed',
@@ -985,6 +869,7 @@ class CommandInputNode(Node):
             'success',
             'failed',
             'error',
+            'tool_dropped',
             'busy',
             'paused',
             'resumed',
@@ -1005,10 +890,37 @@ class CommandInputNode(Node):
             return 'warn'
         return 'info'
 
-    def _robot_log_message(self, state, target_label, message, reason):
+    def _robot_log_message(self, status, state, target_label, message, reason):
+        base = f'robot_status={state}, target={target_label}, message={message}'
+        details = self._robot_log_details(status, reason)
+        if details:
+            return f'{base}, {details}'
+        return base
+
+    def _robot_log_details(self, status, reason):
+        details = []
+        for key in ('action', 'step', 'phase', 'progress', 'source'):
+            value = status.get(key)
+            if value not in (None, ''):
+                details.append(f'{key}={value}')
+
+        command = status.get('command')
+        if isinstance(command, dict):
+            for source_key, label in (
+                ('action', 'cmd_action'),
+                ('target_mode', 'target_mode'),
+                ('match_method', 'method'),
+                ('confidence', 'confidence'),
+                ('command_id', 'command_id'),
+                ('raw_text', 'raw_text'),
+            ):
+                value = command.get(source_key)
+                if value not in (None, ''):
+                    details.append(f'{label}={value}')
+
         if reason:
-            return f'robot_status={state}, target={target_label}, message={message}, reason={reason}'
-        return f'robot_status={state}, target={target_label}, message={message}'
+            details.append(f'reason={reason}')
+        return ', '.join(details)
 
     def _tool_display_name(self, tool_name):
         label = str(tool_name or 'unknown').strip()
@@ -1096,6 +1008,22 @@ class CommandInputNode(Node):
         if self.window is not None and hasattr(self.window, 'set_task_status'):
             self.window.set_task_status(target_text, stage_text)
 
+    def _send_task_control_request(self, action, reason):
+        msg = String()
+        msg.data = json.dumps(
+            {
+                "action": action,
+                "reason": reason,
+                "source": "command_input",
+            },
+            ensure_ascii=False,
+        )
+        self._task_control_pub.publish(msg)
+        self._append_log(
+            "info",
+            f"/robot_task_control 발행: action={action}, reason={reason}",
+        )
+
     def destroy_node(self):
         if self._stt_service is not None:
             self._stt_service.stop()
@@ -1110,6 +1038,7 @@ def main(args=None):
 
     if node._use_gui:
         app = QApplication(sys.argv)
+        app.setQuitOnLastWindowClosed(True)
         window = VoiceCommandGuiWindow(node)
         node.attach_window(window)
         window.show()
@@ -1125,6 +1054,7 @@ def main(args=None):
             app.quit()
 
         node.set_shutdown_callback(request_shutdown)
+        app.aboutToQuit.connect(request_shutdown)
         signal.signal(signal.SIGINT, request_shutdown)
         signal.signal(signal.SIGTERM, request_shutdown)
 

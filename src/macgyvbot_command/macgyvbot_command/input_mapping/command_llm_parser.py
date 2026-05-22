@@ -528,7 +528,7 @@ class CommandLlmParser:
         if action == 'pause':
             return '정지 명령으로 이해했습니다.'
         if action == 'resume':
-            return '재개 명령으로 이해했습니다. 제어 인터페이스가 연결되면 작업 재개 요청으로 전달됩니다.'
+            return '재개 명령으로 이해했습니다. 작업 재개 요청으로 전달합니다.'
         if action == 'exit':
             return '종료 요청으로 이해했습니다. 안전을 위해 자동 종료하지 않고 안내만 표시합니다.'
         if action == 'home':

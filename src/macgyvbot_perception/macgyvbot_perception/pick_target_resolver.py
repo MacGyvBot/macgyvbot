@@ -27,6 +27,7 @@ class PickTargetResolver:
         color_image,
         depth_image,
         intrinsics,
+        use_bbox_center=False,
     ) -> PickTarget:
         """Build a projected target from already computed YOLO boxes."""
         if boxes is None:
@@ -39,14 +40,17 @@ class PickTargetResolver:
                 continue
 
             matched_target_label = True
-            selected = self.grasp_point_selector.select(
-                box,
-                label,
-                color_image,
-                depth_image,
-                intrinsics,
-                target_label,
-            )
+            if use_bbox_center:
+                selected = self.grasp_point_selector.select_bbox_center(box)
+            else:
+                selected = self.grasp_point_selector.select(
+                    box,
+                    label,
+                    color_image,
+                    depth_image,
+                    intrinsics,
+                    target_label,
+                )
             u, v, source, vlm_rpy_deg = selected
             target = self.depth_projector.pixel_to_base_target(
                 u,
@@ -78,6 +82,9 @@ class PickTargetResolver:
             else "target_not_found"
         )
         return self._not_found(target_label, reason)
+
+    def should_defer_vlm_until_top_view(self):
+        return self.grasp_point_selector.should_defer_vlm_until_top_view()
 
     @staticmethod
     def _not_found(label, reason) -> PickTarget:
