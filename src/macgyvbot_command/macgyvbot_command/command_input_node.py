@@ -241,7 +241,6 @@ class CommandInputNode(Node):
             return
 
         self._last_gui_text = text
-        self.get_logger().info(f'GUI 입력 publish: "{text}"')
         msg = String()
         msg.data = text
         self._stt_pub.publish(msg)
@@ -298,20 +297,17 @@ class CommandInputNode(Node):
 
         if text == self._last_gui_text:
             self._last_gui_text = ''
-            self.get_logger().info(f'/stt_text 수신: source=gui, text="{text}"')
             self._set_status('입력 수신')
             self._handle_text(text)
             return
 
         if self._consume_if_self_published(text):
-            self.get_logger().info(f'/stt_text self-published 입력 무시: "{text}"')
             return
 
         if self._is_recent_bot_echo(text) or self._looks_like_assistant_echo(text):
             self.get_logger().info(f'TTS echo로 보이는 입력을 무시합니다: "{text}"')
             return
 
-        self.get_logger().info(f'/stt_text 수신: source=voice_or_external, text="{text}"')
         self.get_logger().info(f'명령 해석 요청: "{text}"')
         self._append_user(text, source='voice')
         self._set_status('입력 수신')
@@ -353,11 +349,7 @@ class CommandInputNode(Node):
         self._tool_command_pub.publish(command_msg)
         action = command.get('action', 'unknown')
         tool_name = command.get('tool_name', 'unknown')
-        command_id = command.get('command_id', 'none')
-        self._append_log(
-            'info',
-            f'/tool_command 발행: id={command_id}, action={action}, tool={tool_name}',
-        )
+        self._append_log('info', f'/tool_command 발행: action={action}, tool={tool_name}')
         if not self._is_duplicate_command_card(command):
             self._display_command_result(command)
         return True
@@ -463,17 +455,9 @@ class CommandInputNode(Node):
             rclpy.shutdown()
 
     def _publish_feedback_payload(self, payload):
-        payload.setdefault('feedback_id', uuid.uuid4().hex)
         msg = String()
         msg.data = json.dumps(payload, ensure_ascii=False)
         self._feedback_pub.publish(msg)
-        command = payload.get('command') or {}
-        self.get_logger().info(
-            '/command_feedback 발행: '
-            f'id={payload.get("feedback_id")}, status={payload.get("status")}, '
-            f'action={command.get("action", "none")}, '
-            f'command_id={command.get("command_id", "none")}'
-        )
 
     def _tool_command_cb(self, msg):
         try:
@@ -482,16 +466,7 @@ class CommandInputNode(Node):
             self.get_logger().warn(f'/tool_command JSON 파싱 실패: {msg.data}')
             return
 
-        command_id = command.get('command_id', 'none')
-        self.get_logger().info(
-            '/tool_command 수신(GUI 표시용): '
-            f'id={command_id}, action={command.get("action", "unknown")}, '
-            f'tool={command.get("tool_name", "unknown")}, '
-            f'method={command.get("match_method", "unknown")}'
-        )
-
         if self._is_duplicate_command_card(command):
-            self.get_logger().info(f'/tool_command 카드 중복 표시 생략: id={command_id}')
             return
 
         self._display_command_result(command)
@@ -552,25 +527,14 @@ class CommandInputNode(Node):
             return
 
         if self._is_duplicate_feedback(feedback):
-            self.get_logger().info(
-                '/command_feedback 중복 수신 무시: '
-                f'id={feedback.get("feedback_id", "none")}, '
-                f'status={feedback.get("status", "unknown")}'
-            )
             return
 
         status = feedback.get('status', 'unknown')
         message = feedback.get('message', '')
         reason = feedback.get('reason', 'unknown')
-        command = feedback.get('command') or {}
-        self.get_logger().info(
-            '/command_feedback 수신: '
-            f'id={feedback.get("feedback_id", "none")}, status={status}, '
-            f'action={command.get("action", "none")}, '
-            f'command_id={command.get("command_id", "none")}'
-        )
 
         if status == 'accepted':
+            command = feedback.get('command') or {}
             if command.get('action') == 'pause':
                 stop_message = '정지 요청을 로봇에 전달했습니다.'
                 self._append_bot(stop_message, speak=False)
