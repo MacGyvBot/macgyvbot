@@ -30,8 +30,8 @@ else:
             super().__init__()
             self._node = node
             self.setWindowTitle('MacGyvBot Assistant')
-            self.resize(1420, 940)
-            self.setMinimumSize(1280, 840)
+            self.resize(1420, 900)
+            self.setMinimumSize(1280, 800)
             self._detector_pixmap = None
 
             self._chat_scroll = QScrollArea()
@@ -106,7 +106,7 @@ else:
             status_panel = QFrame()
             status_panel.setObjectName('statusPanel')
             status_panel.setFixedWidth(290)
-            status_panel.setMinimumHeight(555)
+            status_panel.setMinimumHeight(455)
             status_panel_layout = QVBoxLayout()
             status_panel_layout.setContentsMargins(16, 16, 16, 16)
             status_panel_layout.setSpacing(10)
@@ -138,7 +138,7 @@ else:
             detector_panel = QFrame()
             detector_panel.setObjectName('detectorPanel')
             detector_panel.setFixedWidth(540)
-            detector_panel.setMinimumHeight(555)
+            detector_panel.setMinimumHeight(455)
             detector_panel_layout = QVBoxLayout()
             detector_panel_layout.setContentsMargins(14, 14, 14, 10)
             detector_panel_layout.setSpacing(8)
@@ -188,7 +188,7 @@ else:
             left_workspace = QWidget()
             left_workspace_layout = QVBoxLayout()
             left_workspace_layout.setContentsMargins(0, 0, 0, 0)
-            left_workspace_layout.setSpacing(24)
+            left_workspace_layout.setSpacing(18)
             left_workspace.setLayout(left_workspace_layout)
 
             top_left_layout = QHBoxLayout()
