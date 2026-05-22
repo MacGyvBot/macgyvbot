@@ -19,6 +19,7 @@ from macgyvbot_command.input_mapping.command_vocabulary import (
     EXIT_KEYWORDS,
     HOME_KEYWORDS,
     NO_WORDS,
+    RELEASE_KEYWORDS,
     RESUME_KEYWORDS,
     STOP_KEYWORDS,
     YES_WORDS,
@@ -110,6 +111,19 @@ class CommandLlmParser:
                     'target_mode': 'unknown',
                     'raw_text': text,
                     'match_method': 'home_keyword',
+                    'match_score': 1.0,
+                    'confidence': 1.0,
+                }
+            )
+
+        if find_action(text) == 'release':
+            return self._accepted_result(
+                {
+                    'tool_name': 'unknown',
+                    'action': 'release',
+                    'target_mode': 'unknown',
+                    'raw_text': text,
+                    'match_method': 'release_keyword',
                     'match_score': 1.0,
                     'confidence': 1.0,
                 }
@@ -508,6 +522,8 @@ class CommandLlmParser:
                 return '가리킨 공구를 정리하라는 뜻으로 이해했습니다.'
             return f'{tool_name}를 정리하라는 뜻으로 이해했습니다.'
         if action == 'release':
+            if tool_name == 'unknown':
+                return '그리퍼를 열거나 잡고 있는 공구를 놓으라는 뜻으로 이해했습니다.'
             return f'{tool_name}를 놓으라는 뜻으로 이해했습니다.'
         if action == 'pause':
             return '정지 명령으로 이해했습니다.'
@@ -646,6 +662,8 @@ class CommandLlmParser:
 - "아까 가져온 거", "방금 가져온 거", "전에 준 거"처럼 이전 공구를 가리키면 현재 맥락의 최근 참조 가능한 공구를 tool_name으로 쓰고 context_used를 previous_tool로 둔다.
 - 최근 참조 가능한 공구가 없으면 이전 공구를 추측하지 말고 tool_name unknown으로 둔다.
 - "정리해", "가져다놔", "가져가", "제자리에 둬", "서랍에 넣어", "반납해"는 return action이다.
+- "놔", "놔줘", "놓아줘", "그리퍼 열어", "그리퍼 오픈"은 release action이다.
+- 그리퍼를 열라는 표현을 공구 가져오기나 screwdriver로 추측하지 않는다.
 - "지금 뭐해", "어디까지 했어", "현재 상태 알려줘"는 status_query intent다.
 - "고마워", "안녕", "알겠어" 같은 대화는 smalltalk intent다.
 - status_query와 smalltalk는 tool_name unknown, action unknown, target_mode unknown으로 둔다.
@@ -684,6 +702,12 @@ class CommandLlmParser:
 
 입력: 길이 재는 거 줘
 출력: {{"intent":"command","tool_name":"tape_measure","action":"bring","target_mode":"named","confidence":0.82,"needs_confirmation":false,"context_used":"none"}}
+
+입력: 놔줘
+출력: {{"intent":"command","tool_name":"unknown","action":"release","target_mode":"unknown","confidence":0.95,"needs_confirmation":false,"context_used":"none"}}
+
+입력: 그리퍼 열어
+출력: {{"intent":"command","tool_name":"unknown","action":"release","target_mode":"unknown","confidence":0.95,"needs_confirmation":false,"context_used":"none"}}
 
 입력: 멈춰
 출력: {{"intent":"command","tool_name":"unknown","action":"pause","target_mode":"unknown","confidence":0.90,"needs_confirmation":false,"context_used":"none"}}
@@ -1098,6 +1122,9 @@ class CommandLlmParser:
             return 'home'
         if action == 'home':
             return 'unknown'
+        if self._has_release_intent(raw_text):
+            return 'release'
+
         return_tokens = (
             '가져다가놔',
             '가져다가놓',
@@ -1159,6 +1186,23 @@ class CommandLlmParser:
     def _has_home_intent(raw_text):
         normalized = normalize_text(raw_text)
         return any(normalize_text(keyword) in normalized for keyword in HOME_KEYWORDS)
+
+    @staticmethod
+    def _has_release_intent(raw_text):
+        normalized = normalize_text(raw_text)
+        if any(normalize_text(keyword) in normalized for keyword in RELEASE_KEYWORDS):
+            return True
+        return any(
+            token in normalized
+            for token in (
+                'opengripper',
+                'gripperopen',
+                '그리퍼열',
+                '그리퍼오픈',
+                '집게열',
+                '집게오픈',
+            )
+        )
 
     def _has_previous_reference(self, raw_text):
         normalized = self._normalize_answer(raw_text)

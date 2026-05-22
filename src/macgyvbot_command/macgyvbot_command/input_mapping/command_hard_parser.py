@@ -115,12 +115,12 @@ def find_action(text):
         if normalize_text(keyword) in normalized:
             return 'return'
 
-    for keyword in BRING_KEYWORDS:
-        if normalize_text(keyword) in normalized:
-            return 'bring'
-
     for keyword in RELEASE_KEYWORDS:
         if normalize_text(keyword) in normalized:
             return 'release'
+
+    for keyword in BRING_KEYWORDS:
+        if normalize_text(keyword) in normalized:
+            return 'bring'
 
     return 'unknown'
