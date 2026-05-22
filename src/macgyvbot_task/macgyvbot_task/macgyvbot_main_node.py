@@ -37,6 +37,7 @@ from macgyvbot_config.vlm import DEFAULT_GRASP_POINT_MODE
 from macgyvbot_manipulation.moveit_controller import (
     MoveItController,
 )
+from macgyvbot_manipulation.drawer_motion import DrawerMotionFlow
 from macgyvbot_manipulation.onrobot_gripper import RG
 from macgyvbot_manipulation.robot_pose import get_ee_matrix
 from macgyvbot_perception.depth_projection import DepthProjector
@@ -210,6 +211,12 @@ class MacGyvBotNode(Node):
             should_interrupt=self._motion_interrupted,
             node=self,
         )
+        self.drawer_flow = DrawerMotionFlow(
+            self.robot,
+            self.motion,
+            self.gripper,
+            self._cooperative_wait,
+        )
         self.home_initializer = RobotHomeInitializer(
             self.robot,
             self.motion,
@@ -241,6 +248,8 @@ class MacGyvBotNode(Node):
             self.start_pick_sequence,
             self._publish_robot_status,
             self.get_logger(),
+            drawer_ready_for_target=self._drawer_ready_for_target,
+            prepare_drawer_for_target=self._prepare_drawer_for_target,
         )
         control_events = {
             "exit": self.exit_req,
@@ -254,6 +263,7 @@ class MacGyvBotNode(Node):
             self.state,
             self.tool_hold_monitor,
             control_events=control_events,
+            drawer_flow=self.drawer_flow,
         )
         self.return_runner = ReturnSequenceRunner(
             self.robot,
@@ -262,6 +272,8 @@ class MacGyvBotNode(Node):
             self.state,
             self.tool_hold_monitor,
             control_events=control_events,
+            drawer_flow=self.drawer_flow,
+            detect_home_tool_label=self._detect_home_tool_label,
         )
         self.task_coordinator = TaskControlCoordinator(
             self.pick_runner,
@@ -563,13 +575,122 @@ class MacGyvBotNode(Node):
     def _set_active_target(self, tool_name, command=None):
         self.state.target_label = tool_name
         self.state.current_command = command
+        self.state.drawer_prepared_tool = None
+        self.state.drawer_preparing_tool = None
 
     def _clear_pending_target(self):
         self.state.target_label = None
         self.state.current_command = None
+        self.state.drawer_prepared_tool = None
+        self.state.drawer_preparing_tool = None
 
     def _reset_search_status(self):
         self.state._last_search_status_target = None
+
+    def _drawer_ready_for_target(self, target_label):
+        drawer_id = self.drawer_flow.drawer_id_for_tool(target_label)
+        if drawer_id is None:
+            return True
+        return self.state.drawer_prepared_tool == target_label
+
+    def _prepare_drawer_for_target(self, target_label):
+        drawer_id = self.drawer_flow.drawer_id_for_tool(target_label)
+        if drawer_id is None:
+            return False
+
+        if self.state.drawer_preparing_tool == target_label:
+            return True
+
+        if self.state.picking:
+            return True
+
+        self.state.picking = True
+        self.state.drawer_preparing_tool = target_label
+        self._publish_robot_status(
+            "opening_drawer",
+            tool_name=target_label,
+            action="bring",
+            message=f"{target_label}가 들어있는 서랍을 엽니다.",
+            command=self.state.current_command,
+        )
+        worker = threading.Thread(
+            target=self._prepare_drawer_worker,
+            args=(target_label, drawer_id),
+            daemon=True,
+        )
+        worker.start()
+        return True
+
+    def _prepare_drawer_worker(self, target_label, drawer_id):
+        try:
+            log = self.get_logger()
+            log.info(
+                f"{target_label} 탐색 전 drawer {drawer_id}를 열고 관찰 위치로 이동합니다."
+            )
+            ok = self.drawer_flow.open_drawer(drawer_id, log)
+            if ok:
+                self._publish_robot_status(
+                    "observing_drawer",
+                    tool_name=target_label,
+                    action="bring",
+                    message=f"{target_label} 탐색을 위해 서랍 내부를 관찰합니다.",
+                    command=self.state.current_command,
+                )
+                ok = self.drawer_flow.observe_drawer(drawer_id, log)
+
+            if ok:
+                self.state.drawer_prepared_tool = target_label
+                self._publish_robot_status(
+                    "searching",
+                    tool_name=target_label,
+                    action="bring",
+                    message=f"{target_label} 탐색을 시작합니다.",
+                    command=self.state.current_command,
+                )
+            else:
+                self._publish_robot_status(
+                    "failed",
+                    tool_name=target_label,
+                    action="bring",
+                    message=f"{target_label} 탐색 전 서랍 준비에 실패했습니다.",
+                    reason="drawer_prepare_failed",
+                    command=self.state.current_command,
+                )
+                self.state.target_label = None
+                self.state.current_command = None
+        finally:
+            self.state.drawer_preparing_tool = None
+            self.state.picking = False
+
+    def _detect_home_tool_label(self):
+        if self.state.color_image is None:
+            return None
+
+        results = self.detector.detect(self.state.color_image)
+        boxes = results[0].boxes if results else None
+        if boxes is None:
+            return None
+
+        supported = self.drawer_flow.supported_tool_labels()
+        for box in boxes:
+            label = self._box_label(box)
+            if label in supported:
+                return label
+        return None
+
+    def _box_label(self, box):
+        try:
+            class_id = int(box.cls[0])
+        except (TypeError, IndexError):
+            class_id = int(box.cls)
+        return str(self.detector.names[class_id])
+
+    @staticmethod
+    def _cooperative_wait(duration_sec):
+        end_time = time.monotonic() + max(0.0, float(duration_sec))
+        while rclpy.ok() and time.monotonic() < end_time:
+            remaining = end_time - time.monotonic()
+            time.sleep(min(0.02, max(0.0, remaining)))
 
     def _hand_grasp_cb(self, msg):
         try:

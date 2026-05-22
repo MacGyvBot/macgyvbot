@@ -16,6 +16,8 @@ class PickFrameProcessor:
         start_pick_sequence,
         status_publisher,
         logger,
+        drawer_ready_for_target=None,
+        prepare_drawer_for_target=None,
     ):
         self.state = state
         self.detector = detector
@@ -23,6 +25,12 @@ class PickFrameProcessor:
         self.start_pick_sequence = start_pick_sequence
         self.status_publisher = status_publisher
         self.logger = logger
+        self.drawer_ready_for_target = drawer_ready_for_target or (
+            lambda target_label: True
+        )
+        self.prepare_drawer_for_target = prepare_drawer_for_target or (
+            lambda target_label: False
+        )
 
     def has_camera_state(self):
         return (
@@ -33,6 +41,12 @@ class PickFrameProcessor:
 
     def process_current_frame(self):
         """Detect objects, optionally handle target pick, and return a display frame."""
+        if self.state.target_label and not self.drawer_ready_for_target(
+            self.state.target_label
+        ):
+            self.prepare_drawer_for_target(self.state.target_label)
+            return self.state.color_image.copy()
+
         results = self.detector.detect(self.state.color_image)
         annotated_frame = results[0].plot()
 

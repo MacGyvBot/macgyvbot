@@ -28,6 +28,8 @@ class ReturnSequenceRunner:
         state,
         tool_hold_monitor=None,
         control_events=None,
+        drawer_flow=None,
+        detect_home_tool_label=None,
     ):
         self.robot = robot
         self.motion = motion_controller
@@ -35,6 +37,8 @@ class ReturnSequenceRunner:
         self.state = state
         self.tool_hold_monitor = tool_hold_monitor
         self.control_events = control_events or {}
+        self.drawer_flow = drawer_flow
+        self.detect_home_tool_label = detect_home_tool_label or (lambda: None)
         self.reporter = ReturnStatusReporter(state)
         self.handoff = ReturnHandoffFlow(
             robot,
@@ -62,12 +66,22 @@ class ReturnSequenceRunner:
             "command": command,
             "requested_tool": command.get("tool_name", "unknown"),
             "tool_name": None,
+            "observed_tool": None,
+            "drawer_id": None,
             "ori": self.state.home_ori,
         }
         return [
             TaskStep("return/prepare", lambda: self._prepare(context)),
             TaskStep("return/receive_tool", lambda: self._receive_tool(context)),
             TaskStep("return/place_home", lambda: self._place_home(context)),
+            TaskStep(
+                "return/resolve_home_observed_drawer",
+                lambda: self._resolve_home_observed_drawer(context),
+            ),
+            TaskStep(
+                "return/open_close_home_observed_drawer",
+                lambda: self._open_close_home_observed_drawer(context),
+            ),
             TaskStep(
                 "return/done",
                 lambda: self._publish_done(context),
@@ -142,6 +156,54 @@ class ReturnSequenceRunner:
             context["command"],
         )
         return True
+
+    def _resolve_home_observed_drawer(self, context):
+        if self.drawer_flow is None:
+            return True
+
+        observed_tool = self.detect_home_tool_label()
+        if observed_tool is None:
+            self.reporter.fail(
+                context["tool_name"] or context["requested_tool"],
+                "Home 위치 관찰에서 반납 공구 라벨을 찾지 못했습니다.",
+                "return_home_observed_tool_not_found",
+                context["command"],
+                self.state.logger(),
+            )
+            return False
+
+        drawer_id = self.drawer_flow.drawer_id_for_tool(observed_tool)
+        if drawer_id is None:
+            self.reporter.fail(
+                observed_tool,
+                f"{observed_tool}에 매핑된 서랍이 없습니다.",
+                "return_home_observed_tool_drawer_unmapped",
+                context["command"],
+                self.state.logger(),
+            )
+            return False
+
+        context["observed_tool"] = observed_tool
+        context["drawer_id"] = drawer_id
+        self.state.logger().info(
+            f"Home 관찰 라벨 기준 drawer 선택: tool={observed_tool}, "
+            f"drawer={drawer_id}"
+        )
+        return True
+
+    def _open_close_home_observed_drawer(self, context):
+        drawer_id = context.get("drawer_id")
+        observed_tool = context.get("observed_tool")
+        if self.drawer_flow is None or drawer_id is None:
+            return True
+
+        self.reporter.publish(
+            "opening_drawer",
+            observed_tool,
+            f"{observed_tool} 보관 서랍을 열고 닫습니다.",
+            context["command"],
+        )
+        return self.drawer_flow.open_and_close(drawer_id, self.state.logger())
 
     def _recover_to_home(self, tool_name, command, logger, reason):
         self.reporter.publish(

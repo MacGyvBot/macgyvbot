@@ -26,6 +26,7 @@ class PickSequenceRunner:
         state,
         tool_hold_monitor=None,
         control_events=None,
+        drawer_flow=None,
     ):
         self.robot = robot
         self.motion = motion_controller
@@ -33,6 +34,7 @@ class PickSequenceRunner:
         self.state = state
         self.tool_hold_monitor = tool_hold_monitor
         self.control_events = control_events or {}
+        self.drawer_flow = drawer_flow
         self.target_planner = PickTargetPlanner(robot)
         self.handoff = PickHandoffFlow(
             robot,
@@ -58,7 +60,10 @@ class PickSequenceRunner:
 
         log = self.state.logger()
         plan = self.target_planner.plan(bx, by, bz, log)
-        context = {"ori": self.state.home_ori}
+        context = {
+            "ori": self.state.home_ori,
+            "drawer_id": self._drawer_id_for_current_target(),
+        }
 
         log.info(
             f"시퀀스 시작: Target({plan.target_x:.3f}, {plan.target_y:.3f}), "
@@ -150,6 +155,10 @@ class PickSequenceRunner:
                     lambda: self._wait_human_grasp(plan, context["ori"]),
                 ),
                 TaskStep("pick/release_to_human", self._release_to_human),
+                TaskStep(
+                    "pick/close_drawer",
+                    lambda: self._close_drawer_after_handoff(context),
+                ),
                 TaskStep("pick/home_after_handoff", self._home_after_handoff),
                 TaskStep("pick/done", self._publish_done, retry_on_pause=False),
             ]
@@ -354,6 +363,22 @@ class PickSequenceRunner:
         self.state.logger().info("10단계: 전달 후 Home 위치로 복귀")
         return self.handoff.move_home_after_handoff(self.state.logger())
 
+    def _close_drawer_after_handoff(self, context):
+        drawer_id = context.get("drawer_id")
+        if self.drawer_flow is None or drawer_id is None:
+            return True
+
+        log = self.state.logger()
+        log.info(f"사용자 전달 후 drawer {drawer_id}를 닫습니다.")
+        self.state._publish_robot_status(
+            "closing_drawer",
+            tool_name=self.state.target_label,
+            action="bring",
+            message=f"{self.state.target_label}가 있던 서랍을 닫습니다.",
+            command=self.state.current_command,
+        )
+        return self.drawer_flow.close_drawer(drawer_id, log)
+
     def _publish_done(self):
         self.state.logger().info("Pick 시퀀스 완료")
         self.state._publish_robot_status(
@@ -362,6 +387,11 @@ class PickSequenceRunner:
             command=self.state.current_command,
         )
         return True
+
+    def _drawer_id_for_current_target(self):
+        if self.drawer_flow is None:
+            return None
+        return self.drawer_flow.drawer_id_for_tool(self.state.target_label)
 
     def _interrupted(self):
         return any(
