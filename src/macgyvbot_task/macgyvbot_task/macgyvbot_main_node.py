@@ -577,6 +577,7 @@ class MacGyvBotNode(Node):
         self.state.current_command = command
         self.state.drawer_prepared_tool = None
         self.state.drawer_preparing_tool = None
+        self._prepare_drawer_for_target(tool_name)
 
     def _clear_pending_target(self):
         self.state.target_label = None
