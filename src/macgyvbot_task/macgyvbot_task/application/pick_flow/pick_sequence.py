@@ -4,11 +4,13 @@ import time
 
 import rclpy
 
+from macgyvbot_config.drawer import DRAWER_1_SAFE_Z_OFFSET_M
 from macgyvbot_config.timing import SEQUENCE_WAIT_POLL_SEC
 from macgyvbot_manipulation.robot_pose import (
     current_ee_orientation,
     make_safe_pose,
 )
+from macgyvbot_manipulation.robot_safezone import SAFE_Z_MIN
 from macgyvbot_task.application.pick_flow.pick_grasp_flow import PickGraspFlow
 from macgyvbot_task.application.pick_flow.pick_handoff_flow import PickHandoffFlow
 from macgyvbot_task.application.pick_flow.pick_target_planner import PickTargetPlanner
@@ -59,10 +61,19 @@ class PickSequenceRunner:
         self.state.last_tool_mask_lock_result = None
 
         log = self.state.logger()
-        plan = self.target_planner.plan(bx, by, bz, log)
+        drawer_id = self._drawer_id_for_current_target()
+        safe_z_min = self._safe_z_min_for_drawer(drawer_id)
+        plan = self.target_planner.plan(
+            bx,
+            by,
+            bz,
+            log,
+            safe_z_min=safe_z_min,
+        )
         context = {
             "ori": self.state.home_ori,
-            "drawer_id": self._drawer_id_for_current_target(),
+            "drawer_id": drawer_id,
+            "safe_z_min": safe_z_min,
         }
 
         log.info(
@@ -71,7 +82,8 @@ class PickSequenceRunner:
             f"corrected_bz={plan.corrected_bz:.3f}, "
             f"travel_z={plan.travel_z:.3f}, "
             f"approach_z={plan.approach_z:.3f}, "
-            f"grasp_z={plan.grasp_z:.3f}"
+            f"grasp_z={plan.grasp_z:.3f}, "
+            f"safe_z_min={safe_z_min:.3f}"
         )
 
         steps = [
@@ -148,11 +160,11 @@ class PickSequenceRunner:
                 ),
                 TaskStep(
                     "pick/move_to_handoff",
-                    lambda: self._move_to_handoff(plan, context["ori"]),
+                    lambda: self._move_to_handoff(plan, context),
                 ),
                 TaskStep(
                     "pick/wait_human_grasp",
-                    lambda: self._wait_human_grasp(plan, context["ori"]),
+                    lambda: self._wait_human_grasp(plan, context),
                 ),
                 TaskStep("pick/release_to_human", self._release_to_human),
                 TaskStep(
@@ -284,9 +296,9 @@ class PickSequenceRunner:
         )
         return False
 
-    def _move_to_handoff(self, plan, ori):
+    def _move_to_handoff(self, plan, context):
         log = self.state.logger()
-        handoff_pose = self.handoff.move_to_handoff_pose(ori, log)
+        handoff_pose = self.handoff.move_to_handoff_pose(context["ori"], log)
         if handoff_pose[0] is not None:
             return True
 
@@ -299,8 +311,9 @@ class PickSequenceRunner:
             plan.target_y,
             plan.travel_z,
             plan.grasp_z,
-            ori,
+            context["ori"],
             log,
+            safe_z_min=context["safe_z_min"],
         )
         status = "returned" if returned else "failed"
         self.state._publish_robot_status(
@@ -315,7 +328,7 @@ class PickSequenceRunner:
         )
         return False
 
-    def _wait_human_grasp(self, plan, ori):
+    def _wait_human_grasp(self, plan, context):
         log = self.state.logger()
         log.info("9단계: 사용자 잡기 인식 대기")
         self.state._publish_robot_status(
@@ -335,8 +348,9 @@ class PickSequenceRunner:
             plan.target_y,
             plan.travel_z,
             plan.grasp_z,
-            ori,
+            context["ori"],
             log,
+            safe_z_min=context["safe_z_min"],
         )
         status = "returned" if returned else "failed"
         self.state._publish_robot_status(
@@ -392,6 +406,12 @@ class PickSequenceRunner:
         if self.drawer_flow is None:
             return None
         return self.drawer_flow.drawer_id_for_tool(self.state.target_label)
+
+    @staticmethod
+    def _safe_z_min_for_drawer(drawer_id):
+        if drawer_id == 1:
+            return SAFE_Z_MIN + DRAWER_1_SAFE_Z_OFFSET_M
+        return SAFE_Z_MIN
 
     def _interrupted(self):
         return any(

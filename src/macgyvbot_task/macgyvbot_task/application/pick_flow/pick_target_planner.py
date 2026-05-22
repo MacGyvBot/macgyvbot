@@ -19,7 +19,7 @@ class PickTargetPlanner:
     def __init__(self, robot):
         self.robot = robot
 
-    def plan(self, bx, by, bz, logger):
+    def plan(self, bx, by, bz, logger, safe_z_min=SAFE_Z_MIN):
         corrected_bz = bz - OBJECT_Z_HEIGHT_BIAS_M
         grasp_z = SAFE_Z_MIN + corrected_bz - GRASP_Z_OFFSET
         approach_z = grasp_z + APPROACH_Z_OFFSET
@@ -38,6 +38,22 @@ class PickTargetPlanner:
                 f"grasp_z({grasp_z:.3f})보다 낮아 grasp_z로 맞춥니다."
             )
             approach_z = grasp_z
+
+        if grasp_z < safe_z_min:
+            logger.warn(
+                f"계산된 grasp_z({grasp_z:.3f})가 "
+                f"safe_z_min({safe_z_min:.3f})보다 낮아 "
+                "safe_z_min으로 맞춥니다."
+            )
+            grasp_z = safe_z_min
+
+        if approach_z < safe_z_min:
+            logger.warn(
+                f"계산된 approach_z({approach_z:.3f})가 "
+                f"safe_z_min({safe_z_min:.3f})보다 낮아 "
+                "safe_z_min으로 맞춥니다."
+            )
+            approach_z = safe_z_min
 
         return PickMotionPlan(
             target_x=target_x,
