@@ -43,7 +43,6 @@ from macgyvbot_config.pick import (
     SAFE_Z,
 )
 from macgyvbot_config.return_flow import (
-    RETURN_FLOOR_MAX_BASE_Z_M,
     RETURN_HAND_CLOSE_ROI_CENTER_X,
     RETURN_HAND_CLOSE_ROI_CENTER_Y,
     RETURN_HAND_CLOSE_DEPTH_MAX_MM,

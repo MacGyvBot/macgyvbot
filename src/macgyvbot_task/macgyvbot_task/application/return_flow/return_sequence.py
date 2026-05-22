@@ -6,9 +6,6 @@ import rclpy
 
 from macgyvbot_config.timing import SEQUENCE_WAIT_POLL_SEC
 from macgyvbot_manipulation.handover_targeting import move_to_observation_pose
-from macgyvbot_task.application.return_flow.return_floor_pickup_flow import (
-    ReturnFloorPickupFlow,
-)
 from macgyvbot_task.application.return_flow.return_handoff_flow import (
     ReturnHandoffFlow,
 )
@@ -16,7 +13,6 @@ from macgyvbot_task.application.return_flow.return_home_placement_flow import (
     ReturnHomePlacementFlow,
 )
 from macgyvbot_task.application.return_flow.return_target_resolver import (
-    RETURN_SOURCE_FLOOR,
     RETURN_SOURCE_HAND,
     ReturnTargetResolver,
 )
@@ -27,7 +23,7 @@ from macgyvbot_task.application.task_control.task_step import TaskStep
 
 
 class ReturnSequenceRunner:
-    """Build return workflow steps for hand or floor return targets."""
+    """Build return workflow steps for camera-gated hand return targets."""
 
     def __init__(
         self,
@@ -35,7 +31,6 @@ class ReturnSequenceRunner:
         motion_controller,
         gripper,
         state,
-        pick_target_resolver,
         tool_hold_monitor=None,
         control_events=None,
     ):
@@ -48,7 +43,6 @@ class ReturnSequenceRunner:
         self.reporter = ReturnStatusReporter(state)
         self.target_resolver = ReturnTargetResolver(
             state,
-            pick_target_resolver,
             self._cooperative_wait,
         )
         self.handoff = ReturnHandoffFlow(
@@ -60,15 +54,6 @@ class ReturnSequenceRunner:
             self._cooperative_wait,
             tool_hold_monitor,
             interrupted=self._interrupted,
-        )
-        self.floor_pickup = ReturnFloorPickupFlow(
-            robot,
-            motion_controller,
-            gripper,
-            state,
-            self.reporter,
-            self._cooperative_wait,
-            tool_hold_monitor,
         )
         self.placement = ReturnHomePlacementFlow(
             robot,
@@ -133,7 +118,7 @@ class ReturnSequenceRunner:
         self.reporter.publish(
             "checking_return_target",
             requested_tool,
-            "반납 공구가 손에 있는지 바닥에 있는지 확인합니다.",
+            "카메라 기준 반납 공구 위치를 확인합니다.",
             command,
         )
         target = self.target_resolver.resolve(requested_tool, log)
@@ -147,40 +132,28 @@ class ReturnSequenceRunner:
                 command,
                 log,
             )
-        elif target.source == RETURN_SOURCE_FLOOR:
-            self.reporter.publish(
-                "return_floor_detected",
-                target.tool_name,
-                "바닥에 있는 반납 공구를 집습니다.",
-                command,
-            )
-            tool_name, failure_reason = self.floor_pickup.pick(
-                target.floor_target,
-                command,
-                log,
-            )
         else:
-            failure_reason = target.reason or "return_target_not_found"
-            self.reporter.fail(
+            log.info(
+                "손 위치 목표를 찾지 못했습니다. "
+                "현재 카메라 ROI/depth 조건으로 grasp 가능 여부를 확인합니다."
+            )
+            self.reporter.publish(
+                "checking_return_target",
                 requested_tool,
-                "반납받을 손 또는 바닥 공구를 찾지 못했습니다.",
-                failure_reason,
+                "카메라 ROI와 거리 조건 안에 공구가 들어오는지 확인합니다.",
+                command,
+                reason=target.reason or "hand_target_not_found",
+            )
+            tool_name, failure_reason = self.handoff.grasp_at_current_position(
+                requested_tool,
                 command,
                 log,
             )
-            self._recover_to_home(
-                requested_tool,
-                command,
-                log,
-                reason=failure_reason,
-            )
-            return False
 
         if tool_name is None:
             if self._interrupted() or failure_reason in {
                 "interrupted",
                 "return_grasp_failed",
-                "return_floor_grasp_failed",
             }:
                 return False
 
@@ -238,41 +211,14 @@ class ReturnSequenceRunner:
         self.reporter.publish(
             "checking_return_target",
             target.tool_name,
-            "이동한 위치에서 손과 바닥 공구를 다시 확인합니다.",
+            "카메라 ROI와 거리 조건 안에 공구가 들어오는지 확인합니다.",
             command,
         )
-        local_target = self.target_resolver.resolve(requested_tool, logger)
-        if local_target.tool_name and local_target.tool_name != "unknown":
-            self.state.target_label = local_target.tool_name
-
-        if local_target.source == RETURN_SOURCE_HAND:
-            return self.handoff.grasp_at_current_position(
-                local_target.tool_name,
-                command,
-                logger,
-            )
-
-        if local_target.source == RETURN_SOURCE_FLOOR:
-            self.reporter.publish(
-                "return_floor_detected",
-                local_target.tool_name,
-                "이동한 위치에서 바닥 반납 공구를 확인했습니다.",
-                command,
-            )
-            return self.floor_pickup.pick(
-                local_target.floor_target,
-                command,
-                logger,
-            )
-
-        self.reporter.fail(
+        return self.handoff.grasp_at_current_position(
             target.tool_name,
-            "이동한 위치에서 손 또는 바닥 공구를 찾지 못했습니다.",
-            local_target.reason or "return_target_not_found_after_move",
             command,
             logger,
         )
-        return None, local_target.reason or "return_target_not_found_after_move"
 
     def _move_to_observation_pose(self, tool_name, command, logger):
         self.reporter.publish(

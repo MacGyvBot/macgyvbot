@@ -263,7 +263,6 @@ class MacGyvBotNode(Node):
             self.motion,
             self.gripper,
             self.state,
-            self.pick_target_resolver,
             self.tool_hold_monitor,
             control_events=control_events,
         )

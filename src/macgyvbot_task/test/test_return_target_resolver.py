@@ -46,9 +46,7 @@ sys.modules.setdefault("scipy", scipy_module)
 sys.modules.setdefault("scipy.spatial", scipy_spatial_module)
 sys.modules.setdefault("scipy.spatial.transform", scipy_transform_module)
 
-from macgyvbot_domain.target_models import PickTarget
 from macgyvbot_task.application.return_flow.return_target_resolver import (
-    RETURN_SOURCE_FLOOR,
     RETURN_SOURCE_HAND,
     RETURN_SOURCE_NONE,
     ReturnTargetResolver,
@@ -58,29 +56,6 @@ from macgyvbot_task.application.return_flow.return_target_resolver import (
 class FakeLogger:
     def warn(self, message):
         pass
-
-
-class FakeDetector:
-    names = {0: "hammer"}
-
-    def detect(self, image):
-        return [types.SimpleNamespace(boxes=["box"])]
-
-
-class FakePickTargetResolver:
-    def __init__(self, target):
-        self.detector = FakeDetector()
-        self.target = target
-
-    def target_from_boxes(
-        self,
-        boxes,
-        target_label,
-        color_image,
-        depth_image,
-        intrinsics,
-    ):
-        return self.target
 
 
 class FakeState:
@@ -95,20 +70,7 @@ def no_wait(_duration_sec):
     pass
 
 
-def make_floor_target(found=True, reason="", base_z=0.06):
-    return PickTarget(
-        found=found,
-        label="hammer",
-        pixel=(10, 10) if found else None,
-        base_xyz=(0.4, 0.1, base_z) if found else None,
-        depth_m=0.5 if found else None,
-        yaw_deg=None,
-        reason=reason,
-        source="test",
-    )
-
-
-def test_hand_result_wins_even_when_floor_target_exists():
+def test_hand_result_returns_hand_target():
     state = FakeState()
     state.last_grasp_result = {
         "hand_present": True,
@@ -122,7 +84,6 @@ def test_hand_result_wins_even_when_floor_target_exists():
     }
     resolver = ReturnTargetResolver(
         state,
-        FakePickTargetResolver(make_floor_target()),
         no_wait,
         timeout_sec=0.01,
     )
@@ -132,32 +93,14 @@ def test_hand_result_wins_even_when_floor_target_exists():
     assert target.source == RETURN_SOURCE_HAND
     assert target.tool_name == "hammer"
     assert target.hand_candidate.x == 0.3
-    assert target.floor_target is None
+    assert not hasattr(target, "floor_target")
 
 
-def test_floor_target_selected_when_no_hand_is_present():
+def test_tool_only_target_is_not_treated_as_floor():
     state = FakeState()
     state.last_grasp_result = {"hand_present": False}
     resolver = ReturnTargetResolver(
         state,
-        FakePickTargetResolver(make_floor_target()),
-        no_wait,
-        timeout_sec=0.01,
-    )
-
-    target = resolver.resolve("hammer", FakeLogger())
-
-    assert target.source == RETURN_SOURCE_FLOOR
-    assert target.tool_name == "hammer"
-    assert target.floor_target.found is True
-
-
-def test_high_tool_only_target_is_not_treated_as_floor():
-    state = FakeState()
-    state.last_grasp_result = {"hand_present": False}
-    resolver = ReturnTargetResolver(
-        state,
-        FakePickTargetResolver(make_floor_target(base_z=0.08)),
         no_wait,
         timeout_sec=0.01,
     )
@@ -165,7 +108,7 @@ def test_high_tool_only_target_is_not_treated_as_floor():
     target = resolver.resolve("hammer", FakeLogger())
 
     assert target.source == RETURN_SOURCE_NONE
-    assert target.reason == "floor_target_z_too_high"
+    assert target.reason == "hand_target_not_found"
 
 
 def test_no_target_returns_failure_reason():
@@ -173,9 +116,6 @@ def test_no_target_returns_failure_reason():
     state.last_grasp_result = {"hand_present": False}
     resolver = ReturnTargetResolver(
         state,
-        FakePickTargetResolver(
-            make_floor_target(found=False, reason="target_not_found")
-        ),
         no_wait,
         timeout_sec=0.01,
     )
@@ -183,7 +123,7 @@ def test_no_target_returns_failure_reason():
     target = resolver.resolve("hammer", FakeLogger())
 
     assert target.source == RETURN_SOURCE_NONE
-    assert target.reason == "target_not_found"
+    assert target.reason == "hand_target_not_found"
 
 
 def test_hand_without_position_blocks_floor_fallback():
@@ -194,7 +134,6 @@ def test_hand_without_position_blocks_floor_fallback():
     }
     resolver = ReturnTargetResolver(
         state,
-        FakePickTargetResolver(make_floor_target()),
         no_wait,
         timeout_sec=0.01,
     )

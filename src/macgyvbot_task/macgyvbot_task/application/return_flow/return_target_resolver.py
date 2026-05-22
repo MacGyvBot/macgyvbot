@@ -1,4 +1,4 @@
-"""Resolve whether a returned tool should be received from hand or floor."""
+"""Resolve a user-held return target from hand observation data."""
 
 from __future__ import annotations
 
@@ -9,17 +9,13 @@ from typing import Optional
 import rclpy
 
 from macgyvbot_config.handoff import OBSERVATION_TIMEOUT_SEC
-from macgyvbot_config.return_flow import RETURN_FLOOR_MAX_BASE_Z_M
 from macgyvbot_config.robot import BASE_FRAME
 from macgyvbot_config.timing import SEQUENCE_WAIT_POLL_SEC
-from macgyvbot_domain.target_models import PickTarget
 from macgyvbot_manipulation.handover_targeting import TargetCandidate
 
 
 RETURN_SOURCE_HAND = "hand"
-RETURN_SOURCE_FLOOR = "floor"
 RETURN_SOURCE_NONE = "none"
-RETURN_HAND_PRESENCE_GRACE_SEC = 0.5
 
 
 @dataclass(frozen=True)
@@ -29,34 +25,28 @@ class ReturnTarget:
     source: str
     tool_name: str
     hand_candidate: Optional[TargetCandidate] = None
-    floor_target: Optional[PickTarget] = None
     reason: str = ""
 
 
 class ReturnTargetResolver:
-    """Choose hand-held receive or floor pickup from observation data."""
+    """Choose a hand-held receive target from observation data."""
 
     def __init__(
         self,
         state,
-        pick_target_resolver,
         wait_fn,
         timeout_sec=OBSERVATION_TIMEOUT_SEC,
         poll_sec=SEQUENCE_WAIT_POLL_SEC,
     ):
         self.state = state
-        self.pick_target_resolver = pick_target_resolver
         self.wait_fn = wait_fn
         self.timeout_sec = timeout_sec
         self.poll_sec = poll_sec
 
     def resolve(self, requested_tool, logger):
         tool_name = requested_tool or "unknown"
-        start_time = time.monotonic()
-        deadline = start_time + max(0.0, float(self.timeout_sec))
-        floor_allowed_at = start_time + RETURN_HAND_PRESENCE_GRACE_SEC
+        deadline = time.monotonic() + max(0.0, float(self.timeout_sec))
         saw_hand_without_position = False
-        last_floor_reason = "target_not_observed"
 
         while rclpy.ok() and time.monotonic() < deadline:
             result = self.state.last_grasp_result or {}
@@ -71,21 +61,6 @@ class ReturnTargetResolver:
                     )
                 saw_hand_without_position = True
 
-            floor_allowed = bool(result) or time.monotonic() >= floor_allowed_at
-            if floor_allowed and not saw_hand_without_position:
-                floor_target = self._floor_target(tool_name)
-                if floor_target.found:
-                    if self._is_floor_height(floor_target, logger):
-                        return ReturnTarget(
-                            source=RETURN_SOURCE_FLOOR,
-                            tool_name=floor_target.label or tool_name,
-                            floor_target=floor_target,
-                        )
-                    last_floor_reason = "floor_target_z_too_high"
-                    self.wait_fn(self.poll_sec)
-                    continue
-                last_floor_reason = floor_target.reason or last_floor_reason
-
             self.wait_fn(self.poll_sec)
 
         if saw_hand_without_position:
@@ -99,60 +74,8 @@ class ReturnTargetResolver:
         return ReturnTarget(
             source=RETURN_SOURCE_NONE,
             tool_name=tool_name,
-            reason=last_floor_reason or "return_target_not_found",
+            reason="hand_target_not_found",
         )
-
-    def _floor_target(self, tool_name):
-        if (
-            self.state.color_image is None
-            or self.state.depth_image is None
-            or self.state.intrinsics is None
-        ):
-            return PickTarget(
-                found=False,
-                label=tool_name,
-                pixel=None,
-                base_xyz=None,
-                depth_m=None,
-                yaw_deg=None,
-                reason="camera_state_unavailable",
-            )
-
-        results = self.pick_target_resolver.detector.detect(self.state.color_image)
-        if not results:
-            return PickTarget(
-                found=False,
-                label=tool_name,
-                pixel=None,
-                base_xyz=None,
-                depth_m=None,
-                yaw_deg=None,
-                reason="detector_result_unavailable",
-            )
-
-        return self.pick_target_resolver.target_from_boxes(
-            results[0].boxes,
-            tool_name,
-            self.state.color_image,
-            self.state.depth_image,
-            self.state.intrinsics,
-        )
-
-    @staticmethod
-    def _is_floor_height(target, logger):
-        if target.base_xyz is None or len(target.base_xyz) < 3:
-            return False
-
-        base_z = float(target.base_xyz[2])
-        if base_z < RETURN_FLOOR_MAX_BASE_Z_M:
-            return True
-
-        logger.warn(
-            "공구만 인식되었지만 floor 후보 z가 높아 바닥 공구로 보지 않습니다: "
-            f"base_z={base_z:.3f}m, "
-            f"threshold={RETURN_FLOOR_MAX_BASE_Z_M:.3f}m"
-        )
-        return False
 
     @staticmethod
     def _hand_present(result):
