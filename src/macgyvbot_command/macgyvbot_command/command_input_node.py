@@ -15,7 +15,11 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
 
-from macgyvbot_config.topics import CAMERA_COLOR_TOPIC, HAND_GRASP_IMAGE_TOPIC
+from macgyvbot_config.topics import (
+    CAMERA_COLOR_TOPIC,
+    HAND_GRASP_IMAGE_TOPIC,
+    ROBOT_TASK_CONTROL_TOPIC,
+)
 from macgyvbot_command.ui.voice_command_window import (
     QApplication,
     QTimer,
@@ -129,6 +133,11 @@ class CommandInputNode(Node):
         )
         self._tool_command_pub = self.create_publisher(String, tool_command_topic, 10)
         self._feedback_pub = self.create_publisher(String, command_feedback_topic, 10)
+        self._task_control_pub = self.create_publisher(
+            String,
+            ROBOT_TASK_CONTROL_TOPIC,
+            10,
+        )
 
         self.create_subscription(String, stt_text_topic, self._text_cb, 10)
         self.create_subscription(String, tool_command_topic, self._tool_command_cb, 10)
@@ -289,8 +298,14 @@ class CommandInputNode(Node):
 
         command = result.get('command')
         if command is not None:
-            if command.get('action') in ('resume', 'exit'):
+            action = command.get("action")
+            if action in {"pause", "resume"}:
+                self._send_task_control_request(action=action, reason=text)
+
+            elif action == 'exit':
                 self._show_local_control_command(command)
+                self._send_task_control_request(action=action, reason=text)
+
             else:
                 self._publish_command(command)
 
@@ -380,20 +395,20 @@ class CommandInputNode(Node):
             if command.get('action') == 'resume':
                 resume_message = (
                     message
-                    or '재개 요청을 이해했습니다. 제어 인터페이스 연결 후 사용할 수 있습니다.'
+                    or '재개 요청을 로봇에 전달했습니다.'
                 )
                 self._append_bot(resume_message)
-                self._append_log('info', '재개 명령 해석 완료: 로봇 명령으로는 발행하지 않음')
-                self._set_status('재개 대기')
+                self._append_log('info', '재개 명령을 로봇 제어 토픽으로 전달했습니다.')
+                self._set_status('재개 요청 전달')
                 return
 
             if command.get('action') == 'exit':
                 exit_message = (
                     message
-                    or '종료 요청을 이해했습니다. 창 닫기 버튼이나 Ctrl+C로 종료해주세요.'
+                    or '종료 요청을 이해했습니다. 현재 작업 중단을 로봇에 전달했습니다.'
                 )
                 self._append_bot(exit_message)
-                self._append_log('info', '종료 명령 해석 완료: 로봇 명령으로는 발행하지 않음')
+                self._append_log('info', '종료 명령 해석 완료: 로봇 작업 중단 요청 발행')
                 self._set_status('종료 요청 확인')
                 return
 
@@ -640,6 +655,7 @@ class CommandInputNode(Node):
             'success': '작업이 완료되었습니다.',
             'failed': '작업에 실패했습니다.',
             'error': '작업 중 오류가 발생했습니다.',
+            'tool_dropped': '공구 drop이 감지되었습니다.',
             'busy': '이미 다른 작업을 수행 중입니다.',
             'paused': '로봇이 일시정지되었습니다.',
             'resumed': '작업을 다시 시작합니다.',
@@ -685,6 +701,7 @@ class CommandInputNode(Node):
             'success': '완료',
             'failed': '실패',
             'error': '오류',
+            'tool_dropped': '공구 이탈',
             'busy': '작업 중',
             'paused': '일시정지',
             'resumed': '재개',
@@ -726,6 +743,7 @@ class CommandInputNode(Node):
             'success': '작업 완료',
             'failed': '작업 실패',
             'error': '작업 오류',
+            'tool_dropped': '공구 이탈 감지',
             'busy': '다른 작업 수행 중',
             'paused': '작업 일시정지',
             'resumed': '작업 재개',
@@ -749,6 +767,7 @@ class CommandInputNode(Node):
             'success',
             'failed',
             'error',
+            'tool_dropped',
             'busy',
             'paused',
             'resumed',
@@ -787,6 +806,7 @@ class CommandInputNode(Node):
             'success',
             'failed',
             'error',
+            'tool_dropped',
             'busy',
             'paused',
             'resumed',
@@ -870,6 +890,22 @@ class CommandInputNode(Node):
     def _set_task_status(self, target_text, stage_text):
         if self.window is not None and hasattr(self.window, 'set_task_status'):
             self.window.set_task_status(target_text, stage_text)
+
+    def _send_task_control_request(self, action, reason):
+        msg = String()
+        msg.data = json.dumps(
+            {
+                "action": action,
+                "reason": reason,
+                "source": "command_input",
+            },
+            ensure_ascii=False,
+        )
+        self._task_control_pub.publish(msg)
+        self._append_log(
+            "info",
+            f"/robot_task_control 발행: action={action}, reason={reason}",
+        )
 
     def destroy_node(self):
         if self._stt_service is not None:
