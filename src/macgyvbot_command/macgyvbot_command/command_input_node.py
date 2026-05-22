@@ -9,7 +9,6 @@ import json
 import signal
 import sys
 import threading
-import uuid
 
 import rclpy
 from rclpy.node import Node
@@ -116,9 +115,6 @@ class CommandInputNode(Node):
         self._last_command_key = None
         self._last_command_stamp_ns = 0
         self._command_dedupe_ns = 8_000_000_000
-        self._last_command_card_key = None
-        self._last_command_card_stamp_ns = 0
-        self._command_card_dedupe_ns = 20_000_000_000
         self._recent_bot_texts = {}
         self._bot_echo_ignore_ns = 10_000_000_000
         self._last_gui_text = ''
@@ -334,7 +330,6 @@ class CommandInputNode(Node):
             self._publish_feedback_payload(payload)
 
     def _publish_command(self, command):
-        command.setdefault('command_id', uuid.uuid4().hex)
         if self._is_duplicate_outgoing_command(command):
             action = command.get('action', 'unknown')
             tool_name = command.get('tool_name', 'unknown')
@@ -350,8 +345,6 @@ class CommandInputNode(Node):
         action = command.get('action', 'unknown')
         tool_name = command.get('tool_name', 'unknown')
         self._append_log('info', f'/tool_command 발행: action={action}, tool={tool_name}')
-        if not self._is_duplicate_command_card(command):
-            self._display_command_result(command)
         return True
 
     def _is_duplicate_outgoing_command(self, command):
@@ -466,12 +459,6 @@ class CommandInputNode(Node):
             self.get_logger().warn(f'/tool_command JSON 파싱 실패: {msg.data}')
             return
 
-        if self._is_duplicate_command_card(command):
-            return
-
-        self._display_command_result(command)
-
-    def _display_command_result(self, command):
         tool_name = command.get('tool_name', 'unknown')
         action = command.get('action', 'unknown')
         target_mode = command.get('target_mode', 'named')
@@ -495,29 +482,6 @@ class CommandInputNode(Node):
             f'parsed: tool={tool_name}, action={action}, target={target_mode}, '
             f'method={method}, confidence={confidence_text}'
         )
-
-    def _is_duplicate_command_card(self, command):
-        command_id = command.get('command_id')
-        if command_id:
-            key = ('id', command_id)
-        else:
-            key = (
-                'signature',
-                command.get('action', 'unknown'),
-                command.get('tool_name', 'unknown'),
-                command.get('target_mode', 'unknown'),
-                command.get('raw_text', ''),
-                command.get('match_method', ''),
-            )
-        now = self.get_clock().now().nanoseconds
-        if (
-            key == self._last_command_card_key
-            and now - self._last_command_card_stamp_ns < self._command_card_dedupe_ns
-        ):
-            return True
-        self._last_command_card_key = key
-        self._last_command_card_stamp_ns = now
-        return False
 
     def _feedback_cb(self, msg):
         try:
