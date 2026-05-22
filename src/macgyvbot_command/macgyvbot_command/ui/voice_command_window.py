@@ -30,8 +30,8 @@ else:
             super().__init__()
             self._node = node
             self.setWindowTitle('MacGyvBot Assistant')
-            self.resize(1420, 860)
-            self.setMinimumSize(1280, 760)
+            self.resize(1420, 940)
+            self.setMinimumSize(1280, 840)
             self._detector_pixmap = None
 
             self._chat_scroll = QScrollArea()
@@ -73,6 +73,11 @@ else:
             self._exit_button.clicked.connect(
                 lambda _checked=False: self._send_control_text('종료')
             )
+            control_button_layout = QHBoxLayout()
+            control_button_layout.setContentsMargins(0, 0, 0, 0)
+            control_button_layout.setSpacing(8)
+            control_button_layout.addWidget(self._home_button)
+            control_button_layout.addWidget(self._exit_button)
             self._task_log_entries = []
             self._title = QLabel('MacGyvBot Assistant')
             self._subtitle = QLabel('음성 명령 기반 공구 전달 로봇')
@@ -101,6 +106,7 @@ else:
             status_panel = QFrame()
             status_panel.setObjectName('statusPanel')
             status_panel.setFixedWidth(290)
+            status_panel.setMinimumHeight(555)
             status_panel_layout = QVBoxLayout()
             status_panel_layout.setContentsMargins(16, 16, 16, 16)
             status_panel_layout.setSpacing(10)
@@ -116,8 +122,7 @@ else:
             status_panel_layout.addWidget(self._task_target_status)
             status_panel_layout.addWidget(self._task_stage_status)
             status_panel_layout.addStretch(1)
-            status_panel_layout.addWidget(self._home_button)
-            status_panel_layout.addWidget(self._exit_button)
+            status_panel_layout.addLayout(control_button_layout)
 
             chat_panel = QWidget()
             chat_panel_layout = QVBoxLayout()
@@ -133,7 +138,7 @@ else:
             detector_panel = QFrame()
             detector_panel.setObjectName('detectorPanel')
             detector_panel.setFixedWidth(540)
-            detector_panel.setMinimumHeight(470)
+            detector_panel.setMinimumHeight(555)
             detector_panel_layout = QVBoxLayout()
             detector_panel_layout.setContentsMargins(14, 14, 14, 10)
             detector_panel_layout.setSpacing(8)
@@ -152,6 +157,7 @@ else:
 
             detector_panel_layout.addWidget(detector_title)
             detector_panel_layout.addWidget(self._detector_image, 0, Qt.AlignTop)
+            detector_panel_layout.addSpacing(8)
             detector_panel_layout.addWidget(self._detector_status)
             detector_panel_layout.addStretch(1)
 
@@ -166,7 +172,7 @@ else:
             log_scroll = QScrollArea()
             log_scroll.setObjectName('taskLogScroll')
             log_scroll.setWidgetResizable(True)
-            log_scroll.setMinimumHeight(170)
+            log_scroll.setMinimumHeight(190)
             log_scroll.setWidget(self._task_log)
             self._task_log_scroll = log_scroll
 
@@ -182,7 +188,7 @@ else:
             left_workspace = QWidget()
             left_workspace_layout = QVBoxLayout()
             left_workspace_layout.setContentsMargins(0, 0, 0, 0)
-            left_workspace_layout.setSpacing(20)
+            left_workspace_layout.setSpacing(24)
             left_workspace.setLayout(left_workspace_layout)
 
             top_left_layout = QHBoxLayout()
@@ -843,7 +849,7 @@ else:
                     color: #2563B8;
                     border: 1px solid #BFD4EE;
                     border-radius: 12px;
-                    padding: 10px 14px;
+                    padding: 10px 12px;
                     font-weight: 800;
                 }
                 QPushButton#homeControlButton:hover {
@@ -854,7 +860,7 @@ else:
                     color: #C24141;
                     border: 1px solid #F2C6C6;
                     border-radius: 12px;
-                    padding: 10px 14px;
+                    padding: 10px 12px;
                     font-weight: 800;
                 }
                 QPushButton#exitControlButton:hover {
