@@ -30,11 +30,12 @@ else:
             super().__init__()
             self._node = node
             self.setWindowTitle('MacGyvBot Assistant')
-            self.resize(1420, 760)
-            self.setMinimumSize(1280, 680)
+            self.resize(1420, 860)
+            self.setMinimumSize(1280, 760)
             self._detector_pixmap = None
 
             self._chat_scroll = QScrollArea()
+            self._chat_scroll.setObjectName('chatScroll')
             self._chat_scroll.setWidgetResizable(True)
             self._chat_container = QWidget()
             self._chat_container.setObjectName('chatContainer')
@@ -44,6 +45,9 @@ else:
             self._chat_layout.addStretch(1)
             self._chat_container.setLayout(self._chat_layout)
             self._chat_scroll.setWidget(self._chat_container)
+            self._chat_scroll.viewport().setStyleSheet(
+                'background-color: #E7F1FA; border-radius: 16px;'
+            )
 
             self._input = QLineEdit()
             self._input.setPlaceholderText('메시지를 입력하거나 음성으로 말해주세요.')
@@ -59,6 +63,7 @@ else:
             self._current_status = QLabel('현재 상태: 명령 대기')
             self._task_target_status = QLabel('작업 대상: 없음')
             self._task_stage_status = QLabel('작업 단계: 대기')
+            self._task_log_entries = []
             self._title = QLabel('MacGyvBot Assistant')
             self._subtitle = QLabel('음성 명령 기반 공구 전달 로봇')
             self._avatar = QLabel('M')
@@ -82,18 +87,15 @@ else:
 
             status_title = QLabel('Robot Status')
             status_title.setObjectName('statusPanelTitle')
-            status_subtitle = QLabel('실시간 연결 및 작업 상태')
-            status_subtitle.setObjectName('statusPanelSubtitle')
 
             status_panel = QFrame()
             status_panel.setObjectName('statusPanel')
-            status_panel.setFixedWidth(250)
+            status_panel.setFixedWidth(290)
             status_panel_layout = QVBoxLayout()
             status_panel_layout.setContentsMargins(16, 16, 16, 16)
             status_panel_layout.setSpacing(10)
             status_panel.setLayout(status_panel_layout)
             status_panel_layout.addWidget(status_title)
-            status_panel_layout.addWidget(status_subtitle)
             status_panel_layout.addSpacing(8)
             status_panel_layout.addWidget(self._robot_connection_status)
             status_panel_layout.addWidget(self._camera_connection_status)
@@ -115,12 +117,11 @@ else:
 
             detector_title = QLabel('Detector View')
             detector_title.setObjectName('detectorPanelTitle')
-            detector_subtitle = QLabel('/hand_grasp_detection/annotated_image')
-            detector_subtitle.setObjectName('detectorPanelSubtitle')
 
             detector_panel = QFrame()
             detector_panel.setObjectName('detectorPanel')
             detector_panel.setFixedWidth(540)
+            detector_panel.setMinimumHeight(500)
             detector_panel_layout = QVBoxLayout()
             detector_panel_layout.setContentsMargins(14, 14, 14, 10)
             detector_panel_layout.setSpacing(8)
@@ -138,16 +139,52 @@ else:
             self._detector_status.setObjectName('detectorStatus')
 
             detector_panel_layout.addWidget(detector_title)
-            detector_panel_layout.addWidget(detector_subtitle)
             detector_panel_layout.addWidget(self._detector_image, 0, Qt.AlignTop)
             detector_panel_layout.addWidget(self._detector_status)
             detector_panel_layout.addStretch(1)
 
+            log_title = QLabel('Task Log')
+            log_title.setObjectName('taskLogTitle')
+            self._task_log = QLabel('로그 대기 중')
+            self._task_log.setObjectName('taskLog')
+            self._task_log.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            self._task_log.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+            self._task_log.setWordWrap(True)
+
+            log_scroll = QScrollArea()
+            log_scroll.setObjectName('taskLogScroll')
+            log_scroll.setWidgetResizable(True)
+            log_scroll.setMinimumHeight(170)
+            log_scroll.setWidget(self._task_log)
+            self._task_log_scroll = log_scroll
+
+            log_panel = QFrame()
+            log_panel.setObjectName('taskLogPanel')
+            log_panel_layout = QVBoxLayout()
+            log_panel_layout.setContentsMargins(14, 12, 14, 12)
+            log_panel_layout.setSpacing(8)
+            log_panel.setLayout(log_panel_layout)
+            log_panel_layout.addWidget(log_title)
+            log_panel_layout.addWidget(log_scroll, 1)
+
+            left_workspace = QWidget()
+            left_workspace_layout = QVBoxLayout()
+            left_workspace_layout.setContentsMargins(0, 0, 0, 0)
+            left_workspace_layout.setSpacing(14)
+            left_workspace.setLayout(left_workspace_layout)
+
+            top_left_layout = QHBoxLayout()
+            top_left_layout.setContentsMargins(0, 0, 0, 0)
+            top_left_layout.setSpacing(14)
+            top_left_layout.addWidget(status_panel)
+            top_left_layout.addWidget(detector_panel, 1)
+            left_workspace_layout.addLayout(top_left_layout, 0)
+            left_workspace_layout.addWidget(log_panel, 1)
+
             content_layout = QHBoxLayout()
             content_layout.setContentsMargins(0, 0, 0, 0)
             content_layout.setSpacing(14)
-            content_layout.addWidget(status_panel)
-            content_layout.addWidget(detector_panel, 1)
+            content_layout.addWidget(left_workspace, 0)
             content_layout.addWidget(chat_panel, 1)
 
             layout = QVBoxLayout()
@@ -188,6 +225,9 @@ else:
             self.append_bot(text)
             self._append_confirmation_actions()
 
+        def append_control_actions(self, actions):
+            self._append_quick_reply_actions(actions)
+
         def append_command_result(self, command):
             self._append_command_card(command)
 
@@ -224,6 +264,22 @@ else:
         def set_task_status(self, target_text, stage_text):
             self._task_target_status.setText(f'작업 대상: {target_text}')
             self._task_stage_status.setText(f'작업 단계: {stage_text}')
+
+        def append_task_log(self, level, message):
+            level = str(level or 'INFO').upper()
+            message = str(message or '').strip()
+            if not message:
+                return
+
+            entry = f'{datetime.now().strftime("%H:%M:%S")} [{level}] {message}'
+            self._task_log_entries.append(entry)
+            self._task_log_entries = self._task_log_entries[-80:]
+            self._task_log.setText('\n'.join(self._task_log_entries))
+            QTimer.singleShot(0, self._scroll_task_log_to_bottom)
+
+        def _scroll_task_log_to_bottom(self):
+            scrollbar = self._task_log_scroll.verticalScrollBar()
+            scrollbar.setValue(scrollbar.maximum())
 
         def set_detector_status(self, status_text):
             self._detector_status.setText(f'Detector 상태: {status_text}')
@@ -365,15 +421,23 @@ else:
             self._add_chat_widget(row)
 
         def _append_confirmation_actions(self):
+            self._append_quick_reply_actions(
+                (
+                    ('예, 맞아요', '네'),
+                    ('아니요', '아니오'),
+                )
+            )
+
+        def _append_quick_reply_actions(self, actions):
             row = QWidget()
             row_layout = QHBoxLayout()
             row_layout.setContentsMargins(0, 0, 0, 10)
             row_layout.setSpacing(8)
             row.setLayout(row_layout)
 
-            yes_button = QPushButton('예, 맞아요')
-            no_button = QPushButton('아니요')
-            for button in (yes_button, no_button):
+            buttons = []
+            for label, reply in actions:
+                button = QPushButton(label)
                 button.setCursor(Qt.PointingHandCursor)
                 button.setStyleSheet(
                     '''
@@ -391,12 +455,13 @@ else:
                     }
                     '''
                 )
+                button.clicked.connect(
+                    lambda _checked=False, text=reply: self._send_quick_reply(text)
+                )
+                buttons.append(button)
 
-            yes_button.clicked.connect(lambda: self._send_quick_reply('네'))
-            no_button.clicked.connect(lambda: self._send_quick_reply('아니오'))
-
-            row_layout.addWidget(yes_button, 0, Qt.AlignLeft)
-            row_layout.addWidget(no_button, 0, Qt.AlignLeft)
+            for button in buttons:
+                row_layout.addWidget(button, 0, Qt.AlignLeft)
             row_layout.addStretch(1)
             self._add_chat_widget(row)
 
@@ -581,7 +646,9 @@ else:
                 'bring': '가져오기',
                 'return': '정리하기',
                 'release': '놓기',
-                'stop': '정지',
+                'pause': '정지',
+                'resume': '재개',
+                'exit': '종료',
                 'unknown': '알 수 없음',
             }.get(str(action), str(action))
 
@@ -641,6 +708,8 @@ else:
                 'fuzzy': 'Fuzzy',
                 'llm': 'LLM',
                 'local_deictic': 'Local',
+                'resume_keyword': 'Control',
+                'exit_keyword': 'Control',
                 'unknown': 'Unknown',
             }.get(str(method), str(method))
 
@@ -662,8 +731,14 @@ else:
                     border: 1px solid #B7CEE7;
                     border-radius: 14px;
                 }
+                QScrollArea#chatScroll {
+                    background-color: #E7F1FA;
+                    border: 1px solid #B7CEE7;
+                    border-radius: 16px;
+                }
                 QWidget#chatContainer {
                     background-color: #E7F1FA;
+                    border-radius: 16px;
                 }
                 QFrame#statusPanel {
                     background-color: #F8FBFF;
@@ -673,7 +748,7 @@ else:
                 QFrame#detectorPanel {
                     background-color: #F8FBFF;
                     border: 1px solid #C9DAEC;
-                    border-radius: 0px;
+                    border-radius: 16px;
                 }
                 QLabel#statusPanelTitle {
                     color: #223B5C;
@@ -683,6 +758,31 @@ else:
                 QLabel#statusPanelSubtitle {
                     color: #6A7E96;
                     font-size: 12px;
+                }
+                QFrame#taskLogPanel {
+                    background-color: #F8FBFF;
+                    border: 1px solid #C9DAEC;
+                    border-radius: 16px;
+                }
+                QLabel#taskLogTitle {
+                    color: #223B5C;
+                    font-size: 14px;
+                    font-weight: 900;
+                    padding-top: 4px;
+                }
+                QScrollArea#taskLogScroll {
+                    background-color: #101B2A;
+                    border: 1px solid #263A56;
+                    border-radius: 0px;
+                }
+                QLabel#taskLog {
+                    background-color: #101B2A;
+                    color: #D9E8F7;
+                    padding: 9px 10px;
+                    font-family: "D2Coding", "Consolas", "Menlo", monospace;
+                    font-size: 11px;
+                    line-height: 1.35;
+                    border-radius: 0px;
                 }
                 QLabel#detectorPanelTitle {
                     color: #223B5C;
