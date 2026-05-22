@@ -63,6 +63,16 @@ else:
             self._current_status = QLabel('현재 상태: 명령 대기')
             self._task_target_status = QLabel('작업 대상: 없음')
             self._task_stage_status = QLabel('작업 단계: 대기')
+            self._home_button = QPushButton('복귀')
+            self._home_button.setObjectName('homeControlButton')
+            self._home_button.clicked.connect(
+                lambda _checked=False: self._send_control_text('홈위치로 가')
+            )
+            self._exit_button = QPushButton('종료')
+            self._exit_button.setObjectName('exitControlButton')
+            self._exit_button.clicked.connect(
+                lambda _checked=False: self._send_control_text('종료')
+            )
             self._task_log_entries = []
             self._title = QLabel('MacGyvBot Assistant')
             self._subtitle = QLabel('음성 명령 기반 공구 전달 로봇')
@@ -106,6 +116,8 @@ else:
             status_panel_layout.addWidget(self._task_target_status)
             status_panel_layout.addWidget(self._task_stage_status)
             status_panel_layout.addStretch(1)
+            status_panel_layout.addWidget(self._home_button)
+            status_panel_layout.addWidget(self._exit_button)
 
             chat_panel = QWidget()
             chat_panel_layout = QVBoxLayout()
@@ -121,7 +133,7 @@ else:
             detector_panel = QFrame()
             detector_panel.setObjectName('detectorPanel')
             detector_panel.setFixedWidth(540)
-            detector_panel.setMinimumHeight(500)
+            detector_panel.setMinimumHeight(470)
             detector_panel_layout = QVBoxLayout()
             detector_panel_layout.setContentsMargins(14, 14, 14, 10)
             detector_panel_layout.setSpacing(8)
@@ -170,7 +182,7 @@ else:
             left_workspace = QWidget()
             left_workspace_layout = QVBoxLayout()
             left_workspace_layout.setContentsMargins(0, 0, 0, 0)
-            left_workspace_layout.setSpacing(14)
+            left_workspace_layout.setSpacing(20)
             left_workspace.setLayout(left_workspace_layout)
 
             top_left_layout = QHBoxLayout()
@@ -469,6 +481,10 @@ else:
             self.append_user(text)
             self._node.publish_user_text(text)
 
+        def _send_control_text(self, text):
+            self.append_user(text)
+            self._node.publish_user_text(text)
+
         def _add_chat_widget(self, widget):
             self._chat_layout.insertWidget(self._chat_layout.count() - 1, widget)
             QTimer.singleShot(0, self._scroll_to_bottom)
@@ -649,6 +665,7 @@ else:
                 'pause': '정지',
                 'resume': '재개',
                 'exit': '종료',
+                'home': 'Home 복귀',
                 'unknown': '알 수 없음',
             }.get(str(action), str(action))
 
@@ -710,6 +727,7 @@ else:
                 'local_deictic': 'Local',
                 'resume_keyword': 'Control',
                 'exit_keyword': 'Control',
+                'home_keyword': 'Control',
                 'unknown': 'Unknown',
             }.get(str(method), str(method))
 
@@ -819,6 +837,28 @@ else:
                 }
                 QPushButton:hover {
                     background-color: #245FC4;
+                }
+                QPushButton#homeControlButton {
+                    background-color: #FFFFFF;
+                    color: #2563B8;
+                    border: 1px solid #BFD4EE;
+                    border-radius: 12px;
+                    padding: 10px 14px;
+                    font-weight: 800;
+                }
+                QPushButton#homeControlButton:hover {
+                    background-color: #EEF6FF;
+                }
+                QPushButton#exitControlButton {
+                    background-color: #FFF5F5;
+                    color: #C24141;
+                    border: 1px solid #F2C6C6;
+                    border-radius: 12px;
+                    padding: 10px 14px;
+                    font-weight: 800;
+                }
+                QPushButton#exitControlButton:hover {
+                    background-color: #FFECEC;
                 }
                 '''
             )

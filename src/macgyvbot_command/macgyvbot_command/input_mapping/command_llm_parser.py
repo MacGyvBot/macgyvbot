@@ -17,6 +17,7 @@ from macgyvbot_command.input_mapping.command_vocabulary import (
     ALLOWED_TOOLS,
     DEICTIC_WORDS,
     EXIT_KEYWORDS,
+    HOME_KEYWORDS,
     NO_WORDS,
     RESUME_KEYWORDS,
     STOP_KEYWORDS,
@@ -96,6 +97,19 @@ class CommandLlmParser:
                     'target_mode': 'unknown',
                     'raw_text': text,
                     'match_method': 'exit_keyword',
+                    'match_score': 1.0,
+                    'confidence': 1.0,
+                }
+            )
+
+        if self._has_home_intent(text):
+            return self._accepted_result(
+                {
+                    'tool_name': 'unknown',
+                    'action': 'home',
+                    'target_mode': 'unknown',
+                    'raw_text': text,
+                    'match_method': 'home_keyword',
                     'match_score': 1.0,
                     'confidence': 1.0,
                 }
@@ -298,6 +312,19 @@ class CommandLlmParser:
             self._info('local parser가 종료 명령으로 확정했습니다.')
             return command
 
+        if action == 'home':
+            command = {
+                'tool_name': 'unknown',
+                'action': 'home',
+                'target_mode': 'unknown',
+                'raw_text': text,
+                'match_method': 'home_keyword',
+                'match_score': 1.0,
+                'confidence': 1.0,
+            }
+            self._info('local parser가 Home 복귀 명령으로 확정했습니다.')
+            return command
+
         previous_tool = self._context.resolve_previous_tool()
         previous_command = self._context.resolve_previous_command()
         if action == 'unknown' and self._has_repeat_reference(text) and previous_command:
@@ -488,6 +515,8 @@ class CommandLlmParser:
             return '재개 명령으로 이해했습니다. 제어 인터페이스가 연결되면 작업 재개 요청으로 전달됩니다.'
         if action == 'exit':
             return '종료 요청으로 이해했습니다. 안전을 위해 자동 종료하지 않고 안내만 표시합니다.'
+        if action == 'home':
+            return 'Home 위치로 복귀하라는 뜻으로 이해했습니다.'
         return '명령을 올바른 입력으로 판단했습니다.'
 
     def _build_confirmation_question(self, command):
@@ -588,6 +617,7 @@ class CommandLlmParser:
 - pause: {ALLOWED_ACTIONS['pause']}
 - resume: {ALLOWED_ACTIONS['resume']}
 - exit: {ALLOWED_ACTIONS['exit']}
+- home: {ALLOWED_ACTIONS['home']}
 - unknown: {ALLOWED_ACTIONS['unknown']}
 
 허용 target_mode:
@@ -623,7 +653,8 @@ class CommandLlmParser:
 - "멈춰", "정지", "중지", "중단", "스탑", "stop", "pause"처럼 명확한 정지 표현만 pause action이다.
 - "재개", "다시 시작", "계속해", "resume", "restart"처럼 명확한 재개 표현만 resume action이다.
 - "종료", "끝내", "꺼줘", "닫아줘", "exit", "quit"처럼 명확한 종료 표현만 exit action이다.
-- 이해하지 못한 문장을 pause, resume, exit로 추측하지 말고 action unknown으로 둔다.
+- "홈위치로 가", "홈으로 가", "복귀해", "원위치로 가", "초기 위치로 이동해", "home"처럼 명확한 Home 복귀 표현만 home action이다.
+- 이해하지 못한 문장을 pause, resume, exit, home으로 추측하지 말고 action unknown으로 둔다.
 
 예시:
 입력: 드라이버 가져다줘
@@ -662,6 +693,9 @@ class CommandLlmParser:
 
 입력: 종료해
 출력: {{"intent":"command","tool_name":"unknown","action":"exit","target_mode":"unknown","confidence":0.90,"needs_confirmation":false,"context_used":"none"}}
+
+입력: 홈위치로 가
+출력: {{"intent":"command","tool_name":"unknown","action":"home","target_mode":"unknown","confidence":0.90,"needs_confirmation":false,"context_used":"none"}}
 
 입력: 지금 뭐 하는 중이야?
 출력: {{"intent":"status_query","tool_name":"unknown","action":"unknown","target_mode":"unknown","confidence":0.90,"needs_confirmation":false,"context_used":"robot_status","assistant_message":"현재 로봇 상태를 확인해드릴게요."}}
@@ -957,6 +991,20 @@ class CommandLlmParser:
                 ),
             }
 
+        if action == 'home' and not self._has_home_intent(raw_text):
+            self._warn('명확한 Home 복귀 표현이 없어 home 명령을 무시합니다.')
+            candidate_command['action'] = 'unknown'
+            return {
+                'command': None,
+                'feedback': self._feedback(
+                    status='rejected',
+                    raw_text=raw_text,
+                    reason='unknown_action',
+                    message='무엇을 해야 하는지 확정하지 못했습니다. 다시 입력해주세요.',
+                    command=candidate_command,
+                ),
+            }
+
         if action == 'bring' and target_mode == 'deictic':
             self._warn('deictic bring 명령은 지원하지 않아 재입력을 요청합니다.')
             return {
@@ -1046,6 +1094,10 @@ class CommandLlmParser:
             return 'exit'
         if action == 'exit':
             return 'unknown'
+        if self._has_home_intent(raw_text):
+            return 'home'
+        if action == 'home':
+            return 'unknown'
         return_tokens = (
             '가져다가놔',
             '가져다가놓',
@@ -1102,6 +1154,11 @@ class CommandLlmParser:
     def _has_exit_intent(raw_text):
         normalized = normalize_text(raw_text)
         return any(normalize_text(keyword) in normalized for keyword in EXIT_KEYWORDS)
+
+    @staticmethod
+    def _has_home_intent(raw_text):
+        normalized = normalize_text(raw_text)
+        return any(normalize_text(keyword) in normalized for keyword in HOME_KEYWORDS)
 
     def _has_previous_reference(self, raw_text):
         normalized = self._normalize_answer(raw_text)
