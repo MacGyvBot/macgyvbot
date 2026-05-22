@@ -31,6 +31,7 @@ except ImportError:
 from macgyvbot_config.models import HAND_GRASP_SAM_CHECKPOINT_NAME
 from macgyvbot_config.vlm import (
     GRASP_POINT_MODE_VLM,
+    VLM_MODEL_SMOL,
     VLM_GRASP_GRID_SIZES,
 )
 from macgyvbot_perception.hand_tool_grasp.sam_tool_mask import (
@@ -39,7 +40,7 @@ from macgyvbot_perception.hand_tool_grasp.sam_tool_mask import (
     overlay_locked_mask,
 )
 
-DEFAULT_VLM_MODEL = "HuggingFaceTB__SmolVLM2-2.2B-Instruct"
+DEFAULT_VLM_MODEL = VLM_MODEL_SMOL
 DEFAULT_MAX_IMAGE_SIZE = 640
 DEFAULT_GRID_SIZES = ((3, 3), (4, 4), (5, 5))
 
@@ -601,12 +602,12 @@ class VLMModel:
             "Return keys: roll_deg, pitch_deg, yaw_deg, confidence, reason.\n"
             "Use degrees. Keep values in [-180, 180].\n"
             "Yaw definition:\n"
-            "- yaw_deg is the gripper wrist rotation, not the object's long-axis angle.\n"
-            "- yaw_deg describes the direction the two fingers close across the object in the image plane.\n"
-            "- yaw_deg=0 means the gripper closes horizontally from left and right.\n"
-            "- Positive yaw_deg means rotate the gripper clockwise from horizontal.\n"
-            "- Negative yaw_deg means rotate the gripper counterclockwise from horizontal.\n"
-            "- For long tools, the closing direction should usually be perpendicular to the tool's long axis.\n"
+            "- yaw_deg is the additional robot wrist rotation from the current pose.\n"
+            "- Positive yaw_deg means rotate the wrist left/counterclockwise in the image.\n"
+            "- Negative yaw_deg means rotate the wrist right/clockwise in the image.\n"
+            "- For long tools, rotate until the two gripper fingers close across the tool width.\n"
+            "- If a long tool axis is about 45 degrees in the image, yaw_deg should be about 45 or -135.\n"
+            "- If a long tool axis is about -45 degrees in the image, yaw_deg should be about -45 or 135.\n"
             "If uncertain, keep roll_deg=0 and pitch_deg=0, but still output yaw_deg.\n"
             "Do not return markdown or code fences.\n"
             f"Object: {object_label}\n"
@@ -799,12 +800,12 @@ class VLMModel:
             "Return strict JSON only with keys: x_px, y_px, yaw_deg, confidence, reason.\n"
             f"Image size: width={width}, height={height}.\n"
             "Yaw definition:\n"
-            "- yaw_deg is the gripper wrist rotation, not the object's long-axis angle.\n"
-            "- yaw_deg describes the direction the two fingers close across the object in the image plane.\n"
-            "- yaw_deg=0 means the gripper closes horizontally from left and right.\n"
-            "- Positive yaw_deg means rotate the gripper clockwise from horizontal.\n"
-            "- Negative yaw_deg means rotate the gripper counterclockwise from horizontal.\n"
-            "- For long tools, the closing direction should usually be perpendicular to the tool's long axis.\n"
+            "- yaw_deg is the additional robot wrist rotation from the current pose.\n"
+            "- Positive yaw_deg means rotate the wrist left/counterclockwise in the image.\n"
+            "- Negative yaw_deg means rotate the wrist right/clockwise in the image.\n"
+            "- For long tools, rotate until the two gripper fingers close across the tool width.\n"
+            "- If a long tool axis is about 45 degrees in the image, yaw_deg should be about 45 or -135.\n"
+            "- If a long tool axis is about -45 degrees in the image, yaw_deg should be about -45 or 135.\n"
             "Constraints:\n"
             f"- x_px must be integer in [0, {width - 1}]\n"
             f"- y_px must be integer in [0, {height - 1}]\n"
@@ -1181,7 +1182,11 @@ class VLMModel:
             if value is not None and math.isfinite(value):
                 return value
 
-        yaw_match = re.search(r"yaw(?:_deg)?\s*[:=]?\s*(-?\d+(?:\.\d+)?)", raw_text, re.IGNORECASE)
+        yaw_match = re.search(
+            r'"?yaw(?:_deg)?"?\s*[:=]\s*(-?\d+(?:\.\d+)?)',
+            raw_text,
+            re.IGNORECASE,
+        )
         if yaw_match:
             try:
                 return float(yaw_match.group(1))
@@ -1215,8 +1220,16 @@ class VLMModel:
             y = y_norm * (height - 1)
             return self._clamp_point_to_image(x, y, width, height)
 
-        x_match = re.search(r"x(?:_px)?\s*[:=]?\s*(-?\d+(?:\.\d+)?)", raw_text, re.IGNORECASE)
-        y_match = re.search(r"y(?:_px)?\s*[:=]?\s*(-?\d+(?:\.\d+)?)", raw_text, re.IGNORECASE)
+        x_match = re.search(
+            r'"?x(?:_px)?"?\s*[:=]\s*(-?\d+(?:\.\d+)?)',
+            raw_text,
+            re.IGNORECASE,
+        )
+        y_match = re.search(
+            r'"?y(?:_px)?"?\s*[:=]\s*(-?\d+(?:\.\d+)?)',
+            raw_text,
+            re.IGNORECASE,
+        )
         if x_match and y_match:
             try:
                 x = float(x_match.group(1))

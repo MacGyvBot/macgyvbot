@@ -8,6 +8,8 @@ from macgyvbot_config.vlm import (
     GRASP_POINT_MODE_CENTER,
     GRASP_POINT_MODE_VLM,
     GRASP_POINT_MODE_VLM_ONLY,
+    VLM_ONLY_MODEL_BY_MODE,
+    VLM_ONLY_MODES,
 )
 
 
@@ -48,10 +50,10 @@ class GraspPointSelector:
             return
 
         if (
-            self.mode == GRASP_POINT_MODE_VLM_ONLY
+            self.mode in VLM_ONLY_MODES
             or (
                 self.mode == GRASP_POINT_MODE_API
-                and DEFAULT_GRASP_POINT_MODE == GRASP_POINT_MODE_VLM_ONLY
+                and DEFAULT_GRASP_POINT_MODE in VLM_ONLY_MODES
             )
         ):
             self._preload_vlm_only()
@@ -83,16 +85,16 @@ class GraspPointSelector:
     def _uses_vlm(self):
         return (
             self.mode == GRASP_POINT_MODE_VLM
-            or self.mode == GRASP_POINT_MODE_VLM_ONLY
+            or self.mode in VLM_ONLY_MODES
             or (
                 self.mode == GRASP_POINT_MODE_API
                 and DEFAULT_GRASP_POINT_MODE
-                in (GRASP_POINT_MODE_VLM, GRASP_POINT_MODE_VLM_ONLY)
+                in (GRASP_POINT_MODE_VLM, *VLM_ONLY_MODES)
             )
         )
 
     def should_defer_vlm_until_top_view(self):
-        return self.mode in (GRASP_POINT_MODE_VLM, GRASP_POINT_MODE_VLM_ONLY)
+        return self.mode == GRASP_POINT_MODE_VLM or self.mode in VLM_ONLY_MODES
 
     def select(
         self,
@@ -121,7 +123,7 @@ class GraspPointSelector:
                 "VLM grasp point failed. Falling back to bbox center."
             )
 
-        if self.mode == GRASP_POINT_MODE_VLM_ONLY:
+        if self.mode in VLM_ONLY_MODES:
             vlm_only_pixel = self._select_vlm_only_grasp_pixel(
                 bbox,
                 label,
@@ -200,7 +202,7 @@ class GraspPointSelector:
                 target_label,
             )
 
-        if DEFAULT_GRASP_POINT_MODE == GRASP_POINT_MODE_VLM_ONLY:
+        if DEFAULT_GRASP_POINT_MODE in VLM_ONLY_MODES:
             return self._select_vlm_only_grasp_pixel(
                 bbox,
                 label,
@@ -268,6 +270,7 @@ class GraspPointSelector:
                 sam_backend=self.sam_backend,
                 sam_model_type=self.sam_model_type,
                 sam_device=self.sam_device,
+                model_id=self._vlm_only_model_id(),
             )
 
         try:
@@ -300,6 +303,7 @@ class GraspPointSelector:
                 sam_backend=self.sam_backend,
                 sam_model_type=self.sam_model_type,
                 sam_device=self.sam_device,
+                model_id=self._vlm_only_model_id(),
             )
 
         return self.vlm_only_grasp_point_selector.select_grasp_pixel(
@@ -309,6 +313,15 @@ class GraspPointSelector:
             depth_image,
             intrinsics,
             target_label,
+        )
+
+    def _vlm_only_model_id(self):
+        mode = self.mode
+        if mode == GRASP_POINT_MODE_API:
+            mode = DEFAULT_GRASP_POINT_MODE
+        return VLM_ONLY_MODEL_BY_MODE.get(
+            mode,
+            VLM_ONLY_MODEL_BY_MODE[GRASP_POINT_MODE_VLM_ONLY],
         )
 
     def _select_api_grasp_pixel(
@@ -351,11 +364,15 @@ def normalize_grasp_point_mode(mode, logger):
     """Return a supported grasp point mode, falling back to center."""
     if mode == "grasp_point_mode_vlm_only":
         return GRASP_POINT_MODE_VLM_ONLY
+    if mode == "vlm_only_qwen_3b":
+        return "vlm_only_qwen3b"
+    if mode == "vlm_only_qwen_7b":
+        return "vlm_only_qwen7b"
 
     if mode in (
         GRASP_POINT_MODE_CENTER,
         GRASP_POINT_MODE_VLM,
-        GRASP_POINT_MODE_VLM_ONLY,
+        *VLM_ONLY_MODES,
         GRASP_POINT_MODE_API,
     ):
         return mode

@@ -13,7 +13,7 @@ import cv2
 from PIL import Image
 
 from macgyvbot_config.models import HAND_GRASP_SAM_CHECKPOINT_NAME
-from macgyvbot_config.vlm import GRASP_POINT_MODE_VLM_ONLY
+from macgyvbot_config.vlm import GRASP_POINT_MODE_VLM_ONLY, VLM_MODEL_SMOL
 from macgyvbot_perception.grasp_point.vlm_grasp_point_selector import (
     VLMModel,
 )
@@ -35,9 +35,11 @@ class VLMOnlyGraspPointSelector:
         sam_backend="mobile_sam",
         sam_model_type="vit_t",
         sam_device="cuda",
+        model_id=VLM_MODEL_SMOL,
     ):
         self.logger = logger
         self.model = None
+        self.model_id = model_id
         self.sam_enabled = bool(sam_enabled)
         self.sam_checkpoint = sam_checkpoint or str(
             Path("weights") / HAND_GRASP_SAM_CHECKPOINT_NAME
@@ -139,21 +141,22 @@ class VLMOnlyGraspPointSelector:
         return (
             "Choose one grasp center and wrist yaw for a two-finger parallel "
             "robot gripper.\n"
-            "Return strict JSON only with keys: x_px, y_px, yaw_deg, confidence, reason.\n"
+            "Return strict compact JSON only with keys: x_px, y_px, yaw_deg, confidence, reason.\n"
             f"Image size: width={width}, height={height}.\n"
             "Yaw definition:\n"
-            "- yaw_deg is the gripper wrist rotation, not the object's long-axis angle.\n"
-            "- yaw_deg describes the direction the two fingers close across the object in the image plane.\n"
-            "- yaw_deg=0 means the gripper closes horizontally from left and right.\n"
-            "- Positive yaw_deg means rotate the gripper clockwise from horizontal.\n"
-            "- Negative yaw_deg means rotate the gripper counterclockwise from horizontal.\n"
-            "- For long tools, the closing direction should usually be perpendicular to the tool's long axis.\n"
+            "- yaw_deg is the additional robot wrist rotation from the current pose.\n"
+            "- Positive yaw_deg means rotate the wrist left/counterclockwise in the image.\n"
+            "- Negative yaw_deg means rotate the wrist right/clockwise in the image.\n"
+            "- For long tools, rotate until the two gripper fingers close across the tool width.\n"
+            "- If a long tool axis is about 45 degrees in the image, yaw_deg should be about 45 or -135.\n"
+            "- If a long tool axis is about -45 degrees in the image, yaw_deg should be about -45 or 135.\n"
             "Constraints:\n"
             f"- x_px must be an integer in [0, {width - 1}]\n"
             f"- y_px must be an integer in [0, {height - 1}]\n"
             "- yaw_deg must be in [-180, 180]\n"
             "- choose a sturdy graspable region, not a sharp tip, blade, hole, or edge\n"
             "- use the visible object only; do not choose background\n"
+            "- reason must be 8 words or fewer\n"
             f"{mask_instruction}"
             "- no markdown, no code fence, no explanation outside JSON\n\n"
             f"Detected object label: {label}\n"
@@ -212,8 +215,10 @@ class VLMOnlyGraspPointSelector:
         if self.model is not None:
             return
 
-        self.logger.info("VLM-only grasp model lazy load preparing.")
-        self.model = VLMModel(max_new_tokens=48)
+        self.logger.info(
+            f"VLM-only grasp model lazy load preparing: model_id={self.model_id}"
+        )
+        self.model = VLMModel(model_id=self.model_id, max_new_tokens=96)
         runtime = self.model.get_runtime_info()
         self.logger.info(
             "VLM-only runtime: "
