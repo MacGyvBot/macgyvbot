@@ -76,6 +76,51 @@ from macgyvbot_task.application.task_control.task_control_coordinator import (
 from macgyvbot_task.application.task_control.task_management import TaskManagement
 
 
+class VLMStatusLogger:
+    """Forward VLM logs to ROS logger and robot status topic."""
+
+    def __init__(self, logger, publish_status_payload):
+        self._logger = logger
+        self._publish_status_payload = publish_status_payload
+
+    def info(self, message):
+        self._logger.info(message)
+        self._publish_if_vlm_status("info", message)
+
+    def warn(self, message):
+        self._logger.warn(message)
+        self._publish_if_vlm_status("warn", message)
+
+    def error(self, message):
+        self._logger.error(message)
+        self._publish_if_vlm_status("error", message)
+
+    def _publish_if_vlm_status(self, level, message):
+        text = str(message or "")
+        if "VLM" not in text:
+            return
+
+        if "로드 시작" in text:
+            status = "vlm_loading"
+        elif "로드 완료" in text:
+            status = "vlm_ready"
+        elif level == "error" or "실패" in text:
+            status = "vlm_error"
+        elif level == "warn" or "CPU 실행" in text:
+            status = "vlm_warning"
+        else:
+            return
+
+        self._publish_status_payload(
+            {
+                "status": status,
+                "tool_name": "unknown",
+                "action": "system",
+                "message": text,
+            }
+        )
+
+
 class MacGyvBotNode(Node):
     def __init__(self):
         super().__init__("macgyvbot_main_node")
@@ -112,9 +157,13 @@ class MacGyvBotNode(Node):
             publish_status_payload=self._publish_status_payload,
         )
         self.detector = YoloDetector(self.yolo_model)
+        self.grasp_point_logger = VLMStatusLogger(
+            self.get_logger(),
+            self._publish_status_payload,
+        )
         self.grasp_point_selector = GraspPointSelector(
             self.grasp_point_mode,
-            self.get_logger(),
+            self.grasp_point_logger,
             **self._read_grasp_point_api_config(),
         )
 

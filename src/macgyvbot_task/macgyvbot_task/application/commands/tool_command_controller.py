@@ -4,7 +4,7 @@ from __future__ import annotations
 
 
 class ToolCommandController:
-    """Route parsed tool commands to pick, return, release, or stop actions."""
+    """Route parsed tool commands to pick, return, release, or pause actions."""
 
     def __init__(
         self,
@@ -80,7 +80,7 @@ class ToolCommandController:
             self._handle_release(tool_name, action, command)
             return
 
-        if action == "stop":
+        if action == "pause":
             self._handle_stop(tool_name, action, command)
             return
 
@@ -118,7 +118,7 @@ class ToolCommandController:
         )
 
     def _handle_stop(self, tool_name, action, command):
-        self.logger.warn("stop 명령 수신")
+        self.logger.warn("pause 명령 수신")
         if self.is_busy():
             self.status.publish(
                 "busy",
