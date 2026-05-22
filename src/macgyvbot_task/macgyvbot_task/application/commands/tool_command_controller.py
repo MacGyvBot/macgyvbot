@@ -32,6 +32,10 @@ class ToolCommandController:
         self._last_busy_command_key = None
         self._last_busy_command_sec = 0.0
         self._busy_command_dedupe_sec = 2.0
+        self._recent_command_ids = {}
+        self._last_command_signature = None
+        self._last_command_signature_sec = 0.0
+        self._command_dedupe_sec = 20.0
 
     def handle_target_label(self, tool_name, source="/target_label", command=None):
         val = (tool_name or "").strip()
@@ -86,6 +90,9 @@ class ToolCommandController:
         return False
 
     def handle_command(self, command):
+        if self._is_duplicate_command(command):
+            return
+
         action = command.get("action", "unknown")
         tool_name = command.get("tool_name", "unknown")
 
@@ -118,6 +125,40 @@ class ToolCommandController:
             reason="unsupported_action",
             command=command,
         )
+
+    def _is_duplicate_command(self, command):
+        now = time.monotonic()
+        stale_before = now - self._command_dedupe_sec
+        self._recent_command_ids = {
+            command_id: stamp
+            for command_id, stamp in self._recent_command_ids.items()
+            if stamp >= stale_before
+        }
+
+        command_id = command.get("command_id")
+        if command_id:
+            if command_id in self._recent_command_ids:
+                self.logger.warn(f"중복 command_id 무시: {command_id}")
+                return True
+            self._recent_command_ids[command_id] = now
+            return False
+
+        signature = (
+            command.get("action", "unknown"),
+            command.get("tool_name", "unknown"),
+            command.get("target_mode", "unknown"),
+            command.get("raw_text", ""),
+            command.get("match_method", ""),
+        )
+        if (
+            signature == self._last_command_signature
+            and now - self._last_command_signature_sec < self._command_dedupe_sec
+        ):
+            self.logger.warn(f"중복 command signature 무시: {signature}")
+            return True
+        self._last_command_signature = signature
+        self._last_command_signature_sec = now
+        return False
 
     def _handle_release(self, tool_name, action, command):
         if self.is_busy():
