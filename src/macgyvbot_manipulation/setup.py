@@ -14,8 +14,18 @@ setup(
     zip_safe=True,
     maintainer="MacGyvBot Team",
     maintainer_email="todo@example.com",
-    description="Robot arm, gripper, force sensing, and motion-control adapters for MacGyvBot.",
+    description=(
+        "Robot arm, gripper, force sensing, and motion-control adapters "
+        "for MacGyvBot."
+    ),
     license="TODO",
     tests_require=["pytest"],
-    entry_points={"console_scripts": []},
+    entry_points={
+        "console_scripts": [
+            (
+                "drawer_motion_test = "
+                "macgyvbot_manipulation.drawer_motion_test_node:main"
+            ),
+        ],
+    },
 )
