@@ -11,9 +11,13 @@ from macgyvbot_manipulation.robot_safezone import (
 
 from macgyvbot_config.robot import (
     DRAWER_CLOSED_JOINTS,
+    DRAWER_FLOOR_STEP_CLOSED_JOINT_DELTAS,
+    DRAWER_FLOOR_STEP_OBSERVATION_JOINT_DELTAS,
+    DRAWER_FLOOR_STEP_OPEN_JOINT_DELTAS,
     DRAWER_INSIDE_OBSERVATION_JOINTS,
     DRAWER_OPEN_JOINTS,
     DRAWER_OPEN_JOINT_SEQUENCE,
+    apply_joint_deltas,
     EE_LINK,
     GROUP_NAME,
     HOME_JOINTS,
@@ -144,6 +148,59 @@ class MoveItController:
             DRAWER_INSIDE_OBSERVATION_JOINTS,
             logger,
         )
+
+    def move_to_drawer_floor_closed_joints(self, logger, floor):
+        scale = floor - 1
+        try:
+            joints = apply_joint_deltas(DRAWER_CLOSED_JOINTS, DRAWER_FLOOR_STEP_CLOSED_JOINT_DELTAS, scale)
+        except ValueError as exc:
+            logger.error(f"서랍 {floor}층 닫힌 joint delta 설정 오류: {exc}")
+            return False
+        logger.info(f"서랍 {floor}층 손잡이(닫힌) joint pose로 이동합니다.")
+        return self._move_to_joint_positions(joints, logger)
+
+    def move_to_drawer_floor_open_joints(self, logger, floor):
+        scale = floor - 1
+        try:
+            joints = apply_joint_deltas(DRAWER_OPEN_JOINTS, DRAWER_FLOOR_STEP_OPEN_JOINT_DELTAS, scale)
+        except ValueError as exc:
+            logger.error(f"서랍 {floor}층 열린 joint delta 설정 오류: {exc}")
+            return False
+        logger.info(f"서랍 {floor}층 손잡이(열린) joint pose로 이동합니다.")
+        return self._move_to_joint_positions(joints, logger)
+
+    def move_to_drawer_floor_open_joint_sequence(self, logger, floor, after_waypoint=None):
+        scale = floor - 1
+        for base_name, base_joints in DRAWER_OPEN_JOINT_SEQUENCE:
+            name = base_name if scale == 0 else f"{base_name}_FLOOR{floor}"
+            try:
+                joints = apply_joint_deltas(base_joints, DRAWER_FLOOR_STEP_OPEN_JOINT_DELTAS, scale)
+            except ValueError as exc:
+                logger.error(f"서랍 열기 waypoint '{name}' joint delta 설정 오류: {exc}")
+                return False
+            logger.info(f"서랍 열기 waypoint 이동: {name}")
+            if not self._move_to_joint_positions(joints, logger):
+                logger.error(f"서랍 열기 waypoint 실패: {name}")
+                return False
+            if after_waypoint is not None:
+                after_waypoint(name)
+        return True
+
+    def move_to_drawer_floor_inside_observation_joints(self, logger, floor):
+        if DRAWER_INSIDE_OBSERVATION_JOINTS is None:
+            return None  # caller uses FK fallback
+        scale = floor - 1
+        try:
+            joints = apply_joint_deltas(
+                DRAWER_INSIDE_OBSERVATION_JOINTS,
+                DRAWER_FLOOR_STEP_OBSERVATION_JOINT_DELTAS,
+                scale,
+            )
+        except ValueError as exc:
+            logger.error(f"서랍 {floor}층 관찰 joint delta 설정 오류: {exc}")
+            return False
+        logger.info(f"서랍 {floor}층 내부 관찰 joint pose로 이동합니다.")
+        return self._move_to_joint_positions(joints, logger)
 
     def _move_to_joint_positions(self, joint_positions, logger):
         state_goal = RobotState(self.robot.get_robot_model())

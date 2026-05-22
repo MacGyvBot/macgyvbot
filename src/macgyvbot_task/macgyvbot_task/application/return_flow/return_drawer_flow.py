@@ -1,6 +1,7 @@
 """Store a returned tool in the hardcoded drawer."""
 from __future__ import annotations
 
+from macgyvbot_config.drawer import get_tool_drawer_floor
 from macgyvbot_config.timing import GRIPPER_OPEN_WAIT_SEC
 from macgyvbot_domain import DetectedTarget
 from macgyvbot_manipulation.force_detection import ForceReactionDetector
@@ -40,6 +41,17 @@ class ReturnDrawerFlow:
         motion = None
 
         try:
+            try:
+                floor = get_tool_drawer_floor(tool_name)
+            except ValueError as exc:
+                self.reporter.fail(
+                    tool_name,
+                    f"서랍 층수 설정 오류: {exc}",
+                    "invalid_drawer_floor_config",
+                    command,
+                    logger,
+                )
+                return False
             ok, _ = move_to_observation_pose(self.motion, self.robot, logger)
             if not ok:
                 self.reporter.fail(
@@ -54,7 +66,7 @@ class ReturnDrawerFlow:
             self.reporter.publish(
                 "opening_drawer", tool_name, "반납 서랍을 여는 중입니다.", command,
             )
-            motion = self.drawer.build_motion_from_joints(logger)
+            motion = self.drawer.build_motion_from_joints(logger, floor=floor)
             if motion is None:
                 self.reporter.fail(
                     tool_name,
@@ -99,6 +111,10 @@ class ReturnDrawerFlow:
                 z=motion.grasp_z,
                 depth_m=0.0,
                 source="hardcoded_joint",
+            )
+            logger.info(
+                f"서랍 반납 층 선택: tool={tool_name}, floor={floor}, "
+                f"target_z={drawer_target.z:.3f}"
             )
             if not self.drawer.place_tool_in_open_drawer(
                 drawer_target,

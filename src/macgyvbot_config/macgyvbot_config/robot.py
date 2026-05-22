@@ -67,3 +67,28 @@ DRAWER_INSIDE_OBSERVATION_JOINTS = {
     "joint_5": math.radians(97.25),
     "joint_6": math.radians(87.13),
 }
+
+
+# Per-floor-step joint deltas (degrees, 0-indexed).
+# floor N joints = base + (N-1) * step_delta.  Measure on hardware and fill in.
+DRAWER_FLOOR_STEP_CLOSED_JOINT_DELTAS: dict[int, float] = {}
+DRAWER_FLOOR_STEP_OPEN_JOINT_DELTAS: dict[int, float] = {}
+DRAWER_FLOOR_STEP_OBSERVATION_JOINT_DELTAS: dict[int, float] = {}
+
+
+def apply_joint_deltas(base_joints: dict, step_deltas: dict, scale: int = 1) -> dict:
+    """Return base_joints + scale * step_deltas (keys are 0-indexed, values in degrees)."""
+    if scale == 0 or not step_deltas:
+        return dict(base_joints)
+    n = len(base_joints)
+    invalid = [idx for idx in step_deltas if not isinstance(idx, int) or idx < 0 or idx >= n]
+    if invalid:
+        raise ValueError(
+            f"joint delta 인덱스가 유효 범위(0–{n - 1})를 벗어납니다: {invalid}"
+        )
+    sorted_keys = sorted(base_joints.keys(), key=lambda k: int(k.rsplit("_", 1)[-1]) if k.rsplit("_", 1)[-1].isdigit() else k)
+    joints = dict(base_joints)
+    for idx, delta_deg in step_deltas.items():
+        key = sorted_keys[idx]
+        joints[key] = joints[key] + math.radians(delta_deg * scale)
+    return joints

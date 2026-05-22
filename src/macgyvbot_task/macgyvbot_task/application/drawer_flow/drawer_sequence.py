@@ -55,6 +55,7 @@ class DrawerHandleMotion:
     grasp_z: float
     ori: dict
     handle_fk_z: float
+    floor: int = 1
 
 
 class DrawerInteraction:
@@ -225,9 +226,9 @@ class DrawerInteraction:
             ),
         )
 
-    def build_motion_from_joints(self, logger):
-        """DRAWER_CLOSED_JOINTS로 이동 후 FK로 손잡이 XYZ를 읽어 DrawerHandleMotion 생성."""
-        if not self.motion.move_to_drawer_closed_joints(logger):
+    def build_motion_from_joints(self, logger, floor=1):
+        """DRAWER_FLOOR_STEP_*_JOINT_DELTAS로 층별 joint을 계산해 이동 후 FK로 DrawerHandleMotion 생성."""
+        if not self.motion.move_to_drawer_floor_closed_joints(logger, floor):
             logger.error("서랍 손잡이 joint 이동 실패")
             return None
 
@@ -262,6 +263,7 @@ class DrawerInteraction:
             grasp_z=grasp_z,
             ori=drawer_ori,
             handle_fk_z=z,
+            floor=floor,
         )
         self.state.drawer_handle_motion = motion
         return motion
@@ -279,9 +281,10 @@ class DrawerInteraction:
 
         closed_rotation = Rotation.from_matrix(get_ee_matrix(self.robot)[:3, :3])
 
-        logger.info("서랍 열기 2단계: DRAWER_OPEN_JOINT_SEQUENCE로 이동")
-        if not self.motion.move_to_drawer_open_joint_sequence(
+        logger.info("서랍 열기 2단계: 층별 open joint sequence로 이동")
+        if not self.motion.move_to_drawer_floor_open_joint_sequence(
             logger,
+            floor=motion.floor,
             after_waypoint=lambda name: self._log_orientation_delta(
                 closed_rotation,
                 name,
@@ -296,37 +299,28 @@ class DrawerInteraction:
         self.wait(GRIPPER_OPEN_WAIT_SEC)
 
         logger.info("서랍 열기 4단계: 서랍 내부 관찰 pose로 이동")
-        if not self.move_to_inside_observation_pose(logger):
+        if not self.move_to_inside_observation_pose(logger, motion.floor):
             logger.error("서랍 내부 관찰 pose 이동 실패")
             return None
 
         return motion
 
-    def move_to_inside_observation_pose(self, logger):
-        taught_result = self.motion.move_to_drawer_inside_observation_joints(logger)
-        if taught_result is True:
-            logger.info("서랍 내부 관찰 joint pose 도달")
+    def move_to_inside_observation_pose(self, logger, floor=1):
+        result = self.motion.move_to_drawer_floor_inside_observation_joints(logger, floor)
+        if result is True:
             return True
-        if taught_result is False:
+        if result is False:
             return False
 
+        # None: taught joints 미설정 — FK + Z offset fallback
         transform = get_ee_matrix(self.robot)
         x = float(transform[0, 3])
         y = float(transform[1, 3])
-        z = max(
-            float(transform[2, 3]) + DRAWER_INSIDE_OBSERVATION_Z_OFFSET,
-            SAFE_Z_MIN,
-        )
+        z = max(float(transform[2, 3]) + DRAWER_INSIDE_OBSERVATION_Z_OFFSET, SAFE_Z_MIN)
         qx, qy, qz, qw = Rotation.from_matrix(transform[:3, :3]).as_quat()
-        ori = {
-            "x": float(qx),
-            "y": float(qy),
-            "z": float(qz),
-            "w": float(qw),
-        }
+        ori = {"x": float(qx), "y": float(qy), "z": float(qz), "w": float(qw)}
         logger.info(
-            "서랍 내부 관찰 fallback pose 이동: "
-            f"x={x:.3f}, y={y:.3f}, z={z:.3f} "
+            f"서랍 내부 관찰 fallback pose 이동: x={x:.3f}, y={y:.3f}, z={z:.3f} "
             f"(current_open_fk_z+{DRAWER_INSIDE_OBSERVATION_Z_OFFSET:.3f})"
         )
         return self.motion.plan_and_execute(
@@ -421,7 +415,7 @@ class DrawerInteraction:
         logger.info("서랍 닫기 1단계: 열린 손잡이 joint pose로 이동")
         self.gripper.open_gripper()
         self.wait(GRIPPER_OPEN_WAIT_SEC)
-        if not self.motion.move_to_drawer_open_joints(logger):
+        if not self.motion.move_to_drawer_floor_open_joints(logger, motion.floor):
             logger.error("열린 손잡이 joint pose 이동 실패")
             return False
 
@@ -430,7 +424,7 @@ class DrawerInteraction:
         self.wait(GRIPPER_GRASP_WAIT_SEC)
 
         logger.info("서랍 닫기 3단계: 닫힌 손잡이 joint pose로 이동 (서랍 밀기)")
-        if not self.motion.move_to_drawer_closed_joints(logger):
+        if not self.motion.move_to_drawer_floor_closed_joints(logger, motion.floor):
             logger.error("서랍 닫기 joint 이동 실패")
             return False
 
