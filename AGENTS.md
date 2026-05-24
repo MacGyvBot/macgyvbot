@@ -15,20 +15,58 @@ architecture.
 ## Current Architecture
 
 - Runtime code lives under `src/` as ROS 2 packages.
-- `macgyvbot_bringup`: launch composition.
-- `macgyvbot_task`: task queue, command routing, pick/return orchestration,
-  robot task status.
-- `macgyvbot_command`: headless command pipeline, parser, STT, TTS, command
-  feedback.
-- `macgyvbot_ui`: operator-facing GUI and UI presenters.
-- `macgyvbot_perception`: YOLO, VLM/API grasp point selection, depth projection,
-  hand grasp perception.
-- `macgyvbot_manipulation`: MoveIt adapter, gripper, force sensing, robot pose,
-  safe workspace, grasp verification, handoff targeting.
-- `macgyvbot_config`: shared runtime constants.
-- `macgyvbot_domain`: shared in-process Python dataclasses.
-- `macgyvbot_resources`: calibration and model asset ownership.
-- `macgyvbot_interfaces`: typed ROS message migration target.
+- The root `README.md` is the entry point for humans and agents. Update it
+  whenever package roles, launch paths, setup steps, or common workflows change.
+- Package-level details can live in `EXPLAIN.md` or `docs/`, but the root
+  `README.md` must stay accurate enough to route a new contributor.
+
+## Source Package Responsibilities
+
+Each folder directly under `src/` is a ROS 2 package. Add new code to the
+package that owns the behavior instead of creating cross-package shortcuts.
+
+- `src/macgyvbot_bringup`: launch composition and startup wiring. Keep runtime
+  policy, parsing, perception, and manipulation logic out of launch files.
+- `src/macgyvbot_task`: task orchestration, command routing, pick/return flows,
+  task status, pause/resume/exit, and cleanup. Keep ROS node files thin and put
+  reusable flow logic under `macgyvbot_task/application/`.
+- `src/macgyvbot_command`: command input before it becomes a robot task,
+  including STT, TTS, command parsing, vocabulary, and command feedback.
+- `src/macgyvbot_ui`: operator-facing presentation. Communicate through ROS
+  topics or stable adapters, not through command/perception/manipulation
+  internals.
+- `src/macgyvbot_perception`: YOLO, VLM/API grasp point selection, depth
+  projection, pick target resolution, and human hand/tool grasp perception.
+  Runtime code must not depend on `data/` or `train/` scripts.
+- `src/macgyvbot_manipulation`: MoveIt, gripper, force sensing, robot pose,
+  safe workspace, grasp verification, tool drop monitoring, and handoff targets.
+  Keep hardware assumptions and motion parameters localized and documented.
+- `src/macgyvbot_config`: shared runtime constants and ROS topic names. Prefer
+  `macgyvbot_config.topics` for cross-package topic constants.
+- `src/macgyvbot_domain`: shared in-process Python dataclasses and domain
+  models. Keep it free of ROS node lifecycle, UI, hardware, model runtime, and
+  network dependencies.
+- `src/macgyvbot_interfaces`: typed ROS messages and migration away from ad hoc
+  JSON string payloads. Message changes are API changes.
+- `src/macgyvbot_resources`: calibration files, model weight download scripts,
+  asset placeholders, and resource package metadata.
+
+## Source Connection Rules
+
+- `macgyvbot_bringup` connects packages at launch time.
+- `macgyvbot_command` converts user input into command topics or feedback.
+- `macgyvbot_task` consumes commands, coordinates perception and manipulation,
+  and publishes task status.
+- `macgyvbot_perception` publishes or returns perception results; it should not
+  command robot motion directly.
+- `macgyvbot_manipulation` executes robot-facing operations requested by task
+  orchestration; it should not parse user commands or own UI state.
+- `macgyvbot_ui` presents state and sends operator intent through stable ROS
+  contracts; it should not reach into internals of command, perception, or
+  manipulation packages.
+- `macgyvbot_config`, `macgyvbot_domain`, `macgyvbot_interfaces`, and
+  `macgyvbot_resources` are shared support packages. They should not import
+  application packages such as task, command, UI, perception, or manipulation.
 
 ## Refactoring Boundaries
 
@@ -44,21 +82,6 @@ architecture.
   - `macgyvbot_ui` must not import command parser, STT, or TTS internals.
   - Shared constants belong in `macgyvbot_config`.
   - Shared Python models belong in `macgyvbot_domain`.
-
-## Area Ownership
-
-- Safety / Task Control: task queue boundaries, pause/resume/exit, cleanup,
-  task status consistency.
-- VLM / Perception: VLM runtime, prompts, response parsing, grid selection,
-  SAM input preparation, depth refinement.
-- Command / UI: package separation, topic contracts, GUI presentation. Do not
-  change parser behavior unless requested.
-- Manipulation / Return / Handoff: handoff target observation, return handoff
-  policy, placement flow boundaries, gripper verification.
-- Drawer: drawer open/close primitives and drawer-specific pick/return behavior.
-- Motion safety, unintended movement, IK solution selection, joint flip
-  prevention, and trajectory sanity checking belong to issue #89 unless the
-  active issue says otherwise.
 
 ## Topic Contracts
 
@@ -76,6 +99,9 @@ architecture.
 - If motion behavior changes, document the reason and verification plan.
 - Planning failure, missing depth, missing detections, unsupported frames, and
   interrupted tasks must be handled explicitly.
+- Motion safety, unintended movement, IK solution selection, joint flip
+  prevention, and trajectory sanity checking belong to issue #89 unless the
+  active issue says otherwise.
 
 ## Verification
 
@@ -94,7 +120,11 @@ verification, state what was not run and what remains to verify.
 
 ## Documentation
 
-- Update `README.md` for user-facing install, build, or launch changes.
+- Update the root `README.md` for any change that affects repository structure,
+  package responsibilities, setup, build, launch, common workflows, or the
+  location of important documentation.
+- When adding, moving, or renaming files under `src/`, check whether the root
+  `README.md` still routes contributors to the correct package and workflow.
 - Update `EXPLAIN.md` for package roles, major flows, or file responsibility
   changes.
 - Update `docs/architecture/topics.md` for topic contract changes.
