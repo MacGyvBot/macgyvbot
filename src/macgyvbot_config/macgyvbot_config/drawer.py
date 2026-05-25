@@ -20,6 +20,8 @@ DRAWER_TOOL_PLACE_Z_OFFSET = 0.04
 DRAWER_PICK_GRASP_FROM_HANDLE_Z_M = -0.013
 DRAWER_PICK_APPROACH_LIFT_M = 0.030
 DRAWER_ENTRY_GRIPPER_WIDTH_M = 0.08
+DRAWER_SAFE_Z_MIN_BASE: float = 0.245
+DRAWER_FLOOR_STEP_Z_M: float = 0.033
 
 DRAWER_JOINT_NAMES = ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6"]
 
@@ -35,7 +37,10 @@ TOOL_DRAWER_IDS: dict[str, int] = {
 
 DRAWER_OPEN_OFFSET_XYZ_M: list[float] = [0.0, -0.12, 0.0]
 DRAWER_OBSERVE_OFFSET_XYZ_M: list[float] = [0.0, -0.06, 0.20]
-DRAWER_GRIPPER_SETTLE_SEC: float = 0.8
+
+
+def get_drawer_safe_z_min(drawer_id: int) -> float:
+    return DRAWER_SAFE_Z_MIN_BASE + (drawer_id - 1) * DRAWER_FLOOR_STEP_Z_M
 
 
 def get_tool_drawer_id(tool_name: str) -> int:

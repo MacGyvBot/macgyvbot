@@ -50,9 +50,6 @@ class DrawerHandleMotion:
     closed_z: float
     open_x: float
     open_y: float
-    observe_x: float
-    observe_y: float
-    observe_z: float
     travel_z: float
     approach_z: float
     grasp_z: float
@@ -85,7 +82,6 @@ class DrawerInteraction:
         self.depth_projector = depth_projector
         self.grasp_point_selector = grasp_point_selector
         self.wait = wait_fn or cooperative_wait
-        self._opened_positions: dict = {}
 
     def wait_for_target(
         self,
@@ -253,9 +249,6 @@ class DrawerInteraction:
 
         open_x = x + DRAWER_OPEN_OFFSET_XYZ_M[0]
         open_y = y + DRAWER_OPEN_OFFSET_XYZ_M[1]
-        observe_x = x + DRAWER_OBSERVE_OFFSET_XYZ_M[0]
-        observe_y = y + DRAWER_OBSERVE_OFFSET_XYZ_M[1]
-        observe_z = z + DRAWER_OBSERVE_OFFSET_XYZ_M[2]
         travel_z = self._travel_z(z)
         approach_z = max(z + DRAWER_HANDLE_APPROACH_Z_OFFSET, SAFE_Z_MIN)
         grasp_z = max(z + DRAWER_HANDLE_GRASP_Z_OFFSET, SAFE_Z_MIN)
@@ -268,9 +261,6 @@ class DrawerInteraction:
             closed_z=z,
             open_x=open_x,
             open_y=open_y,
-            observe_x=observe_x,
-            observe_y=observe_y,
-            observe_z=observe_z,
             travel_z=travel_z,
             approach_z=approach_z,
             grasp_z=grasp_z,
@@ -299,20 +289,7 @@ class DrawerInteraction:
             ),
         ):
             logger.error("서랍 열기 Cartesian 이동 실패")
-            return None
-
-        # 실제 도착 위치를 FK로 읽어 close/observe의 기준점으로 사용한다.
-        opened_transform = get_ee_matrix(self.robot)
-        opened_xyz = [
-            float(opened_transform[0, 3]),
-            float(opened_transform[1, 3]),
-            float(opened_transform[2, 3]),
-        ]
-        self._opened_positions[motion.drawer_id] = opened_xyz
-        logger.info(
-            f"서랍 열린 위치 FK: x={opened_xyz[0]:.3f}, "
-            f"y={opened_xyz[1]:.3f}, z={opened_xyz[2]:.3f}"
-        )
+            return None, False
 
         logger.info("서랍 열기 3단계: 손잡이 놓기")
         self.gripper.open_gripper()
@@ -320,106 +297,37 @@ class DrawerInteraction:
 
         logger.info("서랍 열기 4단계: wrist 정규화 후 서랍 내부 관찰 pose로 이동")
         if not self.motion.reset_wrist_to_home(logger):
-            logger.warning("wrist 정규화 실패 — 기존 orientation으로 관찰 진행")
+            logger.warn("wrist 정규화 1차 실패 — 재시도")
+            if not self.motion.reset_wrist_to_home(logger):
+                logger.error("wrist 정규화 실패 — 서랍 관찰 중단")
+                return None, True
         observe_ori = current_ee_orientation(self.robot)
-        observe_x = opened_xyz[0] + DRAWER_OBSERVE_OFFSET_XYZ_M[0]
-        observe_y = opened_xyz[1] + DRAWER_OBSERVE_OFFSET_XYZ_M[1]
-        observe_z = opened_xyz[2] + DRAWER_OBSERVE_OFFSET_XYZ_M[2]
+        observe_x = motion.open_x + DRAWER_OBSERVE_OFFSET_XYZ_M[0]
+        observe_y = motion.open_y + DRAWER_OBSERVE_OFFSET_XYZ_M[1]
+        observe_z = motion.closed_z + DRAWER_OBSERVE_OFFSET_XYZ_M[2]
         if not self.motion.plan_and_execute(
             logger,
             pose_goal=make_safe_pose(observe_x, observe_y, observe_z, observe_ori, logger),
         ):
             logger.error("서랍 내부 관찰 pose 이동 실패")
-            return None
+            return None, True
 
-        return motion
-
-    def open_drawer(self, handle_target_or_motion, logger):
-        if isinstance(handle_target_or_motion, DrawerHandleMotion):
-            motion = handle_target_or_motion
-        else:
-            motion = self._handle_motion(handle_target_or_motion)
-
-        logger.info(
-            "서랍 열기 1단계: 손잡이 상단 접근 "
-            f"x={motion.closed_x:.3f}, y={motion.closed_y:.3f}, z={motion.approach_z:.3f}"
-        )
-        self.gripper.open_gripper()
-        self.wait(GRIPPER_OPEN_WAIT_SEC)
-        if not self._move_handle_pose(
-            motion.closed_x,
-            motion.closed_y,
-            motion.approach_z,
-            motion.ori,
-            logger,
-        ):
-            logger.error("서랍 손잡이 상단 접근 실패")
-            return None
-
-        logger.info("서랍 열기 2단계: 손잡이 파지 높이로 하강")
-        if not self._move_handle_pose(
-            motion.closed_x,
-            motion.closed_y,
-            motion.grasp_z,
-            motion.ori,
-            logger,
-        ):
-            logger.error("서랍 손잡이 하강 실패")
-            return None
-
-        logger.info("서랍 열기 3단계: 손잡이 파지")
-        self.gripper.close_gripper()
-        self.wait(GRIPPER_GRASP_WAIT_SEC)
-
-        logger.info(
-            "서랍 열기 4단계: 손잡이를 당겨 서랍 열기 "
-            f"x={motion.closed_x:.3f}->{motion.open_x:.3f}, "
-            f"y={motion.closed_y:.3f}->{motion.open_y:.3f}"
-        )
-        if not self._move_handle_pose(
-            motion.open_x,
-            motion.open_y,
-            motion.grasp_z,
-            motion.ori,
-            logger,
-        ):
-            logger.error("서랍 손잡이 당기기 실패")
-            return None
-
-        logger.info("서랍 열기 5단계: 열린 위치에서 안전 높이로 복귀")
-        if not self._move_handle_pose(
-            motion.open_x,
-            motion.open_y,
-            motion.travel_z,
-            motion.ori,
-            logger,
-        ):
-            logger.error("서랍 열린 위치 안전 높이 복귀 실패")
-            return None
-
-        self.gripper.open_gripper()
-        self.wait(GRIPPER_OPEN_WAIT_SEC)
-        return motion
+        return motion, True
 
     def close_drawer(self, motion, logger):
-        # open_drawer_from_handle이 저장한 실제 FK 위치를 기준으로 닫는다.
-        opened_xyz = self._opened_positions.get(motion.drawer_id)
-        if opened_xyz is None:
-            logger.warning(
-                f"서랍 {motion.drawer_id}번 열린 위치 FK 없음 — pre-computed 위치로 fallback"
-            )
-            opened_xyz = [motion.open_x, motion.open_y, motion.closed_z]
-        open_x, open_y, open_z = opened_xyz
-
         logger.info("서랍 닫기 1단계: 열린 손잡이 위치 상단 접근")
         self.gripper.open_gripper()
         self.wait(GRIPPER_OPEN_WAIT_SEC)
-        if not self._move_handle_pose(open_x, open_y, motion.approach_z, motion.ori, logger):
+        if not self._move_handle_pose(
+            motion.open_x, motion.open_y, motion.approach_z, motion.ori, logger
+        ):
             logger.error("열린 손잡이 상단 접근 실패")
             return False
 
         logger.info("서랍 닫기 2단계: 손잡이 파지 높이로 하강")
-        if not self._move_handle_pose(open_x, open_y, open_z, motion.ori, logger):
+        if not self._move_handle_pose(
+            motion.open_x, motion.open_y, motion.closed_z, motion.ori, logger
+        ):
             logger.error("열린 손잡이 하강 실패")
             return False
 
@@ -429,7 +337,7 @@ class DrawerInteraction:
 
         logger.info("서랍 닫기 4단계: 닫힌 위치로 밀기")
         if not self._move_handle_pose(
-            motion.closed_x, motion.closed_y, open_z, motion.ori, logger
+            motion.closed_x, motion.closed_y, motion.closed_z, motion.ori, logger
         ):
             logger.error("서랍 닫기 Cartesian 이동 실패")
             return False
@@ -437,7 +345,6 @@ class DrawerInteraction:
         logger.info("서랍 닫기 5단계: 손잡이 놓기")
         self.gripper.open_gripper()
         self.wait(GRIPPER_OPEN_WAIT_SEC)
-        self._opened_positions.pop(motion.drawer_id, None)
         return True
 
     def place_tool_in_open_drawer(self, drawer_target, logger, pre_release_cb=None):
@@ -473,43 +380,12 @@ class DrawerInteraction:
         if pre_release_cb is not None:
             pre_release_cb()
         self.gripper.open_gripper()
-        self.wait(GRIPPER_GRASP_WAIT_SEC)
+        self.wait(GRIPPER_OPEN_WAIT_SEC)
 
         logger.info("서랍 보관 4단계: 공구를 놓은 뒤 안전 높이로 복귀")
         return self.motion.plan_and_execute(
             logger,
             pose_goal=make_safe_pose(place_x, place_y, approach_z, ori, logger),
-        )
-
-    def _handle_motion(self, handle_target):
-        travel_z = self._travel_z(handle_target.z)
-        approach_z = max(
-            handle_target.z + DRAWER_HANDLE_APPROACH_Z_OFFSET,
-            SAFE_Z_MIN,
-        )
-        grasp_z = max(handle_target.z + DRAWER_HANDLE_GRASP_Z_OFFSET, SAFE_Z_MIN)
-        if approach_z < grasp_z:
-            approach_z = grasp_z
-
-        open_x = handle_target.x + DRAWER_OPEN_OFFSET_XYZ_M[0]
-        open_y = handle_target.y + DRAWER_OPEN_OFFSET_XYZ_M[1]
-        observe_x = handle_target.x + DRAWER_OBSERVE_OFFSET_XYZ_M[0]
-        observe_y = handle_target.y + DRAWER_OBSERVE_OFFSET_XYZ_M[1]
-        observe_z = handle_target.z + DRAWER_OBSERVE_OFFSET_XYZ_M[2]
-        return DrawerHandleMotion(
-            closed_x=handle_target.x,
-            closed_y=handle_target.y,
-            closed_z=handle_target.z,
-            open_x=open_x,
-            open_y=open_y,
-            observe_x=observe_x,
-            observe_y=observe_y,
-            observe_z=observe_z,
-            travel_z=travel_z,
-            approach_z=approach_z,
-            grasp_z=grasp_z,
-            ori=self.state.home_ori,
-            handle_fk_z=handle_target.z,
         )
 
     def _move_handle_pose(self, x, y, z, ori, logger):

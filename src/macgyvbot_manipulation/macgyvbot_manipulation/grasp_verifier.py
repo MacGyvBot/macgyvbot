@@ -38,6 +38,7 @@ class GraspVerifier:
         return False
 
     def verify(self, logger):
+        self.wait_fn(GRASP_VERIFY_POLL_SEC)
         start_time = time.monotonic()
         last_status = None
         stable_count = 0

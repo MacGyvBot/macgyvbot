@@ -146,7 +146,8 @@ class PickSequenceRunner:
                 message="서랍 손잡이를 당겨 여는 중입니다.",
                 command=self.state.current_command,
             )
-            if drawer.open_drawer_from_handle(motion, log) is None:
+            open_result, drawer_opened = drawer.open_drawer_from_handle(motion, log)
+            if open_result is None:
                 self.state._publish_robot_status(
                     "failed",
                     tool_name=requested_tool,
@@ -155,7 +156,8 @@ class PickSequenceRunner:
                     reason="drawer_open_failed",
                     command=self.state.current_command,
                 )
-                motion = None
+                if not drawer_opened:
+                    motion = None
                 return
 
             log.info(f"서랍 픽업 선택: tool={requested_tool}, drawer_id={drawer_id}")
@@ -182,7 +184,7 @@ class PickSequenceRunner:
                 )
                 return
 
-            pick_success = self._drawer_grasp_and_handoff(tool_target, motion.handle_fk_z, log)
+            pick_success = self._drawer_grasp_and_handoff(tool_target, motion.handle_fk_z, motion.drawer_id, log)
         finally:
             # robot_grasp_succeeded is set True only after try_robot_grasp succeeds.
             # If False, gripper never closed on the tool → safe to close drawer.
@@ -200,9 +202,12 @@ class PickSequenceRunner:
                 if gripper_safe:
                     ok, _ = move_to_observation_pose(self.motion, self.robot, log)
                     if ok:
-                        drawer_ok = drawer.close_drawer(motion, log)
-                        if not drawer_ok:
-                            log.error("서랍 닫기 실패")
+                        if self.motion.move_to_drawer_handle_joints(log, motion.drawer_id):
+                            drawer_ok = drawer.close_drawer(motion, log)
+                            if not drawer_ok:
+                                log.error("서랍 닫기 실패")
+                        else:
+                            log.error("서랍 닫기 전 손잡이 joint 복귀 실패")
                     else:
                         log.error("서랍 닫기 전 관찰 자세 이동 실패")
                 else:
@@ -234,14 +239,14 @@ class PickSequenceRunner:
             self.state.human_grasped_tool = False
             self.state.current_command = None
 
-    def _drawer_grasp_and_handoff(self, tool_target, handle_fk_z, log):
+    def _drawer_grasp_and_handoff(self, tool_target, handle_fk_z, drawer_id, log):
         """서랍 전용 pick: 관찰 자세에서 approach_z로 직접 이동 → grasp_z 하강 → 파지 → 수직 리프트 → handoff.
 
         XY+Z를 approach_z까지 한 번에 이동해 lift_z 기준 XY 보정보다
         base 거리를 줄여 planning 실패를 피한다.
         """
         plan = self.target_planner.plan_drawer(
-            tool_target.x, tool_target.y, handle_fk_z, log
+            tool_target.x, tool_target.y, handle_fk_z, drawer_id, log
         )
         current_pose = get_ee_matrix(self.robot)
         current_x = float(current_pose[0, 3])

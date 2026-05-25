@@ -39,11 +39,11 @@ class ForceReactionDetector:
                 return current_z
 
             if current_z <= SAFE_Z_MIN:
-                logger.warn(
-                    "Z 반력이 임계값에 도달하지 않았지만 안전 최소 Z까지 하강했습니다: "
+                logger.error(
+                    "안전 최소 Z까지 하강했지만 Z 반력이 감지되지 않았습니다: "
                     f"last_force_z={force_z}"
                 )
-                return current_z
+                return None
 
             next_z = max(SAFE_Z_MIN, current_z - RETURN_HOME_DESCENT_STEP_M)
             ok = self.motion.plan_and_execute(

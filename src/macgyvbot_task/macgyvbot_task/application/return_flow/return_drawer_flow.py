@@ -77,7 +77,8 @@ class ReturnDrawerFlow:
                 )
                 return False
 
-            if self.drawer.open_drawer_from_handle(motion, logger) is None:
+            open_result, drawer_opened = self.drawer.open_drawer_from_handle(motion, logger)
+            if open_result is None:
                 self.reporter.fail(
                     tool_name,
                     "반납 서랍 열기 실패",
@@ -85,7 +86,8 @@ class ReturnDrawerFlow:
                     command,
                     logger,
                 )
-                motion = None
+                if not drawer_opened:
+                    motion = None
                 return False
 
             self.reporter.publish(
