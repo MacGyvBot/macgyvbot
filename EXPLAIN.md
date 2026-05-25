@@ -21,14 +21,21 @@ ROS 패키지가 아니라 colcon workspace root이며, 실행 entrypoint는
   - `/robot_task_status`와 `/tool_drop_detected`를 발행합니다.
 
 - `src/macgyvbot_command`
-  - command input node, command parser, STT/TTS helper, command-coupled GUI를 소유합니다.
-  - `/tool_command`, `/robot_task_control`, `/command_feedback`, `/stt_text`를 발행하고
-    `/robot_task_status`를 구독합니다.
+  - headless command input node, command parser, STT/TTS helper를 소유합니다.
+  - `/stt_text`를 입력으로 받아 `/tool_command`, `/robot_task_control`,
+    `/command_feedback`를 발행합니다.
 
 - `src/macgyvbot_perception`
   - YOLO detection, depth projection, pick target resolution, grasp point selection,
     hand grasp detection node와 hand/tool grasp helper를 소유합니다.
   - model path lookup은 `macgyvbot_resources`를 기준으로 수행합니다.
+  - `grasp_point/`는 로봇이 잡을 image-space grasp point 선택과 depth
+    refinement를 담당합니다.
+  - `hand_tool_grasp/`는 사용자 손이 공구를 잡았는지 판단하는 hand landmark,
+    tool ROI/mask contact, ML hand grasp classification을 담당합니다.
+  - ROS-facing 이름인 `hand_grasp_detection_node`,
+    `/hand_grasp_detection/annotated_image`, `hand_grasp_model.pkl`은 명시적
+    interface migration 없이는 유지합니다.
 
 - `src/macgyvbot_manipulation`
   - MoveIt controller, robot pose helper, safe workspace clamp, OnRobot gripper,
@@ -50,19 +57,25 @@ ROS 패키지가 아니라 colcon workspace root이며, 실행 entrypoint는
   - 현재 runtime은 호환성을 위해 JSON over `std_msgs/String`을 유지합니다.
 
 - `src/macgyvbot_ui`
-  - 독립 UI boundary를 위한 패키지입니다. 현재 command-coupled GUI는
-    `macgyvbot_command`에 남아 있습니다.
+  - operator-facing GUI boundary를 소유합니다.
+  - 사용자 입력을 `/stt_text`로 발행하고 `/command_feedback`,
+    `/robot_task_status`, detector image topic을 구독해 표시합니다.
 
 ## Main Flow
 
 ```text
 macgyvbot_command.command_input_node
-  -> GUI 입력 또는 마이크 STT 수집
+  -> /stt_text 또는 마이크 STT 입력 수집
   -> command parser로 자연어 명령 해석
   -> bring/return은 /tool_command로 발행
   -> stop/pause/resume은 /robot_task_control로 발행
   -> 최신 exit 요청은 /robot_task_control의 exit action으로 발행
-  -> /command_feedback, /stt_text 발행
+  -> /command_feedback 발행
+
+macgyvbot_ui.operator_ui_node
+  -> 사용자 입력을 /stt_text로 발행
+  -> /command_feedback, /robot_task_status, detector image topic을 구독
+  -> operator GUI에 채팅, 상태, detector view 표시
 
 macgyvbot_task.macgyvbot_main_node
   -> /tool_command, /robot_task_control 또는 수동 /target_label 수신
