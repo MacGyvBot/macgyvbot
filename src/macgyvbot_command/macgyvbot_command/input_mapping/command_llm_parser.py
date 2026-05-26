@@ -64,6 +64,10 @@ class CommandLlmParser:
         if pending_result is not None:
             return pending_result
 
+        guarded_result = self._guard_non_executable_control_text(text)
+        if guarded_result is not None:
+            return guarded_result
+
         if self._has_stop_intent(text):
             return self._accepted_result(
                 {
@@ -128,6 +132,10 @@ class CommandLlmParser:
                     'confidence': 1.0,
                 }
             )
+
+        explicit_return = self._parse_explicit_return(text)
+        if explicit_return is not None:
+            return self._accepted_result(explicit_return)
 
         llm_rejected_result = None
         if self._parser_mode == 'llm_primary' and self._use_llm_fallback:
@@ -456,6 +464,99 @@ class CommandLlmParser:
         )
         return command
 
+    def _parse_explicit_return(self, text):
+        effective_text = self._effective_command_text(text)
+        if find_action(effective_text) != 'return':
+            return None
+
+        tool_name, match_method, match_score, _ = find_tool(effective_text)
+        if match_method == 'alias':
+            return {
+                'tool_name': tool_name,
+                'action': 'return',
+                'target_mode': 'named',
+                'raw_text': text,
+                'match_method': match_method,
+                'match_score': match_score,
+                'confidence': match_score,
+            }
+
+        if self._has_deictic_target(effective_text):
+            return {
+                'tool_name': 'unknown',
+                'action': 'return',
+                'target_mode': 'deictic',
+                'raw_text': text,
+                'match_method': 'local_deictic',
+                'match_score': 1.0,
+                'confidence': 1.0,
+            }
+
+        return None
+
+    def _guard_non_executable_control_text(self, text):
+        if not self._mentions_control_action(text):
+            return None
+
+        normalized = self._normalize_answer(text)
+        if any(
+            token in normalized
+            for token in (
+                '하지마',
+                '하지말',
+                '주지마',
+                '주지말',
+                '열지마',
+                '열지말',
+                '놓지마',
+                '놓지말',
+                '놔두지마',
+                '놔두지말',
+            )
+        ):
+            return {
+                'command': None,
+                'feedbacks': [
+                    self._feedback(
+                        status='assistant_response',
+                        raw_text=text,
+                        reason='negated_command',
+                        message='알겠습니다. 해당 동작은 실행하지 않겠습니다.',
+                    )
+                ],
+            }
+
+        if (
+            '?' in text
+            or any(
+                token in normalized
+                for token in (
+                    '중이야',
+                    '상태야',
+                    '완료됐',
+                    '완료되었',
+                    '처리중',
+                    '됐어',
+                    '되었어',
+                    '어떻게돼',
+                    '어떻게되',
+                )
+            )
+        ):
+            return {
+                'command': None,
+                'feedbacks': [
+                    self._feedback(
+                        status='assistant_response',
+                        raw_text=text,
+                        reason='status_query',
+                        message=self._context.robot_status_message(),
+                    )
+                ],
+            }
+
+        return None
+
     def _has_deictic_target(self, text):
         normalized = self._normalize_answer(text)
         return any(word in normalized for word in DEICTIC_WORDS)
@@ -530,7 +631,7 @@ class CommandLlmParser:
         if action == 'resume':
             return '재개 명령으로 이해했습니다. 작업 재개 요청으로 전달합니다.'
         if action == 'exit':
-            return '종료 요청으로 이해했습니다. 안전을 위해 자동 종료하지 않고 안내만 표시합니다.'
+            return '종료 요청을 전달했습니다. 작업을 정리하고 Home 위치로 복귀한 뒤 종료합니다.'
         if action == 'home':
             return 'Home 위치로 복귀하라는 뜻으로 이해했습니다.'
         return '명령을 올바른 입력으로 판단했습니다.'
@@ -669,9 +770,12 @@ class CommandLlmParser:
 - status_query와 smalltalk는 tool_name unknown, action unknown, target_mode unknown으로 둔다.
 - status_query와 smalltalk는 assistant_message에 사용자가 볼 짧은 한국어 응답을 넣는다.
 - "멈춰", "정지", "중지", "중단", "스탑", "stop", "pause"처럼 명확한 정지 표현만 pause action이다.
-- "재개", "다시 시작", "계속해", "resume", "restart"처럼 명확한 재개 표현만 resume action이다.
-- "종료", "끝내", "꺼줘", "닫아줘", "exit", "quit"처럼 명확한 종료 표현만 exit action이다.
+- "재개", "다시 시작", "계속해", "계속 진행해", "resume", "restart"처럼 명확한 재개 표현만 resume action이다.
+- "종료", "끝내", "프로그램 꺼줘", "앱 닫아줘", "GUI 종료", "exit", "quit"처럼 명확한 종료 표현만 exit action이다.
+- "카메라 꺼줘"처럼 프로그램 종료 대상이 아닌 장치를 끄라는 문장을 exit action으로 해석하지 않는다.
 - "홈위치로 가", "홈으로 가", "복귀해", "원위치로 가", "초기 위치로 이동해", "home"처럼 명확한 Home 복귀 표현만 home action이다.
+- "종료하지 마", "복귀하지 마", "정지하지 마", "그리퍼 열지 마" 같은 부정문은 어떤 command도 실행하지 않는다.
+- "종료됐어?", "복귀 중이야?", "현재 정지 상태야?" 같은 질문은 status_query이며 command가 아니다.
 - 이해하지 못한 문장을 pause, resume, exit, home으로 추측하지 말고 action unknown으로 둔다.
 
 예시:
@@ -1201,6 +1305,19 @@ class CommandLlmParser:
                 '그리퍼오픈',
                 '집게열',
                 '집게오픈',
+            )
+        )
+
+    def _mentions_control_action(self, raw_text):
+        return (
+            self._has_stop_intent(raw_text)
+            or self._has_resume_intent(raw_text)
+            or self._has_exit_intent(raw_text)
+            or self._has_home_intent(raw_text)
+            or self._has_release_intent(raw_text)
+            or any(
+                token in self._normalize_answer(raw_text)
+                for token in ('놓지', '놔두지')
             )
         )
 

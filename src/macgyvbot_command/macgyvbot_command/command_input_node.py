@@ -314,6 +314,8 @@ class CommandInputNode(Node):
             action = command.get("action")
             if action in {"pause", "resume"}:
                 self._show_local_control_command(command)
+                for payload in result.get('feedbacks', []):
+                    self._publish_feedback_payload(payload)
                 self._send_task_control_request(action=action, reason=text)
                 return
 
@@ -323,12 +325,8 @@ class CommandInputNode(Node):
                     return
                 self._exit_pending = True
                 self._show_local_control_command(command)
-                exit_message = (
-                    '종료 요청을 전달했습니다. 작업을 정리하고 '
-                    'Home 위치로 복귀한 뒤 종료합니다.'
-                )
-                self._append_bot(exit_message)
-                self._append_log('info', exit_message)
+                for payload in result.get('feedbacks', []):
+                    self._publish_feedback_payload(payload)
                 self._set_status('종료 처리 중')
                 self._send_task_control_request(action=action, reason=text)
                 return
@@ -444,11 +442,11 @@ class CommandInputNode(Node):
             if command.get('action') == 'exit':
                 exit_message = (
                     message
-                    or '종료 요청을 이해했습니다. 현재 작업 중단을 로봇에 전달했습니다.'
+                    or '종료 요청을 전달했습니다. 작업을 정리하고 Home 위치로 복귀한 뒤 종료합니다.'
                 )
                 self._append_bot(exit_message)
                 self._append_log('info', '종료 명령 해석 완료: 로봇 작업 중단 요청 발행')
-                self._set_status('종료 요청 확인')
+                self._set_status('종료 처리 중')
                 return
 
             accepted_message = message or '명령을 이해했습니다.'
