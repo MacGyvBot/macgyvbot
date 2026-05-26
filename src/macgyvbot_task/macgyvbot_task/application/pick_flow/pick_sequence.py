@@ -107,7 +107,7 @@ class PickSequenceRunner:
                     "pick/apply_vlm_yaw",
                     lambda: self._rotate_wrist(vlm_yaw_deg, context),
                 )
-                return
+            )
 
             refined_target = self._refine_target_after_xy_move(log)
             if refined_target is not None:

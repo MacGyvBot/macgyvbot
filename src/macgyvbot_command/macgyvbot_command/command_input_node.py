@@ -107,6 +107,7 @@ class CommandInputNode(Node):
 
         self.window = None
         self._shutdown_callback = None
+        self._exit_pending = False
         self._last_feedback_key = None
         self._last_feedback_stamp_ns = 0
         self._feedback_dedupe_ns = 2_000_000_000
@@ -317,12 +318,19 @@ class CommandInputNode(Node):
                 return
 
             elif action == 'exit':
+                if self._exit_pending:
+                    self._append_log('warn', '이미 종료 요청을 처리 중입니다.')
+                    return
+                self._exit_pending = True
                 self._show_local_control_command(command)
+                exit_message = (
+                    '종료 요청을 전달했습니다. 작업을 정리하고 '
+                    'Home 위치로 복귀한 뒤 종료합니다.'
+                )
+                self._append_bot(exit_message)
+                self._append_log('info', exit_message)
+                self._set_status('종료 처리 중')
                 self._send_task_control_request(action=action, reason=text)
-                if QTimer is not None:
-                    QTimer.singleShot(500, self.request_shutdown)
-                else:
-                    self.request_shutdown()
                 return
 
             else:
@@ -543,6 +551,30 @@ class CommandInputNode(Node):
         if view['show_chat']:
             self._append_bot(view['chat_message'], speak=view['speak'])
 
+        self._handle_exit_status(status, view['state'])
+
+    def _handle_exit_status(self, status, state):
+        if not self._exit_pending:
+            return
+
+        if str(status.get('action', '')).strip().lower() != 'exit':
+            return
+
+        if state in {'done', 'completed', 'success'}:
+            self._append_log('info', '종료 완료 상태 확인: GUI와 command_input_node를 종료합니다.')
+            self._set_status('종료')
+            self._exit_pending = False
+            if QTimer is not None:
+                QTimer.singleShot(500, self.request_shutdown)
+            else:
+                self.request_shutdown()
+            return
+
+        if state in {'failed', 'error', 'rejected'}:
+            self._append_log('warn', '종료 처리가 완료되지 않아 GUI를 유지합니다.')
+            self._set_status('종료 실패')
+            self._exit_pending = False
+
     def _camera_status_cb(self, _msg):
         self._last_camera_stamp_ns = self.get_clock().now().nanoseconds
 
@@ -711,6 +743,8 @@ class CommandInputNode(Node):
             'handoff_complete': '공구 전달을 완료했습니다.',
             'waiting_return_handoff': '반납할 공구를 받을 준비를 하고 있습니다.',
             'moving_return_grasp_pose': '반납 공구를 감지할 위치로 이동 중입니다.',
+            'checking_return_target': '반납 공구 위치를 확인하는 중입니다.',
+            'return_hand_detected': '사용자 손 위치에서 반납 공구를 받는 중입니다.',
             'placing_return_tool': f'{target_label}를 보관 위치에 놓는 중입니다.',
             'returning_home': 'Home 위치로 복귀하는 중입니다.',
             'done': '작업이 완료되었습니다.',
@@ -757,6 +791,8 @@ class CommandInputNode(Node):
             'handoff_complete': '전달 완료',
             'waiting_return_handoff': '반납 대기',
             'moving_return_grasp_pose': '반납 위치 이동',
+            'checking_return_target': '반납 위치 확인',
+            'return_hand_detected': '손 위치 수령',
             'placing_return_tool': '공구 보관',
             'returning_home': 'Home 복귀',
             'done': '완료',
@@ -799,6 +835,8 @@ class CommandInputNode(Node):
             'handoff_complete': '공구 전달 완료',
             'waiting_return_handoff': '반납 공구 수령 대기',
             'moving_return_grasp_pose': '반납 공구 감지 위치 이동 중',
+            'checking_return_target': '반납 공구 위치 확인 중',
+            'return_hand_detected': '손 위치에서 공구 수령 중',
             'placing_return_tool': '서랍 안에 공구 보관 중',
             'returning_home': 'Home 복귀 중',
             'done': '작업 완료',
@@ -842,6 +880,7 @@ class CommandInputNode(Node):
         return {
             'waiting_handoff',
             'waiting_return_handoff',
+            'returning_home',
             'done',
             'completed',
             'success',

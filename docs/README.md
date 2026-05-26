@@ -1,12 +1,18 @@
-# 문서 작성 공간
+# MacGyvBot Docs
 
-이 폴더는 각 브랜치에서 진행한 작업의 설명을 정리해 push하기 위한 공간이다.
+이 폴더는 README에 넣기에는 긴 설계 문서, topic 계약, 파트별 계획, 실험
+메모를 보관한다.
 
-권장 작성 방식:
-- 브랜치명이나 이슈 번호를 파일명에 포함한다.
-- 변경 목적, 주요 변경 사항, 확인한 내용을 간단히 적는다.
-- 코드와 직접 관련된 결정 사항이나 주의할 점이 있으면 함께 남긴다.
+## 문서 구분
 
-예:
-- `34-refactoring.md`
-- `feature-voice-command.md`
+- `architecture/`: 패키지 경계, topic 계약, runtime 구조 같은 장기 유지 문서
+- `vlm-advancement-plan.md`: VLM 개선 계획
+- 이슈/브랜치별 상세 기록은 필요할 때 별도 파일로 추가한다.
+
+## 작성 기준
+
+- README에는 설치, 빌드, 실행에 필요한 최소 정보만 둔다.
+- 현재 runtime 구조 설명은 `EXPLAIN.md`에 둔다.
+- 작업자/에이전트 공통 지침은 루트 `AGENTS.md`에 둔다.
+- topic publisher/subscriber 또는 payload 계약이 바뀌면
+  `architecture/topics.md`를 함께 수정한다.

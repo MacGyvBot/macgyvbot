@@ -49,6 +49,7 @@ from macgyvbot_perception.hand_tool_grasp.ml_grasp_classifier import (
     MLHandGraspClassifier,
     MLGraspResult,
     disabled_ml_result,
+    extract_ml_features,
 )
 from macgyvbot_perception.hand_tool_grasp.sam_tool_mask import (
     BBoxPromptSegmenter,
@@ -349,7 +350,7 @@ class HandGraspDetectionNode(Node):
             else tool_detection.roi if tool_detection is not None else None
         )
         hand_infos = self.hand_detector.detect_all(frame)
-        active_hand = select_active_hand(hand_infos, tool_roi)
+        active_hand = self._select_active_hand(hand_infos, tool_roi)
         hand_for_state = active_hand if active_hand is not None else (
             hand_infos[0] if hand_infos else None
         )
@@ -529,6 +530,49 @@ class HandGraspDetectionNode(Node):
             self.ml_classifier.reset()
             return disabled_ml_result("model_error")
 
+    def _select_active_hand(self, hand_infos: list[dict], tool_roi):
+        ml_hand = self._select_highest_ml_grasp_hand(hand_infos)
+        if ml_hand is not None:
+            return ml_hand
+        return select_active_hand(hand_infos, tool_roi)
+
+    def _select_highest_ml_grasp_hand(self, hand_infos: list[dict]):
+        if self.ml_classifier is None or not hand_infos:
+            return None
+
+        scored_hands = []
+        for hand_info in hand_infos:
+            score = self._raw_ml_grasp_score(hand_info)
+            if score is None:
+                continue
+            scored_hands.append((score, hand_info))
+
+        if not scored_hands:
+            return None
+
+        score, hand_info = max(scored_hands, key=lambda item: item[0])
+        hand_info["ml_grasp_candidate_score"] = score
+        return hand_info
+
+    def _raw_ml_grasp_score(self, hand_info: dict):
+        try:
+            features = extract_ml_features(hand_info)
+            model = self.ml_classifier.model
+            raw_state = str(model.predict([features])[0])
+            if raw_state != "grasp":
+                return 0.0
+            if not hasattr(model, "predict_proba"):
+                return 1.0
+
+            probabilities = model.predict_proba([features])[0]
+            classes = list(getattr(model, "classes_", []))
+            if "grasp" in classes:
+                return float(probabilities[classes.index("grasp")])
+            return float(max(probabilities))
+        except Exception as exc:
+            self.get_logger().warn(f"ML grasp 후보 점수 계산 실패: {exc}")
+            return None
+
     def _compose_result(
         self,
         hand_info: Optional[dict],
@@ -638,6 +682,7 @@ class HandGraspDetectionNode(Node):
         hand_pixel = extract_hand_center_pixel(active_hand, hand_infos)
         payload = {
             "state": result["state"],
+            "hand_present": bool(hand_infos),
             "human_grasped_tool": result["human_grasped_tool"],
             "grasp_counter": result["grasp_counter"],
             "grasp_score": result["grasp_score"],

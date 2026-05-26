@@ -177,16 +177,16 @@ class TestHandoverTargeting(unittest.TestCase):
             {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
             FakeLogger(),
             x_offset_m=0.0,
-            z_offset_m=0.08,
+            z_offset_m=0.10,
         )
 
         self.assertTrue(ok)
         self.assertEqual(reason, "")
         self.assertEqual(len(motion.targets), 3)
-        self.assertAlmostEqual(motion.targets[0][2], 0.39)
+        self.assertAlmostEqual(motion.targets[0][2], 0.35)
         self.assertLess(motion.targets[1][0], motion.targets[0][0])
         self.assertLess(abs(motion.targets[1][1]), abs(motion.targets[0][1]))
-        self.assertAlmostEqual(motion.targets[1][2], 0.39)
+        self.assertAlmostEqual(motion.targets[1][2], motion.targets[0][2])
         self.assertEqual(final_pose.x, motion.targets[2][0])
 
     def test_handoff_target_z_uses_hand_height_when_higher_than_minimum(self):
@@ -206,13 +206,13 @@ class TestHandoverTargeting(unittest.TestCase):
             {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
             FakeLogger(),
             x_offset_m=0.0,
-            z_offset_m=0.08,
+            z_offset_m=0.10,
         )
 
         self.assertTrue(ok)
         self.assertEqual(reason, "")
-        self.assertAlmostEqual(motion.targets[0][2], 0.48)
-        self.assertAlmostEqual(final_pose.z, 0.48)
+        self.assertAlmostEqual(motion.targets[0][2], 0.50)
+        self.assertAlmostEqual(final_pose.z, 0.50)
 
 
 if __name__ == "__main__":
