@@ -13,6 +13,7 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
 
+from macgyvbot_config.topics import COMMAND_SHUTDOWN_TOPIC, ROBOT_TASK_CONTROL_TOPIC
 from macgyvbot_command.input_mapping.command_llm_parser import CommandLlmParser
 from macgyvbot_command.stt.speech_to_text import SpeechToTextService
 from macgyvbot_command.tts import TtsService
@@ -72,6 +73,7 @@ class CommandInputNode(Node):
         command_feedback_topic = self.get_parameter('command_feedback_topic').value
         robot_status_topic = self.get_parameter('robot_status_topic').value
 
+        self._exit_pending = False
         self._stt_pub = self.create_publisher(String, stt_text_topic, 10)
         self._compat_pub = (
             self.create_publisher(String, compat_topic, 10)
@@ -80,10 +82,16 @@ class CommandInputNode(Node):
         )
         self._tool_command_pub = self.create_publisher(String, tool_command_topic, 10)
         self._feedback_pub = self.create_publisher(String, command_feedback_topic, 10)
+        self._task_control_pub = self.create_publisher(
+            String,
+            ROBOT_TASK_CONTROL_TOPIC,
+            10,
+        )
 
         self.create_subscription(String, stt_text_topic, self._text_cb, 10)
         self.create_subscription(String, command_feedback_topic, self._feedback_cb, 10)
         self.create_subscription(String, robot_status_topic, self._robot_status_cb, 10)
+        self.create_subscription(String, COMMAND_SHUTDOWN_TOPIC, self._shutdown_cb, 10)
 
         self._parser = CommandLlmParser(
             ollama_url=self.get_parameter('ollama_url').value,
@@ -181,10 +189,26 @@ class CommandInputNode(Node):
         command = result.get('command')
         if command is not None:
             action = command.get('action')
-            if action in ('resume', 'exit'):
+            if action in ('pause', 'resume'):
                 self.get_logger().info(
-                    f'로컬 제어 명령 해석: action={action}, raw_text="{text}"'
+                    f'작업 제어 명령 해석: action={action}, raw_text="{text}"'
                 )
+                for payload in result.get('feedbacks', []):
+                    self._publish_feedback_payload(payload)
+                self._send_task_control_request(action=action, reason=text)
+                return
+            if action == 'exit':
+                if self._exit_pending:
+                    self.get_logger().warn('이미 종료 요청을 처리 중입니다.')
+                    return
+                self._exit_pending = True
+                self.get_logger().info(
+                    f'종료 제어 명령 해석: action={action}, raw_text="{text}"'
+                )
+                for payload in result.get('feedbacks', []):
+                    self._publish_feedback_payload(payload)
+                self._send_task_control_request(action=action, reason=text)
+                return
             else:
                 self._publish_command(command)
 
@@ -205,6 +229,34 @@ class CommandInputNode(Node):
         msg = String()
         msg.data = json.dumps(payload, ensure_ascii=False)
         self._feedback_pub.publish(msg)
+
+    def _send_task_control_request(self, action, reason):
+        msg = String()
+        msg.data = json.dumps(
+            {
+                'action': action,
+                'reason': reason,
+                'source': 'command_input',
+            },
+            ensure_ascii=False,
+        )
+        self._task_control_pub.publish(msg)
+        self.get_logger().info(
+            f'/robot_task_control 발행: action={action}, reason={reason}'
+        )
+
+    def _shutdown_cb(self, msg):
+        try:
+            payload = json.loads(msg.data)
+        except json.JSONDecodeError:
+            payload = {}
+
+        if payload.get('action') != 'shutdown':
+            return
+
+        self.get_logger().info('operator UI 종료 신호 수신: command_input_node를 종료합니다.')
+        if rclpy.ok():
+            rclpy.shutdown()
 
     def _feedback_cb(self, msg):
         try:
@@ -237,6 +289,20 @@ class CommandInputNode(Node):
             if not message:
                 message = self._robot_status_default_message(state)
             self._speak_bot(message)
+
+        if self._exit_pending and str(status.get('action', '')).lower() == 'exit':
+            if state in ('done', 'completed', 'success'):
+                self._exit_pending = False
+                self.get_logger().info(
+                    '종료 완료 상태 확인: command_input_node를 종료합니다.'
+                )
+                if rclpy.ok():
+                    rclpy.shutdown()
+            elif state in ('failed', 'error', 'rejected'):
+                self._exit_pending = False
+                self.get_logger().warn(
+                    '종료 처리가 실패하여 command_input_node를 유지합니다.'
+                )
 
     def _feedback_speech_message(self, feedback):
         status = feedback.get('status', 'unknown')
@@ -352,7 +418,8 @@ def main(args=None):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

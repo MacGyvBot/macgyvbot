@@ -15,6 +15,7 @@ from macgyvbot_config.handoff import (
     HANDOVER_REPLAN_MAX_ATTEMPTS,
     HANDOVER_REPLAN_X_STEP_M,
     HANDOVER_SEARCH_TIMEOUT_SEC,
+    HANDOVER_TARGET_MIN_Z_CLEARANCE_M,
 )
 from macgyvbot_config.robot import (
     BASE_FRAME,
@@ -23,7 +24,7 @@ from macgyvbot_config.robot import (
 )
 from macgyvbot_config.timing import SEQUENCE_WAIT_POLL_SEC
 from macgyvbot_manipulation.robot_pose import make_safe_pose
-from macgyvbot_manipulation.robot_safezone import SAFE_Z_MIN
+from macgyvbot_manipulation.robot_safezone import SAFE_X_MIN, SAFE_Z_MIN
 
 
 @dataclass(frozen=True)
@@ -79,6 +80,7 @@ def start_async_observation_search(
     logger,
     timeout_sec: float = HANDOVER_SEARCH_TIMEOUT_SEC,
     poll_sec: float = SEQUENCE_WAIT_POLL_SEC,
+    should_interrupt=None,
 ) -> Future:
     """Start an async, observation-only target search from grasp results."""
     return _SEARCH_EXECUTOR.submit(
@@ -87,6 +89,7 @@ def start_async_observation_search(
         logger,
         timeout_sec,
         poll_sec,
+        should_interrupt,
     )
 
 
@@ -95,6 +98,7 @@ def observe_target_candidate(
     logger,
     timeout_sec: float = HANDOVER_SEARCH_TIMEOUT_SEC,
     poll_sec: float = SEQUENCE_WAIT_POLL_SEC,
+    should_interrupt=None,
 ) -> TargetCandidate:
     """Observe a hand target only after its position is stable long enough."""
     return _observe_stable_candidate(
@@ -102,6 +106,7 @@ def observe_target_candidate(
         logger,
         timeout_sec,
         poll_sec,
+        should_interrupt=should_interrupt,
     )
 
 
@@ -138,6 +143,7 @@ def _observe_stable_candidate(
     poll_sec: float,
     stable_duration_sec: float = HAND_POSE_WAIT_AFTER_DETECTION_SEC,
     stable_tolerance_m: float = HAND_POSE_STABLE_TOLERANCE_M,
+    should_interrupt=None,
 ) -> TargetCandidate:
     deadline = time.monotonic() + max(0.0, float(timeout_sec))
     sleep_step = min(max(0.01, float(poll_sec)), 0.1)
@@ -147,6 +153,18 @@ def _observe_stable_candidate(
     last_log_time = 0.0
 
     while time.monotonic() < deadline:
+        if should_interrupt is not None and should_interrupt():
+            logger.info("관측 기반 목표 탐색을 stop/pause 요청으로 중단합니다.")
+            return TargetCandidate(
+                found=False,
+                x=0.0,
+                y=0.0,
+                z=0.0,
+                frame_id="world",
+                source="observation_interrupted",
+                observed_at_sec=time.monotonic(),
+            )
+
         result = getattr(state, "last_grasp_result", None) or {}
         candidate = _candidate_from_grasp_result(result)
         if candidate is None:
@@ -216,6 +234,7 @@ def move_to_candidate_with_offset(
     logger,
     x_offset_m: float,
     z_offset_m: float,
+    should_interrupt=None,
 ) -> tuple[bool, SearchStartPose, str]:
     """
     Move to the final handover pose derived from a candidate.
@@ -237,24 +256,23 @@ def move_to_candidate_with_offset(
 
     target_x = candidate.x + float(x_offset_m)
     target_y = candidate.y
-    target_z = max(SAFE_Z_MIN + 0.15, candidate.z + float(z_offset_m))
-    attempts = [(target_x, target_y, target_z)]
-    retry_count = max(0, int(HANDOVER_REPLAN_MAX_ATTEMPTS) - 1)
-    for index in range(1, retry_count + 1):
-        y_ratio = max(0.0, 1.0 - index / float(max(1, retry_count)))
-        attempts.append(
-            (
-                target_x - HANDOVER_REPLAN_X_STEP_M * index,
-                target_y * y_ratio,
-                target_z,
-            )
-        )
+    min_target_z = SAFE_Z_MIN + HANDOVER_TARGET_MIN_Z_CLEARANCE_M
+    target_z = max(min_target_z, candidate.z + float(z_offset_m))
+    attempts = build_replan_attempts(target_x, target_y, target_z)
 
     last_pose = SearchStartPose(*attempts[0])
-    for attempt_index, (target_x, target_y, target_z) in enumerate(attempts, start=1):
+    total_attempts = len(attempts)
+    for attempt_index, (target_x, target_y, target_z) in enumerate(
+        attempts,
+        start=1,
+    ):
+        if should_interrupt is not None and should_interrupt():
+            logger.info("stop/pause 요청으로 사용자 손 위치 이동을 중단합니다.")
+            return False, last_pose, "interrupted"
+
         logger.info(
             "사용자 손 위치 전달 플래닝 시도: "
-            f"{attempt_index}/{len(attempts)}, "
+            f"{attempt_index}/{total_attempts}, "
             f"target=({target_x:.3f},{target_y:.3f},{target_z:.3f})"
         )
         pose_goal = make_safe_pose(target_x, target_y, target_z, ori, logger)
@@ -270,10 +288,48 @@ def move_to_candidate_with_offset(
         if ok:
             return True, last_pose, ""
 
-        if attempt_index < len(attempts):
+        if should_interrupt is not None and should_interrupt():
+            logger.info("사용자 손 위치 이동 중 stop/pause 요청을 확인했습니다.")
+            return False, last_pose, "interrupted"
+
+        if attempt_index < total_attempts:
             logger.warn(
                 "사용자 손 위치 전달 플래닝 실패. "
                 "x를 줄이고 y를 0에 가깝게 보정해 재시도합니다."
             )
 
     return False, last_pose, "target_move_failed"
+
+
+def build_replan_attempts(
+    target_x: float,
+    target_y: float,
+    target_z: float,
+    max_attempts: int = HANDOVER_REPLAN_MAX_ATTEMPTS,
+    x_step_m: float = HANDOVER_REPLAN_X_STEP_M,
+    min_z: float = SAFE_Z_MIN + HANDOVER_TARGET_MIN_Z_CLEARANCE_M,
+) -> list[tuple[float, float, float]]:
+    """Build progressively safer Cartesian targets for IK/planning retry."""
+    attempts = [(float(target_x), float(target_y), float(target_z))]
+    if int(max_attempts) > 0:
+        retry_count = max(0, int(max_attempts) - 1)
+    else:
+        retry_count = _unbounded_retry_count(target_x, target_y, x_step_m)
+
+    for index in range(1, retry_count + 1):
+        y_ratio = max(0.0, 1.0 - index / float(max(1, retry_count)))
+        attempts.append(
+            (
+                float(target_x) - float(x_step_m) * index,
+                float(target_y) * y_ratio,
+                max(float(min_z), float(target_z)),
+            )
+        )
+    return attempts
+
+
+def _unbounded_retry_count(target_x: float, target_y: float, x_step_m: float) -> int:
+    """Return all distinct x/y correction steps until no safer target remains."""
+    x_steps = max(0, int((float(target_x) - SAFE_X_MIN) / float(x_step_m)))
+    y_steps = max(1, int(abs(float(target_y)) / float(x_step_m)))
+    return max(x_steps, y_steps)

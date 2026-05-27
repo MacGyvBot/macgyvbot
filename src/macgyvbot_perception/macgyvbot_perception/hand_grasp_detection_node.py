@@ -49,12 +49,14 @@ from macgyvbot_perception.hand_tool_grasp.ml_grasp_classifier import (
     MLHandGraspClassifier,
     MLGraspResult,
     disabled_ml_result,
+    extract_ml_features,
 )
 from macgyvbot_perception.hand_tool_grasp.sam_tool_mask import (
     BBoxPromptSegmenter,
     LockedToolMask,
     compute_mask_contact,
     create_bbox_locked_mask,
+    mask_to_roi,
 )
 from macgyvbot_perception.hand_tool_grasp.visualization import (
     draw_grasp_overlay,
@@ -348,7 +350,7 @@ class HandGraspDetectionNode(Node):
             else tool_detection.roi if tool_detection is not None else None
         )
         hand_infos = self.hand_detector.detect_all(frame)
-        active_hand = select_active_hand(hand_infos, tool_roi)
+        active_hand = self._select_active_hand(hand_infos, tool_roi)
         hand_for_state = active_hand if active_hand is not None else (
             hand_infos[0] if hand_infos else None
         )
@@ -425,17 +427,13 @@ class HandGraspDetectionNode(Node):
             return
 
         if self.frame_index % max(1, self.sam_track_interval) != 0:
-            if self.latest_tool_mask is None:
-                self.latest_tool_mask = create_bbox_locked_mask(
-                    tool_detection.roi,
-                    frame.shape[:2],
-                )
             return
 
         mask = self.sam_segmenter.segment(frame, tool_detection.roi)
         if mask is not None and int(mask.sum()) > 0:
+            roi = mask_to_roi(mask) or tool_detection.roi
             self.latest_tool_mask = LockedToolMask(
-                roi=tool_detection.roi,
+                roi=roi,
                 mask=mask,
                 source="SAM_TRACKED",
             )
@@ -460,30 +458,42 @@ class HandGraspDetectionNode(Node):
         frame,
         tool_detection: Optional[ToolDetection],
     ) -> Optional[LockedToolMask]:
-        if self.latest_tool_mask is not None:
+        if (
+            self.latest_tool_mask is not None
+            and self.latest_tool_mask.source == "SAM_TRACKED"
+        ):
             return LockedToolMask(
                 roi=self.latest_tool_mask.roi,
                 mask=self.latest_tool_mask.mask.copy(),
-                source=(
-                    "SAM_LOCKED"
-                    if self.latest_tool_mask.source == "SAM_TRACKED"
-                    else self.latest_tool_mask.source
-                ),
+                source="SAM_LOCKED",
             )
 
         if tool_detection is None:
-            self.get_logger().warn("Tool mask lock requested, but no YOLO tool ROI is available.")
+            if self.latest_tool_mask is not None and self.allow_bbox_lock:
+                self.get_logger().warn(
+                    "Tool mask lock requested without YOLO ROI; "
+                    "using latest bbox fallback."
+                )
+                return LockedToolMask(
+                    roi=self.latest_tool_mask.roi,
+                    mask=self.latest_tool_mask.mask.copy(),
+                    source=self.latest_tool_mask.source,
+                )
+            self.get_logger().warn(
+                "Tool mask lock requested, but no YOLO tool ROI is available."
+            )
             return None
 
         if self.sam_segmenter is not None:
             mask = self.sam_segmenter.segment(frame, tool_detection.roi)
             if mask is not None and int(mask.sum()) > 0:
+                roi = mask_to_roi(mask) or tool_detection.roi
                 self.get_logger().info(
                     f"Locked SAM tool mask: label={tool_detection.label}, "
-                    f"roi={tool_detection.roi}"
+                    f"roi={roi}"
                 )
                 return LockedToolMask(
-                    roi=tool_detection.roi,
+                    roi=roi,
                     mask=mask,
                     source="SAM_LOCKED",
                 )
@@ -519,6 +529,49 @@ class HandGraspDetectionNode(Node):
             self.get_logger().warn(f"ML grasp update failed: {exc}")
             self.ml_classifier.reset()
             return disabled_ml_result("model_error")
+
+    def _select_active_hand(self, hand_infos: list[dict], tool_roi):
+        ml_hand = self._select_highest_ml_grasp_hand(hand_infos)
+        if ml_hand is not None:
+            return ml_hand
+        return select_active_hand(hand_infos, tool_roi)
+
+    def _select_highest_ml_grasp_hand(self, hand_infos: list[dict]):
+        if self.ml_classifier is None or not hand_infos:
+            return None
+
+        scored_hands = []
+        for hand_info in hand_infos:
+            score = self._raw_ml_grasp_score(hand_info)
+            if score is None:
+                continue
+            scored_hands.append((score, hand_info))
+
+        if not scored_hands:
+            return None
+
+        score, hand_info = max(scored_hands, key=lambda item: item[0])
+        hand_info["ml_grasp_candidate_score"] = score
+        return hand_info
+
+    def _raw_ml_grasp_score(self, hand_info: dict):
+        try:
+            features = extract_ml_features(hand_info)
+            model = self.ml_classifier.model
+            raw_state = str(model.predict([features])[0])
+            if raw_state != "grasp":
+                return 0.0
+            if not hasattr(model, "predict_proba"):
+                return 1.0
+
+            probabilities = model.predict_proba([features])[0]
+            classes = list(getattr(model, "classes_", []))
+            if "grasp" in classes:
+                return float(probabilities[classes.index("grasp")])
+            return float(max(probabilities))
+        except Exception as exc:
+            self.get_logger().warn(f"ML grasp 후보 점수 계산 실패: {exc}")
+            return None
 
     def _compose_result(
         self,
@@ -629,6 +682,7 @@ class HandGraspDetectionNode(Node):
         hand_pixel = extract_hand_center_pixel(active_hand, hand_infos)
         payload = {
             "state": result["state"],
+            "hand_present": bool(hand_infos),
             "human_grasped_tool": result["human_grasped_tool"],
             "grasp_counter": result["grasp_counter"],
             "grasp_score": result["grasp_score"],

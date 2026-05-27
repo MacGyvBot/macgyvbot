@@ -16,6 +16,7 @@ from std_msgs.msg import String
 
 from macgyvbot_config.topics import (
     CAMERA_COLOR_TOPIC,
+    COMMAND_SHUTDOWN_TOPIC,
     HAND_GRASP_IMAGE_TOPIC,
     ROBOT_STATUS_TOPIC,
     TOOL_COMMAND_TOPIC,
@@ -59,6 +60,11 @@ class OperatorUiNode(Node):
         detector_image_topic = self.get_parameter('detector_image_topic').value
 
         self.window = None
+        self._shutdown_callback = None
+        self._exit_pending = False
+        self._last_feedback_key = None
+        self._last_feedback_stamp_ns = 0
+        self._feedback_dedupe_ns = 2_000_000_000
         self._last_target_label = ''
         self._last_camera_stamp_ns = None
         self._last_detector_stamp_ns = None
@@ -80,6 +86,11 @@ class OperatorUiNode(Node):
         )
 
         self._stt_pub = self.create_publisher(String, stt_text_topic, 10)
+        self._command_shutdown_pub = self.create_publisher(
+            String,
+            COMMAND_SHUTDOWN_TOPIC,
+            10,
+        )
         self.create_subscription(String, stt_text_topic, self._text_cb, 10)
         self.create_subscription(String, tool_command_topic, self._tool_command_cb, 10)
         self.create_subscription(String, command_feedback_topic, self._feedback_cb, 10)
@@ -97,6 +108,22 @@ class OperatorUiNode(Node):
         self.window = window
         self._update_connection_status()
         self._append_log('info', 'GUI 연결 완료')
+
+    def set_shutdown_callback(self, callback):
+        self._shutdown_callback = callback
+
+    def request_shutdown(self):
+        if self._shutdown_callback is not None:
+            self._shutdown_callback()
+
+    def publish_command_shutdown(self):
+        msg = String()
+        msg.data = json.dumps(
+            {'action': 'shutdown', 'source': 'operator_ui'},
+            ensure_ascii=False,
+        )
+        self._command_shutdown_pub.publish(msg)
+        self.get_logger().info('/command_shutdown 발행: command_input_node 종료 요청')
 
     def publish_user_text(self, text):
         text = (text or '').strip()
@@ -160,13 +187,21 @@ class OperatorUiNode(Node):
             self.get_logger().warn(f'/command_feedback JSON 파싱 실패: {msg.data}')
             return
 
+        if self._is_duplicate_feedback(feedback):
+            return
+
         status = feedback.get('status', 'unknown')
         message = feedback.get('message', '')
         reason = feedback.get('reason', 'unknown')
 
         if status == 'accepted':
             command = feedback.get('command') or {}
-            if command.get('action') == 'pause':
+            action = command.get('action')
+            if action in {'pause', 'resume', 'exit'}:
+                if self.window is not None and hasattr(self.window, 'append_command_result'):
+                    self.window.append_command_result(command)
+
+            if action == 'pause':
                 stop_message = '정지 요청을 로봇에 전달했습니다.'
                 self._append_bot(stop_message)
                 self._append_log('warn', stop_message)
@@ -183,7 +218,7 @@ class OperatorUiNode(Node):
                 self._set_status('정지 요청 전달')
                 return
 
-            if command.get('action') == 'resume':
+            if action == 'resume':
                 resume_message = (
                     message
                     or '재개 요청을 이해했습니다. 제어 인터페이스 연결 후 사용할 수 있습니다.'
@@ -193,14 +228,15 @@ class OperatorUiNode(Node):
                 self._set_status('재개 대기')
                 return
 
-            if command.get('action') == 'exit':
+            if action == 'exit':
+                self._exit_pending = True
                 exit_message = (
                     message
-                    or '종료 요청을 이해했습니다. 창 닫기 버튼이나 Ctrl+C로 종료해주세요.'
+                    or '종료 요청을 전달했습니다. 작업을 정리하고 Home 위치로 복귀한 뒤 종료합니다.'
                 )
                 self._append_bot(exit_message)
-                self._append_log('info', '종료 명령 해석 완료')
-                self._set_status('종료 요청 확인')
+                self._append_log('info', '종료 명령 해석 완료: 로봇 작업 중단 요청 발행')
+                self._set_status('종료 처리 중')
                 return
 
             accepted_message = message or '명령을 이해했습니다.'
@@ -245,6 +281,37 @@ class OperatorUiNode(Node):
         self._append_bot(message or '상태를 확인했습니다.')
         self._append_system(f'status={status}, reason={reason}')
 
+    def _is_duplicate_feedback(self, feedback):
+        status = feedback.get('status', 'unknown')
+        if status not in (
+            'accepted',
+            'pending_confirmation',
+            'cancelled',
+            'assistant_response',
+            'rejected',
+        ):
+            return False
+
+        command = feedback.get('command') or {}
+        key = (
+            status,
+            feedback.get('reason', ''),
+            feedback.get('message', ''),
+            feedback.get('raw_text', ''),
+            command.get('action', ''),
+            command.get('tool_name', ''),
+        )
+        now = self.get_clock().now().nanoseconds
+        if (
+            key == self._last_feedback_key
+            and now - self._last_feedback_stamp_ns < self._feedback_dedupe_ns
+        ):
+            return True
+
+        self._last_feedback_key = key
+        self._last_feedback_stamp_ns = now
+        return False
+
     def _robot_status_cb(self, msg):
         status_text = msg.data.strip()
         if not status_text:
@@ -266,6 +333,29 @@ class OperatorUiNode(Node):
 
         if view['show_chat']:
             self._append_bot(view['chat_message'])
+
+        self._handle_exit_status(status, view['state'])
+
+    def _handle_exit_status(self, status, state):
+        if not self._exit_pending:
+            return
+        if str(status.get('action', '')).strip().lower() != 'exit':
+            return
+
+        if state in {'done', 'completed', 'success'}:
+            self._append_log('info', 'Home 복귀 완료 상태 확인: operator UI를 종료합니다.')
+            self._set_status('종료')
+            self._exit_pending = False
+            if QTimer is not None:
+                QTimer.singleShot(500, self.request_shutdown)
+            else:
+                self.request_shutdown()
+            return
+
+        if state in {'failed', 'error', 'rejected'}:
+            self._append_log('warn', '종료 처리가 완료되지 않아 GUI를 유지합니다.')
+            self._set_status('종료 실패')
+            self._exit_pending = False
 
     def _camera_status_cb(self, _msg):
         self._last_camera_stamp_ns = self.get_clock().now().nanoseconds
@@ -370,7 +460,7 @@ class OperatorUiNode(Node):
         panel_status = self._robot_panel_status(state, message)
         stage_text = self._robot_stage_text(state, message)
         severity = self._robot_status_severity(state)
-        log_message = self._robot_log_message(state, target_label, message, reason)
+        log_message = self._robot_log_message(status, state, target_label, message, reason)
 
         key = (state, str(tool_name), raw_message or message)
         chat_state = state in self._chat_robot_statuses()
@@ -385,6 +475,7 @@ class OperatorUiNode(Node):
             self._last_robot_log_key = log_key
 
         return {
+            'state': state,
             'message': message,
             'chat_message': message,
             'log_message': log_message,
@@ -421,6 +512,8 @@ class OperatorUiNode(Node):
             'handoff_complete': '공구 전달을 완료했습니다.',
             'waiting_return_handoff': '반납할 공구를 받을 준비를 하고 있습니다.',
             'moving_return_grasp_pose': '반납 공구를 감지할 위치로 이동 중입니다.',
+            'checking_return_target': '반납 공구 위치를 확인하는 중입니다.',
+            'return_hand_detected': '사용자 손 위치에서 반납 공구를 받는 중입니다.',
             'placing_return_tool': f'{target_label}를 보관 위치에 놓는 중입니다.',
             'returning_home': 'Home 위치로 복귀하는 중입니다.',
             'done': '작업이 완료되었습니다.',
@@ -466,6 +559,8 @@ class OperatorUiNode(Node):
             'handoff_complete': '전달 완료',
             'waiting_return_handoff': '반납 대기',
             'moving_return_grasp_pose': '반납 위치 이동',
+            'checking_return_target': '반납 위치 확인',
+            'return_hand_detected': '손 위치 수령',
             'placing_return_tool': '공구 보관',
             'returning_home': 'Home 복귀',
             'done': '완료',
@@ -507,6 +602,8 @@ class OperatorUiNode(Node):
             'handoff_complete': '공구 전달 완료',
             'waiting_return_handoff': '반납 공구 수령 대기',
             'moving_return_grasp_pose': '반납 공구 감지 위치 이동 중',
+            'checking_return_target': '반납 공구 위치 확인 중',
+            'return_hand_detected': '손 위치에서 공구 수령 중',
             'placing_return_tool': '서랍 안에 공구 보관 중',
             'returning_home': 'Home 복귀 중',
             'done': '작업 완료',
@@ -532,6 +629,7 @@ class OperatorUiNode(Node):
         return {
             'waiting_handoff',
             'waiting_return_handoff',
+            'returning_home',
             'done',
             'completed',
             'success',
@@ -582,10 +680,33 @@ class OperatorUiNode(Node):
         return 'info'
 
     @staticmethod
-    def _robot_log_message(state, target_label, message, reason):
+    def _robot_log_message(status, state, target_label, message, reason):
+        base = f'robot_status={state}, target={target_label}, message={message}'
+        details = []
+        for key in ('action', 'step', 'phase', 'progress', 'source'):
+            value = status.get(key)
+            if value not in (None, ''):
+                details.append(f'{key}={value}')
+
+        command = status.get('command')
+        if isinstance(command, dict):
+            for source_key, label in (
+                ('action', 'cmd_action'),
+                ('target_mode', 'target_mode'),
+                ('match_method', 'method'),
+                ('confidence', 'confidence'),
+                ('command_id', 'command_id'),
+                ('raw_text', 'raw_text'),
+            ):
+                value = command.get(source_key)
+                if value not in (None, ''):
+                    details.append(f'{label}={value}')
+
         if reason:
-            return f'robot_status={state}, target={target_label}, message={message}, reason={reason}'
-        return f'robot_status={state}, target={target_label}, message={message}'
+            details.append(f'reason={reason}')
+        if details:
+            return f'{base}, {", ".join(details)}'
+        return base
 
     @staticmethod
     def _tool_display_name(tool_name):
@@ -657,12 +778,15 @@ def main(args=None):
         if shutdown_requested['value']:
             return
         shutdown_requested['value'] = True
+        node.publish_command_shutdown()
         node.get_logger().info('종료 신호를 받아 operator_ui_node를 종료합니다.')
         window.close()
         app.quit()
 
     signal.signal(signal.SIGINT, request_shutdown)
     signal.signal(signal.SIGTERM, request_shutdown)
+    node.set_shutdown_callback(request_shutdown)
+    app.aboutToQuit.connect(request_shutdown)
 
     timer = QTimer()
     timer.timeout.connect(lambda: rclpy.spin_once(node, timeout_sec=0.0))

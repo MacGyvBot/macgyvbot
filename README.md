@@ -1,208 +1,113 @@
 # MacGyvBot
 
-MacGyvBot은 음성 명령으로 공구를 가져오고 반납하는 ROS 2 기반 로봇팔
-어시스턴트입니다. RealSense 카메라, YOLO/VLM perception, MoveItPy 기반
-Doosan M0609 제어, OnRobot RG2 그리퍼, hand-tool grasp detection, GUI/STT/TTS
-명령 입력을 하나의 데모 파이프라인으로 묶습니다.
+MacGyvBot은 음성 또는 operator 명령으로 공구를 가져오고 반납하는 ROS 2
+기반 로봇팔 어시스턴트입니다. RealSense 카메라, YOLO/VLM perception,
+MoveItPy 기반 Doosan M0609 제어, OnRobot RG2 그리퍼, hand-tool grasp
+detection, operator UI를 하나의 데모 파이프라인으로 묶습니다.
 
-현재 저장소는 `src/` 아래의 다중 ROS 패키지 구조를 기준으로 실행합니다.
-저장소 루트는 colcon workspace root이며, runtime 패키지는 `src/` 아래에
+저장소 루트는 colcon workspace이며, 실제 runtime 패키지는 `src/` 아래에
 있습니다.
 
-## 기본 동작
-
-- 기본 grasp point mode는 `vlm`입니다.
-- 기본 hand grasp mask lock은 `sam_enabled:=true`입니다.
-- VLM/SAM/ML 모델 파일은 Git에 포함하지 않고 `macgyvbot_resources` 아래에 둡니다.
-- VLM 추론이나 depth 보정이 실패하면 bbox center grasp point로 fallback합니다.
-- API grasp point mode가 실패하면 기본 grasp point mode인 `vlm`으로 fallback하고,
-  그마저 실패할 때만 bbox center로 fallback합니다.
-- 사용자 handoff grasp는 ML grasp, depth contact, locked mask contact가 모두
-  통과해야 인정합니다.
-
-## 패키지 구조
+## 패키지 개요
 
 ```text
 src/
 ├── macgyvbot_bringup/        # launch/config wiring
 ├── macgyvbot_task/           # main task node, pick/return workflow
-├── macgyvbot_command/        # headless command input, parser, STT/TTS
+├── macgyvbot_command/        # headless command pipeline, parser, STT/TTS
+├── macgyvbot_ui/             # operator-facing GUI node and UI presenters
 ├── macgyvbot_perception/     # YOLO, VLM, depth, hand grasp perception
 ├── macgyvbot_manipulation/   # MoveIt, gripper, force, pose, safe workspace
 ├── macgyvbot_config/         # shared Python runtime constants
 ├── macgyvbot_domain/         # shared dataclasses
 ├── macgyvbot_resources/      # calibration and model assets
-├── macgyvbot_interfaces/     # shared msg/srv/action contracts
-└── macgyvbot_ui/             # operator GUI, detector/status/chat panels
+└── macgyvbot_interfaces/     # typed msg/srv/action migration target
 ```
 
-주요 역할:
-
-- `macgyvbot_bringup`: `macgyvbot.launch.py` 기본 실행 entrypoint
-- `macgyvbot_task`: `macgyvbot` executable과 pick/return orchestration
-- `macgyvbot_perception`: object detection, grasp point selection, hand grasp detection
-- `macgyvbot_manipulation`: robot motion/gripper/force sensing adapter
-- `macgyvbot_command`: STT, TTS, command parser, `/tool_command`, `/command_feedback` 발행
-- `macgyvbot_ui`: operator GUI, detector/status/chat/Task Log 표시
-- `macgyvbot_resources`: calibration, YOLO, VLM, SAM, `.pkl` 모델 설치 경로
-
-## Pipeline
-
-```mermaid
-flowchart LR
-    subgraph launch["macgyvbot_bringup/launch/macgyvbot.launch.py"]
-        ui["operator_ui_node"]
-        cmd["command_input_node"]
-        hand["hand_grasp_detection_node"]
-        main["macgyvbot_main_node"]
-    end
-
-    mic["Microphone"] --> cmd
-    gui_text["GUI text"] --> ui
-    ui -- "pub /stt_text" --> cmd
-    ollama["Ollama optional LLM"] --> cmd
-
-    color["/camera/camera/color/image_raw"] --> hand
-    depth["/camera/camera/aligned_depth_to_color/image_raw"] --> hand
-    color --> main
-    depth --> main
-    info["/camera/camera/color/camera_info"] --> main
-
-    cmd -- "pub /tool_command" --> main
-    cmd -- "pub /command_feedback" --> ui
-    cmd -- "pub /stt_text" --> stt["/stt_text"]
-
-    main -- "pub /robot_task_status" --> cmd
-    main -- "pub /robot_task_status" --> ui
-    main -- "pub /robot_task_status" --> hand
-    hand -- "pub /human_grasped_tool" --> main
-    hand -- "pub /hand_grasp_detection/tool_mask_lock" --> main
-    hand -- "pub /hand_grasp_detection/annotated_image" --> main
-    hand -- "pub /hand_grasp_detection/annotated_image" --> ui
-```
-
-Pick flow 요약:
-
-1. command node가 사용자의 `bring` 명령을 `/tool_command`로 발행합니다.
-2. task node가 target tool을 찾고 YOLO bbox를 선택합니다.
-3. 기본 `vlm` mode에서 VLM이 grasp point/yaw를 선택하고 depth로 base pose를 계산합니다.
-4. MoveItPy로 접근, 하강, gripper close를 수행합니다.
-5. gripper grasp 성공 후 `status=grasp_success`를 발행합니다.
-6. hand grasp node가 최신 SAM mask 또는 bbox ROI를 lock하고 ack를 발행합니다.
-7. task node는 mask lock ack 이후에만 lift/handoff 이동을 계속합니다.
-8. 사용자가 공구를 잡으면 gripper를 열고 Home으로 복귀합니다.
-
-Return flow 요약:
-
-1. command node가 `return` 명령을 `/tool_command`로 발행합니다.
-2. task node가 관찰 자세로 이동해 사용자가 들고 있는 공구/손 위치를 찾습니다.
-3. 손/공구 위치로 이동해 gripper close 후 grasp 성공을 확인합니다.
-4. Home joint pose로 이동하고 force feedback으로 Z 하강을 멈춘 뒤 공구를 놓습니다.
-5. Home으로 복귀하고 완료 상태를 발행합니다.
+작업자와 에이전트 공통 지침은 [AGENTS.md](./AGENTS.md)를 참고합니다.
+상세 runtime 구조는 [EXPLAIN.md](./EXPLAIN.md)를 참고합니다.
+ROS topic 소유권과 계약은
+[docs/architecture/topics.md](./docs/architecture/topics.md)를 참고합니다.
 
 ## 실행 환경
 
-- OS: Ubuntu 22.04
-- ROS 2: Humble
-- Python: 3.10
-- Robot: Doosan Robotics M0609
-- Gripper: OnRobot RG2
-- Camera: Intel RealSense D435I
+- Ubuntu 22.04
+- ROS 2 Humble
+- Python 3.10
+- Doosan Robotics M0609
+- OnRobot RG2
+- Intel RealSense D435I
 
-Doosan ROS 2 설치는 [Doosan ROS 2 Manual(Humble)](https://doosanrobotics.github.io/doosan-robotics-ros-manual/humble/installation.html)을 따릅니다.
+로봇 실행 전 Doosan ROS 2 Humble 설치를 먼저 완료해야 합니다.
 
 ## 설치와 빌드
 
-MacGyvBot은 홈 디렉터리 아래에 단독 colcon workspace로 clone해서 사용합니다.
+워크스페이스 clone:
 
 ```bash
 cd ~
 git clone https://github.com/MacGyvBot/macgyvbot.git
+cd ~/macgyvbot
 ```
 
-Python 의존성:
+Python/runtime 의존성 설치:
 
 ```bash
-cd ~/macgyvbot
-python3 -m pip install -r requirements.txt
+sudo apt update
+sudo apt install -y portaudio19-dev ffmpeg && python3 -m pip install -r requirements.txt
 ```
 
-워크스페이스 빌드:
+LLM 기반 명령 해석을 사용하려면 Ollama와 기본 모델을 준비합니다.
+
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+ollama pull gemma3:1b
+ollama serve
+```
+
+빌드:
 
 ```bash
 source /opt/ros/humble/setup.bash
-cd ~/macgyvbot
-colcon build
-source ~/macgyvbot/install/setup.bash
-```
-
-브랜치나 모델 리소스를 바꾼 뒤에는 다시 빌드하고 새 터미널에서 source합니다.
-
-```bash
-source /opt/ros/humble/setup.bash
-cd ~/macgyvbot
 colcon build
 source install/setup.bash
 ```
 
-## 모델과 리소스 위치
+브랜치를 바꾸거나 패키지를 다시 빌드한 뒤에는 새 터미널에서 workspace를 다시
+source합니다.
 
-모델 파일은 Git에 커밋하지 않습니다. 개발 중에는 아래 위치에 둡니다.
+## 모델과 리소스
+
+모델과 calibration 파일은 Git에 포함하지 않습니다. 기본 위치는
+`macgyvbot_resources` 패키지입니다.
 
 ```text
 src/macgyvbot_resources/calibration/T_gripper2camera.npy
 src/macgyvbot_resources/weights/yolov11_best.pt
 src/macgyvbot_resources/weights/hand_grasp_model.pkl
 src/macgyvbot_resources/weights/mobile_sam.pt
-src/macgyvbot_resources/weights/vlm/<model_dir>/
+src/macgyvbot_resources/weights/vlm/
 ```
 
-빌드 후에는 `macgyvbot_resources` package share 아래로 설치됩니다.
+설치 후 asset은 아래 경로에서 사용됩니다.
 
 ```text
-install/macgyvbot_resources/share/macgyvbot_resources/calibration/
-install/macgyvbot_resources/share/macgyvbot_resources/weights/
+install/macgyvbot_resources/share/macgyvbot_resources/
 ```
 
-기본 launch는 `macgyvbot_resources`의 설치 경로를 사용합니다.
-외부 파일을 쓰려면 launch argument로 절대경로를 넘깁니다.
+지원되는 모델 asset은 `src/macgyvbot_resources/weights/` 아래의 다운로드
+스크립트를 사용합니다.
 
-```bash
-ros2 launch macgyvbot_bringup macgyvbot.launch.py \
-  yolo_model:=/path/to/yolov11_best.pt \
-  grasp_model:=/path/to/hand_grasp_model.pkl \
-  sam_checkpoint:=/path/to/mobile_sam.pt
-```
+## 실행
 
-SAM checkpoint 다운로드:
-
-```bash
-python src/macgyvbot_resources/weights/download_sam_weights.py --model mobile_sam
-```
-
-원본 SAM ViT-B checkpoint:
-
-```bash
-python src/macgyvbot_resources/weights/download_sam_weights.py --model sam_vit_b
-```
-
-VLM 가중치는 `src/macgyvbot_resources/weights/vlm/` 아래에 둡니다.
-프로젝트의 다운로드 스크립트를 사용하는 경우:
-
-```bash
-python src/macgyvbot_resources/weights/download_vlm_weights.py
-```
-
-## 전체 파이프라인 실행
-
-각 터미널은 새로 열 때마다 ROS와 MacGyvBot workspace를 source합니다.
+각 터미널은 ROS와 workspace를 source합니다.
 
 ```bash
 source /opt/ros/humble/setup.bash
 source ~/macgyvbot/install/setup.bash
 ```
 
-### 1. Doosan M0609 + MoveIt
+로봇/MoveIt stack 실행:
 
 ```bash
 ros2 launch dsr_bringup2 dsr_bringup2_moveit.launch.py \
@@ -211,7 +116,7 @@ ros2 launch dsr_bringup2 dsr_bringup2_moveit.launch.py \
   host:=192.168.1.100
 ```
 
-### 2. RealSense Camera
+RealSense camera 실행:
 
 ```bash
 ros2 launch realsense2_camera rs_align_depth_launch.py \
@@ -221,303 +126,66 @@ ros2 launch realsense2_camera rs_align_depth_launch.py \
   align_depth.enable:=true
 ```
 
-### 3. MacGyvBot
-
-기본 실행은 `grasp_point_mode:=vlm`, `sam_enabled:=true`입니다.
+MacGyvBot 실행:
 
 ```bash
 ros2 launch macgyvbot_bringup macgyvbot.launch.py
 ```
 
-명시적으로 VLM mode:
+## Grasp Point Mode
+
+개발 중 일반적으로 바꿔 쓰는 launch argument는 `grasp_point_mode`입니다.
+기본 launch 값은 `vlm`입니다. 관련 mode 상수는 `macgyvbot_config.vlm`에서 관리합니다.
+
+예시:
 
 ```bash
 ros2 launch macgyvbot_bringup macgyvbot.launch.py grasp_point_mode:=vlm
-```
-
-VLM 없이 bbox center mode:
-
-```bash
+ros2 launch macgyvbot_bringup macgyvbot.launch.py grasp_point_mode:=vlm_only
+ros2 launch macgyvbot_bringup macgyvbot.launch.py grasp_point_mode:=vlm_only_qwen3b
+ros2 launch macgyvbot_bringup macgyvbot.launch.py grasp_point_mode:=vlm_only_qwen7b
 ros2 launch macgyvbot_bringup macgyvbot.launch.py grasp_point_mode:=center
+ros2 launch macgyvbot_bringup macgyvbot.launch.py grasp_point_mode:=api
 ```
 
-Gemini API grasp point mode:
+지원 mode는 `src/macgyvbot_config/macgyvbot_config/vlm.py`에서 관리합니다.
 
-```bash
-cp src/macgyvbot_resources/.env.example src/macgyvbot_resources/.env
-nano src/macgyvbot_resources/.env
-ros2 launch macgyvbot_bringup macgyvbot.launch.py \
-  grasp_point_mode:=api \
-  grasp_point_api_model:=gemini-2.5-flash
-```
+그 외 모델 경로, threshold, topic, runtime 상수는 `macgyvbot_config`와 관련
+launch 파일이 소유합니다. README에는 긴 parameter 목록을 두지 않고, 운영
+계약은 `EXPLAIN.md` 또는 `docs/architecture/`에 정리합니다.
 
-In `src/macgyvbot_resources/.env`, fill the template like this:
+## 명령 입력
 
-```text
-GEMINI_API_KEY=your_real_key_here
-```
-
-`src/macgyvbot_resources/.env` is ignored by Git. The repository tracks only
-`src/macgyvbot_resources/.env.example` as the empty template.
-
-API mode 주의사항:
-
-- Gemini API grasp point mode는 네트워크 상태, API quota, 모델 응답 형식에 따라
-  local VLM mode보다 성능과 안정성이 떨어질 수 있습니다.
-- 이미지와 프롬프트를 함께 보내기 때문에 입력 토큰 여유가 크지 않습니다. 긴
-  task text나 과도한 프롬프트를 넣으면 응답 실패나 품질 저하가 생길 수 있습니다.
-- 반복 실행 시 토큰/quota가 빠르게 소진될 수 있습니다. 실제 로봇 테스트에서는
-  필요한 경우에만 `grasp_point_mode:=api`를 사용하고, 기본값인 `vlm` mode를
-  우선 사용합니다.
-- API 호출 실패 시에는 자동으로 기본 grasp point mode인 `vlm`으로 fallback합니다.
-
-SAM을 끄고 bbox lock fallback만 사용:
-
-```bash
-ros2 launch macgyvbot_bringup macgyvbot.launch.py sam_enabled:=false
-```
-
-마이크 STT 없이 GUI 키보드 입력만 사용:
-
-```bash
-ros2 launch macgyvbot_bringup macgyvbot.launch.py use_stt:=false
-```
-
-TTS를 끄고 실행:
-
-```bash
-ros2 launch macgyvbot_bringup macgyvbot.launch.py use_tts:=false
-```
-
-## 명령 입력과 Operator GUI
-
-전체 launch는 headless `command_input_node`와 별도 `operator_ui_node`를 함께
-실행합니다. 사용자는 operator GUI 또는 마이크로 아래와 같은 명령을 줄 수
-있습니다.
-
-Operator GUI는 위쪽에 왼쪽 로봇 상태, 가운데 detector 화면, 오른쪽 채팅창을 두고,
-로봇 상태와 detector 화면 아래쪽에는 넓은 Task Log를 배치합니다.
-Detector 화면은 `/hand_grasp_detection/annotated_image`를 구독해 GUI 안에만
-표시합니다. Perception 노드는 `publish_annotated:=true`, `display:=false`로
-실행되고 main task node의 `display_debug_windows` 기본값도 `false`이므로
-별도 OpenCV detector/debug 창은 띄우지 않습니다.
+대표 명령 예시:
 
 ```text
 드라이버 가져다줘
 플라이어 가져와
 망치 줘
-아까 가져온 거 정리해
-지금 뭐 하는 중이야?
+이거 정리해
+드라이버 정리해
 멈춰
 재개
+홈위치로 가
+복귀해
 종료
 ```
 
-GUI는 로봇 작업 상태를 채팅, 상태 패널, Task Log로 나누어 표시합니다.
-진행 중인 탐색/이동/파지 단계는 Task Log에 `HH:MM:SS [INFO] ...`
-형식으로 남고, 사용자 행동이 필요한 상태나 완료/실패 상태만 MacGyvBot
-말풍선과 TTS로 안내합니다. `정지`, `재개`, `종료`도 LLM/parser action으로
-분류합니다.
+command pipeline은 tool/task command를 발행하고, operator UI는 ROS topic을
+통해 command feedback, robot status, detector image를 표시합니다.
+GUI의 `복귀` 버튼과 Home 복귀 표현은 `/tool_command`의 `action=home`으로
+전달되며, 로봇이 대기 중일 때 Home joint pose 이동과 gripper open을
+실행합니다. `종료` 버튼과 종료 표현은 `/robot_task_control`의
+`action=exit`으로 전달되며, 실행 중 작업을 종료하고 Home 복귀가 완료된 뒤
+GUI와 command node를 종료합니다.
 
-제어 action은 아래 이름을 사용합니다.
-
-- `pause`: 사용자가 “멈춰”, “정지”, “중단”, “스탑”처럼 말했을 때 발행되는 일시정지/정지 요청
-- `resume`: 사용자가 “재개”, “다시 시작”, “계속해”처럼 말했을 때 해석되는 재개 요청
-- `exit`: 사용자가 “종료”, “끝내”, “꺼줘”처럼 말했을 때 해석되는 종료 요청
-
-`pause`가 들어오면 operator GUI는 정지 요청을 로봇 노드로 전달한 뒤
-“작업을 재개할까요, 아니면 종료할까요?”라고 묻고 `재개` / `종료` quick reply
-버튼을 표시합니다. 현재 `resume`과 `exit`는 로봇 제어 명령으로 직접 발행하지
-않고 GUI 안내만 표시합니다. 제어 인터페이스가 연결되면 해당 action을 같은
-입력 경로에서 연결합니다.
-
-VLM grasp point 선택 과정에서 모델 가중치 로딩, 로딩 완료, CPU 실행 경고,
-로드 실패 같은 상태는 `/robot_task_status`를 통해 GUI에 전달됩니다. 이 상태는
-Task Log와 MacGyvBot 채팅 말풍선으로 표시하지만, 로딩 로그가 데모 중 과하게
-들리지 않도록 TTS 대상에서는 제외합니다.
-
-명령 해석 모드:
-
-- `parser_mode:=llm_primary`: 기본값. LLM을 먼저 사용하고 실패하면 local parser fallback
-- `parser_mode:=hybrid`: local parser를 먼저 사용하고 실패하면 LLM fallback
-
-LLM fallback을 쓰려면 Ollama 서버와 모델이 필요합니다.
-
-```bash
-ollama pull gemma3:1b
-ollama serve
-```
-
-명령 노드만 headless로 단독 실행:
-
-```bash
-ros2 run macgyvbot_command command_input_node
-```
-
-Operator GUI만 단독 실행:
-
-```bash
-ros2 run macgyvbot_ui operator_ui_node
-```
-
-마이크 STT 단독 확인:
-
-```bash
-ros2 run macgyvbot_command command_input_node --ros-args \
-  -p enable_microphone:=true
-```
-
-## 주요 Launch Arguments
-
-| Argument | Default | 설명 |
-| --- | --- | --- |
-| `grasp_point_mode` | `vlm` | `vlm`, `center`, or `api` |
-| `grasp_point_api_model` | `gemini-2.5-flash` | Gemini API mode model name |
-| `grasp_point_api_env_file` | `macgyvbot_resources/.env` | Local Gemini `.env` file |
-| `grasp_point_api_base_url` | Gemini API default | Override Gemini API base URL |
-| `grasp_point_api_timeout_sec` | `30.0` | API request timeout |
-| `sam_enabled` | `true` | SAM mask tracking/lock 사용 여부 |
-| `yolo_model` | `macgyvbot_resources/weights/yolov11_best.pt` | YOLO 모델 경로 |
-| `grasp_model` | `macgyvbot_resources/weights/hand_grasp_model.pkl` | ML hand grasp classifier |
-| `sam_checkpoint` | `macgyvbot_resources/weights/mobile_sam.pt` | MobileSAM checkpoint |
-| `use_voice_command` | `true` | command input node 실행 여부 |
-| `use_stt` | `true` | 마이크 STT 사용 여부 |
-| `use_tts` | `true` | TTS 사용 여부 |
-| `parser_mode` | `llm_primary` | `llm_primary` 또는 `hybrid` |
-| `llm_model` | `gemma3:1b` | Ollama 모델명 |
-| `force_torque_topic` | `/force_torque_sensor_broadcaster/wrench` | return Z 하강 force 입력 |
-| `detector_image_topic` | `/hand_grasp_detection/annotated_image` | GUI 중앙 detector 화면 입력 |
-
-## 주요 Topics
-
-| Topic | Direction | Type | 설명 |
-| --- | --- | --- | --- |
-| `/tool_command` | command -> task/UI | `std_msgs/String` JSON | bring/return/release/pause 명령 |
-| `/robot_task_status` | task -> command/UI/perception | `std_msgs/String` JSON | 작업 상태, context/TTS, GUI, mask lock trigger |
-| `/tool_drop_detected` | task -> monitor/UI | `std_msgs/String` JSON | grasp 성공 후 의도치 않은 공구 drop 감지 이벤트 |
-| `/target_label` | manual -> task | `std_msgs/String` | 수동 pick target label |
-| `/human_grasped_tool` | perception -> task | `std_msgs/String` JSON | 사용자 hand-tool grasp 결과 |
-| `/hand_grasp_detection/annotated_image` | perception -> operator UI | `sensor_msgs/Image` | GUI 중앙 detector overlay |
-| `/hand_grasp_detection/tool_mask_lock` | perception -> task | `std_msgs/String` JSON | grasp_success 이후 mask lock ack |
-| `/command_feedback` | command -> operator UI | `std_msgs/String` JSON | 명령 해석 결과 |
-| `/stt_text` | STT/operator UI -> command | `std_msgs/String` | STT/GUI 입력 텍스트 |
-
-수동 bring 요청:
-
-```bash
-ros2 topic pub --once /target_label std_msgs/msg/String "{data: screwdriver}"
-```
-
-수동 return 명령:
-
-```bash
-ros2 topic pub --once /tool_command std_msgs/msg/String \
-  "{data: '{\"tool_name\":\"screwdriver\",\"action\":\"return\",\"raw_text\":\"드라이버 반납해\",\"match_method\":\"manual\",\"match_score\":1.0,\"confidence\":1.0,\"status\":\"accepted\"}'}"
-```
-
-수동 pause 요청:
-
-```bash
-ros2 topic pub --once /tool_command std_msgs/msg/String \
-  "{data: '{\"tool_name\":\"unknown\",\"action\":\"pause\",\"raw_text\":\"멈춰\",\"match_method\":\"manual\",\"match_score\":1.0,\"confidence\":1.0,\"status\":\"accepted\"}'}"
-```
-
-상태 표시 테스트:
-
-```bash
-ros2 topic pub --once /robot_task_status std_msgs/msg/String \
-  "{data: '{\"status\":\"waiting_handoff\",\"tool_name\":\"screwdriver\"}'}"
-
-ros2 topic pub --once /robot_task_status std_msgs/msg/String \
-  "{data: '{\"status\":\"failed\",\"tool_name\":\"screwdriver\",\"reason\":\"robot_grasp_failed\"}'}"
-
-ros2 topic pub --once /robot_task_status std_msgs/msg/String \
-  "{data: '{\"status\":\"vlm_loading\",\"tool_name\":\"unknown\",\"message\":\"VLM 가중치 로드 시작...\"}'}"
-```
-
-## Hand Grasp Detection
-
-`hand_grasp_detection_node`는 전체 launch에서 함께 실행됩니다.
-
-기본 입력:
-
-- `/camera/camera/color/image_raw`
-- `/camera/camera/aligned_depth_to_color/image_raw`
-
-기본 출력:
-
-- `/human_grasped_tool`
-- `/hand_grasp_detection/annotated_image`
-- `/hand_grasp_detection/tool_mask_lock`
-
-동작 조건:
-
-- `/robot_task_status`가 `accepted`, `searching`, `picking`, `grasping`인 동안
-  YOLO tool ROI와 SAM mask를 갱신합니다.
-- `grasp_success`를 받으면 직전 SAM mask 또는 bbox ROI를 lock합니다.
-- task node는 `/hand_grasp_detection/tool_mask_lock` ack를 받은 뒤에만 lift/handoff를 계속합니다.
-- handoff pose에서는 locked mask contact, depth contact, ML classifier grasp를 함께 봅니다.
-- 기본 ML confidence 기준은 `0.85`입니다.
-
-## Gripper Grasp Verification
-
-로봇이 실제로 공구를 잡았는지는 OnRobot RG 상태의 `grip detected`와 gripper
-폭을 함께 확인합니다. gripper가 거의 완전히 닫힌 상태면 `grip detected`가
-켜져도 실패로 처리합니다. 성공 신호가 안정적으로 유지될 때만
-`status=grasp_success`를 발행합니다.
-
-grasp 실패 시에는 최대 `GRASP_RETRY_LIMIT`회까지 open/close를 재시도합니다.
-pick 실패는 `reason=robot_grasp_failed`, return 실패는
-`reason=return_grasp_failed`로 상태가 발행됩니다.
-
-## Return Flow
-
-`return` 명령을 받으면 task node는 사용자가 들고 있는 공구/손 위치를 관찰한 뒤
-그 위치로 이동해 공구를 받습니다. 이후 Home joint pose로 이동하고, force
-feedback으로 Z 하강 중 접촉을 감지하면 하강을 멈춘 뒤 그리퍼를 열고 Home으로
-복귀합니다.
-
-반납 Z 하강 force 입력 topic은 launch argument `force_torque_topic`으로 바꿀 수
-있습니다.
-
-## TTS
-
-기본값은 TTS 사용입니다. `edge-tts`가 설치되어 있으면 우선 사용하고, 없으면
-`espeak-ng`를 fallback으로 사용합니다.
-
-```bash
-python3 -m pip install edge-tts
-sudo apt install ffmpeg espeak-ng
-```
-
-주요 TTS arguments:
-
-- `tts_engine`: `auto`, `edge`, `espeak-ng`
-- `tts_voice`: 기본 `ko-KR-SunHiNeural`
-- `tts_edge_rate`: 기본 `+25%`
-- `tts_pitch`: 기본 `+35Hz`
-- `tts_timeout_sec`: 기본 `20.0`
-
-## 수동 초기화 명령어
-
-로봇 실행 전 또는 테스트 중 초기 상태를 다시 맞추고 싶을 때 아래 명령어를 사용합니다.
-
-이 명령은 M0609 로봇팔을 Home joint pose로 이동시킨 뒤, OnRobot RG2 그리퍼를 open합니다.
-
-```bash
-source /opt/ros/humble/setup.bash && source ~/macgyvbot/install/setup.bash && ros2 action send_goal /dsr_moveit_controller/follow_joint_trajectory control_msgs/action/FollowJointTrajectory "{trajectory: {joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6], points: [{positions: [0.0, 0.0, 1.57079632679, 0.0, 1.57079632679, 1.57079632679], time_from_start: {sec: 4}}]}}" && sleep 1 && python3 -c 'from macgyvbot_manipulation.onrobot_gripper import RG; g=RG("rg2","192.168.1.1",502); g.open_gripper(); g.close_connection()'
-```
+GUI 창 닫기는 로봇 작업 종료 명령을 대신하지 않습니다. 창만 닫으면
+`/command_shutdown`으로 headless command node도 정리되며, 작업 중 로봇을
+안전하게 Home으로 복귀시킨 뒤 종료하려면 GUI의 `종료` 버튼을 사용합니다.
 
 ## 테스트
 
-전체 패키지 테스트:
-
-```bash
-colcon test
-colcon test-result --verbose
-```
-
-빠른 Python 문법 검사:
+빠른 문법 검사:
 
 ```bash
 python3 -m compileall -q src
@@ -530,34 +198,20 @@ python3 -m pytest -q \
   src/macgyvbot_manipulation/test/test_handover_targeting.py \
   src/macgyvbot_manipulation/test/test_gripper_grasp.py \
   src/macgyvbot_perception/test/test_hand_grasp_ml_mask.py \
-  src/macgyvbot_task/test/test_hand_grasp_result_adapter.py
+  src/macgyvbot_task/test
 ```
 
-ROS 2, MoveIt, 카메라, 실제 로봇 하드웨어가 필요한 검증은 장비 연결 환경에서
-낮은 속도와 충분한 작업 공간을 확보한 뒤 수행합니다.
+ROS 환경이 준비된 경우 workspace 테스트:
+
+```bash
+colcon test
+colcon test-result --verbose
+```
+
+로봇, MoveIt, 카메라, 모델 의존 검증은 실제 장비 환경에서 낮은 속도와 충분한
+작업 공간을 확보한 뒤 수행합니다.
 
 ## 기여
 
-브랜치, 커밋, PR, 이슈, 안전 규칙은 [CONTRIBUTING.md](./CONTRIBUTING.md)를
-따릅니다. 런타임 구조나 config 구조를 바꾸면 `README.md`, `EXPLAIN.md`,
-관련 package README를 함께 갱신합니다.
-
-## YOLO 실험 커맨드
-
-주의: 이 스크립트는 RealSense 카메라를 직접 엽니다. `ros2 launch realsense2_camera ...` 등으로
-카메라 모듈을 이미 사용 중이라면 해당 ROS 2 카메라 노드를 종료한 뒤 실행합니다.
-
-Preview 창 없이 로그만 확인하려면:
-
-```bash
-python src/macgyvbot_resources/weights/test_yolo_realsense.py --no-display
-```
-
-다른 모델 파일을 지정하려면:
-
-```bash
-python src/macgyvbot_resources/weights/test_yolo_realsense.py \
-  --model src/macgyvbot_resources/weights/yolov11_best.pt \
-  --conf 0.25 \
-  --imgsz 640
-```
+브랜치, 커밋, PR, 이슈, 리뷰 규칙은 [CONTRIBUTING.md](./CONTRIBUTING.md)를
+따릅니다. 일반 작업자/에이전트 지침은 [AGENTS.md](./AGENTS.md)를 참고합니다.

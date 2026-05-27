@@ -16,6 +16,7 @@ class ToolCommandController:
         reset_search_status,
         start_return,
         release_gripper,
+        move_home,
     ):
         self.logger = logger
         self.status = status_publisher
@@ -25,6 +26,7 @@ class ToolCommandController:
         self.reset_search_status = reset_search_status
         self.start_return = start_return
         self.release_gripper = release_gripper
+        self.move_home = move_home
 
     def handle_target_label(self, tool_name, source="/target_label", command=None):
         val = (tool_name or "").strip()
@@ -84,6 +86,10 @@ class ToolCommandController:
             self._handle_stop(tool_name, action, command)
             return
 
+        if action == "home":
+            self._handle_home(tool_name, action, command)
+            return
+
         self.logger.warn(f"지원하지 않는 action: {action}")
         self.status.publish(
             "rejected",
@@ -114,6 +120,48 @@ class ToolCommandController:
             tool_name=tool_name,
             action=action,
             message="그리퍼를 열었습니다.",
+            command=command,
+        )
+
+    def _handle_home(self, tool_name, action, command):
+        if self.is_busy():
+            self.logger.warn("로봇 동작 중 home 명령은 즉시 실행하지 않습니다.")
+            self.status.publish(
+                "busy",
+                tool_name=tool_name,
+                action=action,
+                message="로봇이 작업 중입니다. 먼저 정지한 뒤 Home 복귀를 요청해주세요.",
+                reason="already_picking",
+                command=command,
+            )
+            return
+
+        self.logger.info("home 명령 수신: Home 위치로 복귀합니다.")
+        self.status.publish(
+            "returning_home",
+            tool_name=tool_name,
+            action=action,
+            message="Home 위치로 복귀하는 중입니다.",
+            command=command,
+        )
+        ok = self.move_home()
+        if not ok:
+            self.status.publish(
+                "failed",
+                tool_name=tool_name,
+                action=action,
+                message="Home 위치 복귀에 실패했습니다.",
+                reason="home_motion_failed",
+                command=command,
+            )
+            return
+
+        self.release_gripper(reason="home_return")
+        self.status.publish(
+            "done",
+            tool_name=tool_name,
+            action=action,
+            message="Home 위치로 복귀하고 그리퍼를 열었습니다.",
             command=command,
         )
 
