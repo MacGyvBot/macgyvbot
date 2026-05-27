@@ -12,9 +12,9 @@ issue.
 | Topic | Type | Publisher | Subscriber | Payload |
 | --- | --- | --- | --- | --- |
 | `/stt_text` | `std_msgs/String` | `macgyvbot_ui` operator UI, optional STT source | `macgyvbot_command` | Plain recognized or typed text |
-| `/tool_command` | `std_msgs/String` | `macgyvbot_command` | `macgyvbot_task`, `macgyvbot_ui` | JSON command payload |
+| `/tool_command` | `std_msgs/String` | `macgyvbot_command` | `macgyvbot_task`, `macgyvbot_ui` | JSON tool command payload, including `bring`, `return`, `release`, and idle-only `home` |
 | `/command_feedback` | `std_msgs/String` | `macgyvbot_command` | `macgyvbot_ui` | JSON command interpretation feedback |
-| `/robot_task_control` | `std_msgs/String` | `macgyvbot_command`, operator/manual tools | `macgyvbot_task` | JSON task control action |
+| `/robot_task_control` | `std_msgs/String` | `macgyvbot_command`, operator/manual tools | `macgyvbot_task` | JSON task control action; `exit` cancels work, returns Home, and reports terminal status for UI shutdown |
 
 ## Task Status And Safety Events
 
