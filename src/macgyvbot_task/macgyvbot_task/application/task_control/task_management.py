@@ -1,4 +1,4 @@
-"""Task control side effects for exit, pause, and resume requests."""
+"""Task control side effects for cancel, exit, pause, and resume requests."""
 
 from __future__ import annotations
 
@@ -27,6 +27,8 @@ class TaskManagement:
 
         if action == "exit":
             return self._handle_exit(reason, publish_status=publish_status)
+        if action == "cancel":
+            return self._handle_cancel(reason, publish_status=publish_status)
 
         if action == "pause":
             return self._handle_pause(reason)
@@ -46,6 +48,24 @@ class TaskManagement:
                 "cancelled",
                 message="사용자 요청으로 작업을 중단합니다.",
                 reason=reason or "exit_requested",
+                command=self.state.current_command,
+            )
+        return True
+
+    def _handle_cancel(self, reason, publish_status=True):
+        task_running = self.coordinator.is_running()
+        self.exit_event.set()
+        self.pause_event.clear()
+        self.resume_event.clear()
+        self._clear_task_queue()
+        if not task_running:
+            self.exit_event.clear()
+        if publish_status:
+            self.state._publish_robot_status(
+                "cancelled",
+                action="cancel",
+                message="현재 작업을 취소했습니다. 다음 명령을 기다립니다.",
+                reason=reason or "cancel_requested",
                 command=self.state.current_command,
             )
         return True

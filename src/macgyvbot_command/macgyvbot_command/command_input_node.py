@@ -189,7 +189,7 @@ class CommandInputNode(Node):
         command = result.get('command')
         if command is not None:
             action = command.get('action')
-            if action in ('pause', 'resume'):
+            if action in ('pause', 'resume', 'cancel'):
                 self.get_logger().info(
                     f'작업 제어 명령 해석: action={action}, raw_text="{text}"'
                 )
@@ -313,9 +313,11 @@ class CommandInputNode(Node):
 
         if status == 'accepted':
             if action == 'pause':
-                return '정지 요청을 로봇에 전달했습니다. 작업을 재개할까요, 아니면 종료할까요?'
+                return '정지 요청을 로봇에 전달했습니다. 작업을 재개할까요, 아니면 이번 작업을 취소할까요?'
             if action == 'resume':
                 return message or '재개 요청을 이해했습니다.'
+            if action == 'cancel':
+                return message or '현재 작업 취소 요청을 이해했습니다.'
             if action == 'exit':
                 return message or '종료 요청을 이해했습니다.'
             return message or '명령을 이해했습니다.'

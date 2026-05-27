@@ -495,7 +495,7 @@ class MacGyvBotNode(Node):
         if action is None:
             return
 
-        if action not in ("pause", "resume", "exit"):
+        if action not in ("pause", "resume", "cancel", "exit"):
             self.get_logger().warn(f"지원하지 않는 task control action: {action}")
             return
 
@@ -508,7 +508,7 @@ class MacGyvBotNode(Node):
             self.get_logger().warn(f"task control 처리 실패: action={action}")
             return
 
-        if action in ("pause", "exit"):
+        if action in ("pause", "cancel", "exit"):
             self.motion.cancel_current_goal(
                 self.get_logger(),
                 reason=reason or action,

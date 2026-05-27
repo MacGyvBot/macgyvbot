@@ -14,7 +14,7 @@ issue.
 | `/stt_text` | `std_msgs/String` | `macgyvbot_ui` operator UI, optional STT source | `macgyvbot_command` | Plain recognized or typed text |
 | `/tool_command` | `std_msgs/String` | `macgyvbot_command` | `macgyvbot_task`, `macgyvbot_ui` | JSON tool command payload, including `bring`, `return`, `release`, and idle-only `home` |
 | `/command_feedback` | `std_msgs/String` | `macgyvbot_command` | `macgyvbot_ui` | JSON command interpretation feedback |
-| `/robot_task_control` | `std_msgs/String` | `macgyvbot_command`, operator/manual tools | `macgyvbot_task` | JSON task control action; `exit` cancels work, returns Home, and reports terminal status for UI shutdown |
+| `/robot_task_control` | `std_msgs/String` | `macgyvbot_command`, operator/manual tools | `macgyvbot_task` | JSON task control action; `cancel` clears current work/queue and remains idle, while `exit` also returns Home and reports terminal status for UI shutdown |
 | `/command_shutdown` | `std_msgs/String` | `macgyvbot_ui` | `macgyvbot_command` | UI lifecycle signal only; closes the headless command node without issuing robot task control |
 
 ## Task Status And Safety Events

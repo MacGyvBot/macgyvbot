@@ -124,6 +124,15 @@ RESUME_KEYWORDS = [
     'restart',
 ]
 
+CANCEL_KEYWORDS = [
+    '취소',
+    '작업취소',
+    '작업 취소',
+    '이번작업취소',
+    '이번 작업 취소',
+    'cancel',
+]
+
 EXIT_KEYWORDS = [
     '종료',
     '끝내',
@@ -181,6 +190,7 @@ ALLOWED_ACTIONS = {
     'release': '사용자가 잡고 있는 공구를 놓으라고 요청함.',
     'pause': '사용자가 정지, 중단, 일시정지를 요청함.',
     'resume': '사용자가 일시정지된 작업 재개를 요청함.',
+    'cancel': '사용자가 현재 작업을 취소하고 다음 명령을 기다리도록 요청함.',
     'exit': '사용자가 GUI 또는 command node 종료를 요청함.',
     'home': '사용자가 로봇팔을 Home joint pose로 복귀시키도록 요청함.',
     'unknown': '행동을 확정할 수 없음.',

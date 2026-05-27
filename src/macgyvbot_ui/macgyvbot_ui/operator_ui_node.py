@@ -197,7 +197,7 @@ class OperatorUiNode(Node):
         if status == 'accepted':
             command = feedback.get('command') or {}
             action = command.get('action')
-            if action in {'pause', 'resume', 'exit'}:
+            if action in {'pause', 'resume', 'cancel', 'exit'}:
                 if self.window is not None and hasattr(self.window, 'append_command_result'):
                     self.window.append_command_result(command)
 
@@ -205,13 +205,13 @@ class OperatorUiNode(Node):
                 stop_message = '정지 요청을 로봇에 전달했습니다.'
                 self._append_bot(stop_message)
                 self._append_log('warn', stop_message)
-                followup_message = '작업을 재개할까요, 아니면 종료할까요?'
+                followup_message = '작업을 재개할까요, 아니면 이번 작업을 취소할까요?'
                 self._append_bot(followup_message)
                 if self.window is not None and hasattr(self.window, 'append_control_actions'):
                     self.window.append_control_actions(
                         (
                             ('재개', '재개'),
-                            ('종료', '종료'),
+                            ('취소', '취소'),
                         )
                     )
                 self._append_log('info', followup_message)
@@ -226,6 +226,15 @@ class OperatorUiNode(Node):
                 self._append_bot(resume_message)
                 self._append_log('info', '재개 명령 해석 완료')
                 self._set_status('재개 대기')
+                return
+
+            if action == 'cancel':
+                cancel_message = (
+                    message or '현재 작업을 취소합니다. 다음 명령을 기다리겠습니다.'
+                )
+                self._append_bot(cancel_message)
+                self._append_log('warn', '현재 작업 취소 요청 발행: queue와 진행 motion 정리')
+                self._set_status('작업 취소 처리 중')
                 return
 
             if action == 'exit':
