@@ -240,11 +240,6 @@ class PickSequenceRunner:
             self.state.current_command = None
 
     def _drawer_grasp_and_handoff(self, tool_target, handle_fk_z, drawer_id, log):
-        """서랍 전용 pick: 관찰 자세에서 approach_z로 직접 이동 → grasp_z 하강 → 파지 → 수직 리프트 → handoff.
-
-        XY+Z를 approach_z까지 한 번에 이동해 lift_z 기준 XY 보정보다
-        base 거리를 줄여 planning 실패를 피한다.
-        """
         plan = self.target_planner.plan_drawer(
             tool_target.x, tool_target.y, handle_fk_z, drawer_id, log
         )
@@ -254,18 +249,13 @@ class PickSequenceRunner:
         lift_z = float(current_pose[2, 3])
         ori = current_ee_orientation(self.robot)
 
-        base_dist_approach = math.sqrt(
-            plan.target_x ** 2 + plan.target_y ** 2 + plan.approach_z ** 2
-        )
         log.info(
             f"[서랍pick] 시작 — "
             f"EE현재=({current_x:.3f}, {current_y:.3f}, {lift_z:.3f}) "
             f"tool_raw=({tool_target.x:.3f}, {tool_target.y:.3f}, {tool_target.z:.3f}) "
             f"depth_m={tool_target.depth_m:.3f} "
             f"plan.target=({plan.target_x:.3f}, {plan.target_y:.3f}) "
-            f"grasp_z={plan.grasp_z:.3f} approach_z={plan.approach_z:.3f} "
-            f"corrected_bz={plan.corrected_bz:.3f} "
-            f"base_dist_approach={base_dist_approach:.3f}m"
+            f"grasp_z={plan.grasp_z:.3f} approach_z={plan.approach_z:.3f}"
         )
 
         # 1. Gripper pre-open → narrow to drawer entry width
@@ -274,13 +264,37 @@ class PickSequenceRunner:
         self.gripper.move_gripper(int(DRAWER_ENTRY_GRIPPER_WIDTH_M * 10000))
         self.cooperative_wait(GRIPPER_OPEN_WAIT_SEC)
 
-        # 2. XY+Z 동시 이동 → approach_z (lift_z 중간 경유 없음 — base 거리 단축)
+        # 2. XY 수평 이동 → 도구 정상방 (lift_z 유지)
         xy_offset = math.hypot(plan.target_x - current_x, plan.target_y - current_y)
         log.info(
-            f"[서랍pick] 2단계 approach 이동 계획 — "
+            f"[서랍pick] 2단계 XY 수평 이동 계획 — "
             f"from=({current_x:.3f}, {current_y:.3f}, {lift_z:.3f}) "
-            f"to=({plan.target_x:.3f}, {plan.target_y:.3f}, {plan.approach_z:.3f}) "
-            f"XY거리={xy_offset:.3f}m base_dist={base_dist_approach:.3f}m"
+            f"to=({plan.target_x:.3f}, {plan.target_y:.3f}, {lift_z:.3f}) "
+            f"XY거리={xy_offset:.3f}m"
+        )
+        ok = self.motion.plan_and_execute(
+            log,
+            pose_goal=make_safe_pose(plan.target_x, plan.target_y, lift_z, ori, log),
+        )
+        if not ok:
+            log.error(
+                f"[서랍pick] 2단계 XY 수평 이동 실패 — "
+                f"target=({plan.target_x:.3f}, {plan.target_y:.3f}, {lift_z:.3f})"
+            )
+            self.state._publish_robot_status(
+                "failed",
+                message="서랍 pick XY 이동 실패",
+                reason="drawer_pick_xy_move_failed",
+                command=self.state.current_command,
+            )
+            return False
+        log.info(f"[서랍pick] 2단계 XY 수평 이동 완료 — lift_z={lift_z:.3f}")
+
+        # 3. 수직 하강 to approach_z
+        log.info(
+            f"[서랍pick] 3단계 approach 하강 계획 — "
+            f"from_z={lift_z:.3f} to_z={plan.approach_z:.3f} "
+            f"하강거리={lift_z - plan.approach_z:.3f}m"
         )
         ok = self.motion.plan_and_execute(
             log,
@@ -288,23 +302,22 @@ class PickSequenceRunner:
         )
         if not ok:
             log.error(
-                f"[서랍pick] 2단계 approach 이동 실패 — "
-                f"target=({plan.target_x:.3f}, {plan.target_y:.3f}, {plan.approach_z:.3f}) "
-                f"base_dist={base_dist_approach:.3f}m"
+                f"[서랍pick] 3단계 approach 하강 실패 — "
+                f"approach_z={plan.approach_z:.3f}"
             )
             self.state._publish_robot_status(
                 "failed",
-                message="서랍 pick approach 이동 실패",
+                message="서랍 pick approach 하강 실패",
                 reason="drawer_pick_approach_failed",
                 command=self.state.current_command,
             )
             return False
-        log.info(f"[서랍pick] 2단계 approach 이동 완료 — approach_z={plan.approach_z:.3f}")
+        log.info(f"[서랍pick] 3단계 approach 하강 완료 — approach_z={plan.approach_z:.3f}")
 
-        # 3. 수직 하강 to grasp_z
+        # 4. 수직 하강 to grasp_z
         descent = plan.approach_z - plan.grasp_z
         log.info(
-            f"[서랍pick] 3단계 하강 계획 — "
+            f"[서랍pick] 4단계 하강 계획 — "
             f"from_z={plan.approach_z:.3f} to_z={plan.grasp_z:.3f} "
             f"하강거리={descent:.3f}m "
             f"{'⚠ grasp_z<0.24 → clamp됨' if plan.grasp_z < 0.24 else ''}"
@@ -315,7 +328,7 @@ class PickSequenceRunner:
         )
         if not ok:
             log.error(
-                f"[서랍pick] 3단계 하강 실패 — "
+                f"[서랍pick] 4단계 하강 실패 — "
                 f"approach_z={plan.approach_z:.3f} grasp_z={plan.grasp_z:.3f} descent={descent:.3f}m"
             )
             self.state._publish_robot_status(
@@ -325,11 +338,11 @@ class PickSequenceRunner:
                 command=self.state.current_command,
             )
             return False
-        log.info(f"[서랍pick] 3단계 하강 완료 — grasp_z={plan.grasp_z:.3f}")
+        log.info(f"[서랍pick] 4단계 하강 완료 — grasp_z={plan.grasp_z:.3f}")
 
-        # 4. Grasp
+        # 5. Grasp
         if not self.grasp.try_robot_grasp(log):
-            log.error("[서랍pick] 4단계 grasp 실패")
+            log.error("[서랍pick] 5단계 grasp 실패")
             self.state._publish_robot_status(
                 "failed",
                 message="서랍 pick grasp 실패",
@@ -338,7 +351,7 @@ class PickSequenceRunner:
             )
             return False
         self.state.robot_grasp_succeeded = True
-        log.info("[서랍pick] 4단계 grasp 성공")
+        log.info("[서랍pick] 5단계 grasp 성공")
         self.state._publish_robot_status(
             "grasp_success",
             message="서랍 공구 grasp 성공",
@@ -351,9 +364,9 @@ class PickSequenceRunner:
                 self.state.current_command,
             )
 
-        # 5. Mask lock (handoff 인식에 필요)
+        # 6. Mask lock (handoff 인식에 필요)
         if not self.handoff.wait_for_tool_mask_lock(log):
-            log.error("[서랍pick] 5단계 mask lock 실패")
+            log.error("[서랍pick] 6단계 mask lock 실패")
             self.state._publish_robot_status(
                 "failed",
                 message="서랍 pick mask lock 실패",
@@ -361,14 +374,14 @@ class PickSequenceRunner:
                 command=self.state.current_command,
             )
             return False
-        log.info("[서랍pick] 5단계 mask lock 완료")
+        log.info("[서랍pick] 6단계 mask lock 완료")
 
-        # 6. 수직 리프트만 (XY 이동 없음)
+        # 7. 수직 리프트만 (XY 이동 없음)
         post_grasp_pose = get_ee_matrix(self.robot)
         actual_z_after_grasp = float(post_grasp_pose[2, 3])
         lift_dist = lift_z - actual_z_after_grasp
         log.info(
-            f"[서랍pick] 6단계 수직리프트 계획 — "
+            f"[서랍pick] 7단계 수직리프트 계획 — "
             f"현재z={actual_z_after_grasp:.3f} → lift_z={lift_z:.3f} "
             f"리프트거리={lift_dist:.3f}m"
         )
@@ -378,7 +391,7 @@ class PickSequenceRunner:
         )
         if not ok:
             log.error(
-                f"[서랍pick] 6단계 수직리프트 실패 — "
+                f"[서랍pick] 7단계 수직리프트 실패 — "
                 f"현재z={actual_z_after_grasp:.3f} lift_z={lift_z:.3f} dist={lift_dist:.3f}m"
             )
             self.state._publish_robot_status(
@@ -388,12 +401,12 @@ class PickSequenceRunner:
                 command=self.state.current_command,
             )
             return False
-        log.info(f"[서랍pick] 6단계 수직리프트 완료 — lift_z={lift_z:.3f}")
+        log.info(f"[서랍pick] 7단계 수직리프트 완료 — lift_z={lift_z:.3f}")
 
-        # 7. Handoff 자세로 이동
+        # 8. Handoff 자세로 이동
         handoff_pose = self.handoff.move_to_handoff_pose(ori, log)
         if handoff_pose[0] is None:
-            log.error("[서랍pick] 7단계 handoff 자세 이동 실패 — 사용자 손 위치 미확인")
+            log.error("[서랍pick] 8단계 handoff 자세 이동 실패 — 사용자 손 위치 미확인")
             self.state._publish_robot_status(
                 "failed",
                 message="사용자 손 위치 확인 실패",
@@ -401,16 +414,16 @@ class PickSequenceRunner:
                 command=self.state.current_command,
             )
             return False
-        log.info("[서랍pick] 7단계 handoff 자세 이동 완료")
+        log.info("[서랍pick] 8단계 handoff 자세 이동 완료")
 
-        # 8. 사용자 잡기 대기
+        # 9. 사용자 잡기 대기
         self.state._publish_robot_status(
             "waiting_handoff",
             message="사용자 잡기 인식을 기다립니다.",
             command=self.state.current_command,
         )
         if not self.handoff.wait_for_human_grasp(log):
-            log.error("[서랍pick] 8단계 사용자 잡기 인식 실패 (timeout)")
+            log.error("[서랍pick] 9단계 사용자 잡기 인식 실패 (timeout)")
             self.state._publish_robot_status(
                 "failed",
                 message="사용자 잡기 인식 실패",
@@ -418,15 +431,15 @@ class PickSequenceRunner:
                 command=self.state.current_command,
             )
             return False
-        log.info("[서랍pick] 8단계 사용자 잡기 인식 완료")
+        log.info("[서랍pick] 9단계 사용자 잡기 인식 완료")
 
-        # 9. 그리퍼 해제
+        # 10. 그리퍼 해제
         if self.tool_hold_monitor is not None:
             self.tool_hold_monitor.stop("handoff_release")
         self.gripper.open_gripper()
         self.cooperative_wait(GRIPPER_GRASP_WAIT_SEC)
         self.state.robot_grasp_succeeded = False
-        log.info("[서랍pick] 9단계 그리퍼 해제 완료 — 전체 시퀀스 성공")
+        log.info("[서랍pick] 10단계 그리퍼 해제 완료 — 전체 시퀀스 성공")
         return True
 
     def run(self, bx, by, bz, z_m, vlm_yaw_deg=None):

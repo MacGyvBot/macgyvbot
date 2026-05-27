@@ -295,7 +295,7 @@ class DrawerInteraction:
         self.gripper.open_gripper()
         self.wait(GRIPPER_OPEN_WAIT_SEC)
 
-        logger.info("서랍 열기 4단계: wrist 정규화 후 서랍 내부 관찰 pose로 이동")
+        logger.info("서랍 열기 4단계: wrist 정규화")
         if not self.motion.reset_wrist_to_home(logger):
             logger.warn("wrist 정규화 1차 실패 — 재시도")
             if not self.motion.reset_wrist_to_home(logger):
@@ -305,11 +305,21 @@ class DrawerInteraction:
         observe_x = motion.open_x + DRAWER_OBSERVE_OFFSET_XYZ_M[0]
         observe_y = motion.open_y + DRAWER_OBSERVE_OFFSET_XYZ_M[1]
         observe_z = motion.closed_z + DRAWER_OBSERVE_OFFSET_XYZ_M[2]
+
+        logger.info("서랍 열기 5단계: 수직 상승 — 서랍 테두리 이탈")
+        if not self.motion.plan_and_execute(
+            logger,
+            pose_goal=make_safe_pose(motion.open_x, motion.open_y, observe_z, observe_ori, logger),
+        ):
+            logger.error("서랍 관찰 수직 상승 실패")
+            return None, True
+
+        logger.info("서랍 열기 6단계: 수평 이동 — 서랍 내부 관찰 위치")
         if not self.motion.plan_and_execute(
             logger,
             pose_goal=make_safe_pose(observe_x, observe_y, observe_z, observe_ori, logger),
         ):
-            logger.error("서랍 내부 관찰 pose 이동 실패")
+            logger.error("서랍 내부 관찰 pose 수평 이동 실패")
             return None, True
 
         return motion, True

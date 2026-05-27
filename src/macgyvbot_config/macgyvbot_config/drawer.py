@@ -36,7 +36,7 @@ TOOL_DRAWER_IDS: dict[str, int] = {
 }
 
 DRAWER_OPEN_OFFSET_XYZ_M: list[float] = [0.0, -0.12, 0.0]
-DRAWER_OBSERVE_OFFSET_XYZ_M: list[float] = [0.0, -0.06, 0.20]
+DRAWER_OBSERVE_OFFSET_XYZ_M: list[float] = [0.0, 0.08, 0.20]
 
 
 def get_drawer_safe_z_min(drawer_id: int) -> float:
