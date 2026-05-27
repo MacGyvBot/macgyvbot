@@ -17,7 +17,9 @@ from macgyvbot_command.input_mapping.command_vocabulary import (
     ALLOWED_TOOLS,
     DEICTIC_WORDS,
     EXIT_KEYWORDS,
+    HOME_KEYWORDS,
     NO_WORDS,
+    RELEASE_KEYWORDS,
     RESUME_KEYWORDS,
     STOP_KEYWORDS,
     YES_WORDS,
@@ -62,6 +64,10 @@ class CommandLlmParser:
         if pending_result is not None:
             return pending_result
 
+        guarded_result = self._guard_non_executable_control_text(text)
+        if guarded_result is not None:
+            return guarded_result
+
         if self._has_stop_intent(text):
             return self._accepted_result(
                 {
@@ -100,6 +106,36 @@ class CommandLlmParser:
                     'confidence': 1.0,
                 }
             )
+
+        if self._has_home_intent(text):
+            return self._accepted_result(
+                {
+                    'tool_name': 'unknown',
+                    'action': 'home',
+                    'target_mode': 'unknown',
+                    'raw_text': text,
+                    'match_method': 'home_keyword',
+                    'match_score': 1.0,
+                    'confidence': 1.0,
+                }
+            )
+
+        if find_action(text) == 'release':
+            return self._accepted_result(
+                {
+                    'tool_name': 'unknown',
+                    'action': 'release',
+                    'target_mode': 'unknown',
+                    'raw_text': text,
+                    'match_method': 'release_keyword',
+                    'match_score': 1.0,
+                    'confidence': 1.0,
+                }
+            )
+
+        explicit_return = self._parse_explicit_return(text)
+        if explicit_return is not None:
+            return self._accepted_result(explicit_return)
 
         llm_rejected_result = None
         if self._parser_mode == 'llm_primary' and self._use_llm_fallback:
@@ -298,6 +334,19 @@ class CommandLlmParser:
             self._info('local parser가 종료 명령으로 확정했습니다.')
             return command
 
+        if action == 'home':
+            command = {
+                'tool_name': 'unknown',
+                'action': 'home',
+                'target_mode': 'unknown',
+                'raw_text': text,
+                'match_method': 'home_keyword',
+                'match_score': 1.0,
+                'confidence': 1.0,
+            }
+            self._info('local parser가 Home 복귀 명령으로 확정했습니다.')
+            return command
+
         previous_tool = self._context.resolve_previous_tool()
         previous_command = self._context.resolve_previous_command()
         if action == 'unknown' and self._has_repeat_reference(text) and previous_command:
@@ -415,6 +464,99 @@ class CommandLlmParser:
         )
         return command
 
+    def _parse_explicit_return(self, text):
+        effective_text = self._effective_command_text(text)
+        if find_action(effective_text) != 'return':
+            return None
+
+        tool_name, match_method, match_score, _ = find_tool(effective_text)
+        if match_method == 'alias':
+            return {
+                'tool_name': tool_name,
+                'action': 'return',
+                'target_mode': 'named',
+                'raw_text': text,
+                'match_method': match_method,
+                'match_score': match_score,
+                'confidence': match_score,
+            }
+
+        if self._has_deictic_target(effective_text):
+            return {
+                'tool_name': 'unknown',
+                'action': 'return',
+                'target_mode': 'deictic',
+                'raw_text': text,
+                'match_method': 'local_deictic',
+                'match_score': 1.0,
+                'confidence': 1.0,
+            }
+
+        return None
+
+    def _guard_non_executable_control_text(self, text):
+        if not self._mentions_control_action(text):
+            return None
+
+        normalized = self._normalize_answer(text)
+        if any(
+            token in normalized
+            for token in (
+                '하지마',
+                '하지말',
+                '주지마',
+                '주지말',
+                '열지마',
+                '열지말',
+                '놓지마',
+                '놓지말',
+                '놔두지마',
+                '놔두지말',
+            )
+        ):
+            return {
+                'command': None,
+                'feedbacks': [
+                    self._feedback(
+                        status='assistant_response',
+                        raw_text=text,
+                        reason='negated_command',
+                        message='알겠습니다. 해당 동작은 실행하지 않겠습니다.',
+                    )
+                ],
+            }
+
+        if (
+            '?' in text
+            or any(
+                token in normalized
+                for token in (
+                    '중이야',
+                    '상태야',
+                    '완료됐',
+                    '완료되었',
+                    '처리중',
+                    '됐어',
+                    '되었어',
+                    '어떻게돼',
+                    '어떻게되',
+                )
+            )
+        ):
+            return {
+                'command': None,
+                'feedbacks': [
+                    self._feedback(
+                        status='assistant_response',
+                        raw_text=text,
+                        reason='status_query',
+                        message=self._context.robot_status_message(),
+                    )
+                ],
+            }
+
+        return None
+
     def _has_deictic_target(self, text):
         normalized = self._normalize_answer(text)
         return any(word in normalized for word in DEICTIC_WORDS)
@@ -481,13 +623,17 @@ class CommandLlmParser:
                 return '가리킨 공구를 정리하라는 뜻으로 이해했습니다.'
             return f'{tool_name}를 정리하라는 뜻으로 이해했습니다.'
         if action == 'release':
+            if tool_name == 'unknown':
+                return '그리퍼를 열거나 잡고 있는 공구를 놓으라는 뜻으로 이해했습니다.'
             return f'{tool_name}를 놓으라는 뜻으로 이해했습니다.'
         if action == 'pause':
             return '정지 명령으로 이해했습니다.'
         if action == 'resume':
             return '재개 명령으로 이해했습니다. 작업 재개 요청으로 전달합니다.'
         if action == 'exit':
-            return '종료 요청으로 이해했습니다. 안전을 위해 자동 종료하지 않고 안내만 표시합니다.'
+            return '종료 요청을 전달했습니다. 작업을 정리하고 Home 위치로 복귀한 뒤 종료합니다.'
+        if action == 'home':
+            return 'Home 위치로 복귀하라는 뜻으로 이해했습니다.'
         return '명령을 올바른 입력으로 판단했습니다.'
 
     def _build_confirmation_question(self, command):
@@ -588,6 +734,7 @@ class CommandLlmParser:
 - pause: {ALLOWED_ACTIONS['pause']}
 - resume: {ALLOWED_ACTIONS['resume']}
 - exit: {ALLOWED_ACTIONS['exit']}
+- home: {ALLOWED_ACTIONS['home']}
 - unknown: {ALLOWED_ACTIONS['unknown']}
 
 허용 target_mode:
@@ -616,14 +763,20 @@ class CommandLlmParser:
 - "아까 가져온 거", "방금 가져온 거", "전에 준 거"처럼 이전 공구를 가리키면 현재 맥락의 최근 참조 가능한 공구를 tool_name으로 쓰고 context_used를 previous_tool로 둔다.
 - 최근 참조 가능한 공구가 없으면 이전 공구를 추측하지 말고 tool_name unknown으로 둔다.
 - "정리해", "가져다놔", "가져가", "제자리에 둬", "서랍에 넣어", "반납해"는 return action이다.
+- "놔", "놔줘", "놓아줘", "그리퍼 열어", "그리퍼 오픈"은 release action이다.
+- 그리퍼를 열라는 표현을 공구 가져오기나 screwdriver로 추측하지 않는다.
 - "지금 뭐해", "어디까지 했어", "현재 상태 알려줘"는 status_query intent다.
 - "고마워", "안녕", "알겠어" 같은 대화는 smalltalk intent다.
 - status_query와 smalltalk는 tool_name unknown, action unknown, target_mode unknown으로 둔다.
 - status_query와 smalltalk는 assistant_message에 사용자가 볼 짧은 한국어 응답을 넣는다.
 - "멈춰", "정지", "중지", "중단", "스탑", "stop", "pause"처럼 명확한 정지 표현만 pause action이다.
-- "재개", "다시 시작", "계속해", "resume", "restart"처럼 명확한 재개 표현만 resume action이다.
-- "종료", "끝내", "꺼줘", "닫아줘", "exit", "quit"처럼 명확한 종료 표현만 exit action이다.
-- 이해하지 못한 문장을 pause, resume, exit로 추측하지 말고 action unknown으로 둔다.
+- "재개", "다시 시작", "계속해", "계속 진행해", "resume", "restart"처럼 명확한 재개 표현만 resume action이다.
+- "종료", "끝내", "프로그램 꺼줘", "앱 닫아줘", "GUI 종료", "exit", "quit"처럼 명확한 종료 표현만 exit action이다.
+- "카메라 꺼줘"처럼 프로그램 종료 대상이 아닌 장치를 끄라는 문장을 exit action으로 해석하지 않는다.
+- "홈위치로 가", "홈으로 가", "복귀해", "원위치로 가", "초기 위치로 이동해", "home"처럼 명확한 Home 복귀 표현만 home action이다.
+- "종료하지 마", "복귀하지 마", "정지하지 마", "그리퍼 열지 마" 같은 부정문은 어떤 command도 실행하지 않는다.
+- "종료됐어?", "복귀 중이야?", "현재 정지 상태야?" 같은 질문은 status_query이며 command가 아니다.
+- 이해하지 못한 문장을 pause, resume, exit, home으로 추측하지 말고 action unknown으로 둔다.
 
 예시:
 입력: 드라이버 가져다줘
@@ -654,6 +807,12 @@ class CommandLlmParser:
 입력: 길이 재는 거 줘
 출력: {{"intent":"command","tool_name":"tape_measure","action":"bring","target_mode":"named","confidence":0.82,"needs_confirmation":false,"context_used":"none"}}
 
+입력: 놔줘
+출력: {{"intent":"command","tool_name":"unknown","action":"release","target_mode":"unknown","confidence":0.95,"needs_confirmation":false,"context_used":"none"}}
+
+입력: 그리퍼 열어
+출력: {{"intent":"command","tool_name":"unknown","action":"release","target_mode":"unknown","confidence":0.95,"needs_confirmation":false,"context_used":"none"}}
+
 입력: 멈춰
 출력: {{"intent":"command","tool_name":"unknown","action":"pause","target_mode":"unknown","confidence":0.90,"needs_confirmation":false,"context_used":"none"}}
 
@@ -662,6 +821,9 @@ class CommandLlmParser:
 
 입력: 종료해
 출력: {{"intent":"command","tool_name":"unknown","action":"exit","target_mode":"unknown","confidence":0.90,"needs_confirmation":false,"context_used":"none"}}
+
+입력: 홈위치로 가
+출력: {{"intent":"command","tool_name":"unknown","action":"home","target_mode":"unknown","confidence":0.90,"needs_confirmation":false,"context_used":"none"}}
 
 입력: 지금 뭐 하는 중이야?
 출력: {{"intent":"status_query","tool_name":"unknown","action":"unknown","target_mode":"unknown","confidence":0.90,"needs_confirmation":false,"context_used":"robot_status","assistant_message":"현재 로봇 상태를 확인해드릴게요."}}
@@ -957,6 +1119,20 @@ class CommandLlmParser:
                 ),
             }
 
+        if action == 'home' and not self._has_home_intent(raw_text):
+            self._warn('명확한 Home 복귀 표현이 없어 home 명령을 무시합니다.')
+            candidate_command['action'] = 'unknown'
+            return {
+                'command': None,
+                'feedback': self._feedback(
+                    status='rejected',
+                    raw_text=raw_text,
+                    reason='unknown_action',
+                    message='무엇을 해야 하는지 확정하지 못했습니다. 다시 입력해주세요.',
+                    command=candidate_command,
+                ),
+            }
+
         if action == 'bring' and target_mode == 'deictic':
             self._warn('deictic bring 명령은 지원하지 않아 재입력을 요청합니다.')
             return {
@@ -1046,6 +1222,13 @@ class CommandLlmParser:
             return 'exit'
         if action == 'exit':
             return 'unknown'
+        if self._has_home_intent(raw_text):
+            return 'home'
+        if action == 'home':
+            return 'unknown'
+        if self._has_release_intent(raw_text):
+            return 'release'
+
         return_tokens = (
             '가져다가놔',
             '가져다가놓',
@@ -1102,6 +1285,41 @@ class CommandLlmParser:
     def _has_exit_intent(raw_text):
         normalized = normalize_text(raw_text)
         return any(normalize_text(keyword) in normalized for keyword in EXIT_KEYWORDS)
+
+    @staticmethod
+    def _has_home_intent(raw_text):
+        normalized = normalize_text(raw_text)
+        return any(normalize_text(keyword) in normalized for keyword in HOME_KEYWORDS)
+
+    @staticmethod
+    def _has_release_intent(raw_text):
+        normalized = normalize_text(raw_text)
+        if any(normalize_text(keyword) in normalized for keyword in RELEASE_KEYWORDS):
+            return True
+        return any(
+            token in normalized
+            for token in (
+                'opengripper',
+                'gripperopen',
+                '그리퍼열',
+                '그리퍼오픈',
+                '집게열',
+                '집게오픈',
+            )
+        )
+
+    def _mentions_control_action(self, raw_text):
+        return (
+            self._has_stop_intent(raw_text)
+            or self._has_resume_intent(raw_text)
+            or self._has_exit_intent(raw_text)
+            or self._has_home_intent(raw_text)
+            or self._has_release_intent(raw_text)
+            or any(
+                token in self._normalize_answer(raw_text)
+                for token in ('놓지', '놔두지')
+            )
+        )
 
     def _has_previous_reference(self, raw_text):
         normalized = self._normalize_answer(raw_text)

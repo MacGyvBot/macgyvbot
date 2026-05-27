@@ -248,6 +248,7 @@ class MacGyvBotNode(Node):
             reset_search_status=self._reset_search_status,
             start_return=self.start_return_sequence,
             release_gripper=self.tool_hold_monitor.release_gripper,
+            move_home=self._move_home,
         )
         self.frame_processor = PickFrameProcessor(
             self.state,
@@ -854,6 +855,9 @@ class MacGyvBotNode(Node):
     def run(self):
         self.home_initializer.initialize()
         self._process_frames()
+
+    def _move_home(self):
+        return self.home_initializer.initialize()
 
     def _process_frames(self):
         if self.state.home_xyz is None or self.state.home_ori is None:
