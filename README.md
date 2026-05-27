@@ -21,7 +21,7 @@ src/
 ├── macgyvbot_config/         # shared Python runtime constants
 ├── macgyvbot_domain/         # shared dataclasses
 ├── macgyvbot_resources/      # calibration and model assets
-└── macgyvbot_interfaces/     # typed msg/srv/action migration target
+└── macgyvbot_interfaces/     # typed ROS package-boundary messages
 ```
 
 작업자와 에이전트 공통 지침은 [AGENTS.md](./AGENTS.md)를 참고합니다.

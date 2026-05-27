@@ -10,7 +10,6 @@ import rclpy
 from cv_bridge import CvBridge
 from rclpy.node import Node
 from sensor_msgs.msg import Image
-from std_msgs.msg import String
 
 from macgyvbot_config.hand_grasp import (
     HAND_GRASP_LOCK_ON_STATUS,
@@ -28,6 +27,7 @@ from macgyvbot_config.topics import (
     HAND_GRASP_TOPIC,
     ROBOT_STATUS_TOPIC,
 )
+from macgyvbot_interfaces.msg import HumanGraspResult, RobotTaskStatus, ToolMaskLock
 from macgyvbot_perception.hand_tool_grasp.hand_detector import (
     HandDetector,
 )
@@ -186,8 +186,12 @@ class HandGraspDetectionNode(Node):
         self.ml_classifier = self._create_ml_classifier()
         self.sam_segmenter = self._create_sam_segmenter()
 
-        self.result_pub = self.create_publisher(String, self.result_topic, 10)
-        self.mask_lock_pub = self.create_publisher(String, self.mask_lock_topic, 10)
+        self.result_pub = self.create_publisher(
+            HumanGraspResult, self.result_topic, 10
+        )
+        self.mask_lock_pub = self.create_publisher(
+            ToolMaskLock, self.mask_lock_topic, 10
+        )
         self.annotated_pub = (
             self.create_publisher(Image, self.annotated_topic, 10)
             if self.publish_annotated
@@ -201,7 +205,9 @@ class HandGraspDetectionNode(Node):
             self.get_logger().warn("Depth recognition disabled by parameter.")
 
         self.create_subscription(Image, self.color_topic, self._color_cb, 10)
-        self.create_subscription(String, self.robot_status_topic, self._robot_status_cb, 10)
+        self.create_subscription(
+            RobotTaskStatus, self.robot_status_topic, self._robot_status_cb, 10
+        )
         self.get_logger().info(f"Color image topic: {self.color_topic}")
         self.get_logger().info(f"Result topic: {self.result_topic}")
         self.get_logger().info(f"Robot status topic: {self.robot_status_topic}")
@@ -274,14 +280,8 @@ class HandGraspDetectionNode(Node):
         )
         return segmenter
 
-    def _robot_status_cb(self, msg: String) -> None:
-        try:
-            status = json.loads(msg.data).get("status")
-        except json.JSONDecodeError:
-            self.get_logger().warn(f"Robot status JSON parse failed: {msg.data}")
-            return
-
-        if status == self.lock_on_status:
+    def _robot_status_cb(self, msg: RobotTaskStatus) -> None:
+        if msg.status == self.lock_on_status:
             self.lock_requested = True
             self.mask_tracking_active = False
             self.locked_tool = None
@@ -517,7 +517,16 @@ class HandGraspDetectionNode(Node):
         if locked_tool is None:
             payload["reason"] = "tool_mask_unavailable"
 
-        self.mask_lock_pub.publish(String(data=json.dumps(payload, ensure_ascii=False)))
+        msg = ToolMaskLock()
+        msg.locked = bool(payload["locked"])
+        msg.mask_source = str(payload["mask_source"])
+        roi = payload.get("tool_roi")
+        msg.has_tool_roi = roi is not None
+        msg.tool_roi = [int(value) for value in roi] if roi is not None else [0, 0, 0, 0]
+        msg.has_reason = "reason" in payload
+        msg.reason = str(payload.get("reason", ""))
+        msg.payload_json = json.dumps(payload, ensure_ascii=False)
+        self.mask_lock_pub.publish(msg)
 
     def _update_ml_grasp(self, hand_info: Optional[dict]) -> MLGraspResult:
         if self.ml_classifier is None:
@@ -718,7 +727,69 @@ class HandGraspDetectionNode(Node):
             ),
             "hand_pixel": hand_pixel,
         }
-        self.result_pub.publish(String(data=json.dumps(payload, ensure_ascii=False)))
+        msg = HumanGraspResult()
+        msg.state = str(payload["state"])
+        msg.human_grasped_tool = bool(payload["human_grasped_tool"])
+        msg.grasp_counter = int(payload["grasp_counter"])
+        msg.grasp_score = float(payload["grasp_score"])
+        msg.ml_required = bool(payload["ml_required"])
+        msg.ml_grasp_confirmed = bool(payload["ml_grasp_confirmed"])
+        msg.ml_confidence_ok = bool(payload["ml_confidence_ok"])
+        msg.ml_raw_state = str(payload["ml_raw_state"])
+        msg.ml_stable_state = str(payload["ml_stable_state"])
+        msg.has_ml_confidence = payload["ml_confidence"] is not None
+        msg.ml_confidence = (
+            float(payload["ml_confidence"]) if payload["ml_confidence"] is not None else 0.0
+        )
+        msg.depth_required = bool(payload["depth_required"])
+        msg.depth_available = bool(payload["depth_available"])
+        msg.depth_grasp_ok = bool(payload["depth_grasp_ok"])
+        msg.depth_grasp_confirmed = bool(payload["depth_grasp_confirmed"])
+        msg.has_tool_depth_mm = payload["tool_depth_mm"] is not None
+        msg.tool_depth_mm = (
+            float(payload["tool_depth_mm"]) if payload["tool_depth_mm"] is not None else 0.0
+        )
+        depth_diff = payload["min_hand_tool_depth_diff_mm"]
+        msg.has_min_hand_tool_depth_diff_mm = depth_diff is not None
+        msg.min_hand_tool_depth_diff_mm = float(depth_diff) if depth_diff is not None else 0.0
+        msg.depth_contact_count = int(payload["depth_contact_count"])
+        msg.mask_locked = bool(payload["mask_locked"])
+        msg.locked_mask_grasp_ok = bool(payload["locked_mask_grasp_ok"])
+        msg.mask_contact_confirmed = bool(payload["mask_contact_confirmed"])
+        msg.mask_proximity_ok = bool(payload["mask_proximity_ok"])
+        msg.mask_near_or_contact = bool(payload["mask_near_or_contact"])
+        msg.mask_source = str(payload["mask_source"])
+        msg.mask_contact_count = int(payload["mask_contact_count"])
+        distance = payload["min_landmark_to_tool_distance"]
+        msg.has_min_landmark_to_tool_distance = distance is not None
+        msg.min_landmark_to_tool_distance = float(distance) if distance is not None else 0.0
+        label = payload["tool_label"]
+        msg.has_tool_label = label is not None
+        msg.tool_label = str(label) if label is not None else ""
+        tool_confidence = payload["tool_confidence"]
+        msg.has_tool_confidence = tool_confidence is not None
+        msg.tool_confidence = (
+            float(tool_confidence) if tool_confidence is not None else 0.0
+        )
+        roi = payload["tool_roi"]
+        msg.has_tool_roi = roi is not None
+        msg.tool_roi = [int(value) for value in roi] if roi is not None else [0, 0, 0, 0]
+        hand_pixel = payload["hand_pixel"]
+        msg.has_hand_pixel = hand_pixel is not None
+        if hand_pixel is not None:
+            msg.hand_u = int(hand_pixel["u"])
+            msg.hand_v = int(hand_pixel["v"])
+            msg.hand_pixel_source = str(hand_pixel.get("source", "unknown"))
+        active_hand_index = payload["active_hand_index"]
+        msg.has_active_hand_index = active_hand_index is not None
+        msg.active_hand_index = (
+            int(active_hand_index) if active_hand_index is not None else 0
+        )
+        handedness = payload["active_handedness"]
+        msg.has_active_handedness = handedness is not None
+        msg.active_handedness = str(handedness) if handedness is not None else ""
+        msg.payload_json = json.dumps(payload, ensure_ascii=False)
+        self.result_pub.publish(msg)
 
     def destroy_node(self) -> bool:
         self.hand_detector.close()

@@ -53,8 +53,8 @@ ROS 패키지가 아니라 colcon workspace root이며, 실행 entrypoint는
   - 패키지 내부 `calibration/`, `weights/`, `weights/vlm/` asset 설치를 소유합니다.
 
 - `src/macgyvbot_interfaces`
-  - typed ROS message migration target을 소유합니다.
-  - 현재 runtime은 호환성을 위해 JSON over `std_msgs/String`을 유지합니다.
+  - package 경계를 넘는 typed ROS message 계약을 소유합니다.
+  - command/status/control/perception 구조화 topic은 이 message 타입을 사용합니다.
 
 - `src/macgyvbot_ui`
   - operator-facing GUI boundary를 소유합니다.

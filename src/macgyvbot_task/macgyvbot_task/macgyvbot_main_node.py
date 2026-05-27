@@ -34,6 +34,14 @@ from macgyvbot_config.topics import (
     TOOL_COMMAND_TOPIC,
 )
 from macgyvbot_config.vlm import DEFAULT_GRASP_POINT_MODE
+from macgyvbot_interfaces.msg import (
+    HumanGraspResult,
+    RobotTaskControl,
+    RobotTaskStatus,
+    ToolCommand,
+    ToolDropEvent,
+    ToolMaskLock,
+)
 from macgyvbot_manipulation.moveit_controller import (
     MoveItController,
 )
@@ -145,12 +153,12 @@ class MacGyvBotNode(Node):
         self.yolo_model = self._read_yolo_model()
         self.force_torque_topic = self._read_force_torque_topic()
         self.robot_status_pub = self.create_publisher(
-            String,
+            RobotTaskStatus,
             ROBOT_STATUS_TOPIC,
             10,
         )
         self.tool_drop_pub = self.create_publisher(
-            String,
+            ToolDropEvent,
             TOOL_DROP_TOPIC,
             10,
         )
@@ -418,13 +426,13 @@ class MacGyvBotNode(Node):
             10,
         )
         self.create_subscription(
-            String,
+            ToolCommand,
             TOOL_COMMAND_TOPIC,
             self._tool_command_cb,
             10,
         )
         self.create_subscription(
-            String,
+            HumanGraspResult,
             HAND_GRASP_TOPIC,
             self._hand_grasp_cb,
             10,
@@ -436,7 +444,7 @@ class MacGyvBotNode(Node):
             10,
         )
         self.create_subscription(
-            String,
+            ToolMaskLock,
             HAND_GRASP_MASK_LOCK_TOPIC,
             self._tool_mask_lock_cb,
             10,
@@ -448,14 +456,14 @@ class MacGyvBotNode(Node):
             10,
         )
         self.create_subscription(
-            String,
+            RobotTaskControl,
             ROBOT_TASK_CONTROL_TOPIC,
             self._task_control_cb,
             10,
             callback_group=self.control_callback_group,
         )
         self.create_subscription(
-            String,
+            ToolDropEvent,
             TOOL_DROP_TOPIC,
             self._tool_drop_cb,
             10,
@@ -491,8 +499,9 @@ class MacGyvBotNode(Node):
         self.task_controller.handle_target_label(val, source="/target_label")
 
     def _task_control_cb(self, msg):
-        action, reason = self._parse_task_control_payload(msg.data)
-        if action is None:
+        action = str(msg.action or "").strip().lower()
+        reason = str(msg.reason or "").strip()
+        if not action:
             return
 
         if action not in ("pause", "resume", "cancel", "exit"):
@@ -519,29 +528,8 @@ class MacGyvBotNode(Node):
     def _motion_interrupted(self):
         return self.exit_req.is_set() or self.pause_req.is_set()
 
-    def _parse_task_control_payload(self, payload):
-        raw = (payload or "").strip()
-        if not raw:
-            return None, ""
-
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError:
-            return raw.lower(), raw.lower()
-
-        if not isinstance(data, dict):
-            return None, ""
-
-        action = str(data.get("action", "")).strip().lower()
-        reason = str(data.get("reason", "")).strip()
-        return action or None, reason
-
     def _tool_drop_cb(self, msg):
-        try:
-            payload = json.loads(msg.data)
-        except json.JSONDecodeError:
-            self.get_logger().warn(f"공구 drop 이벤트 JSON 파싱 실패: {msg.data}")
-            return
+        payload = self._tool_drop_payload(msg)
 
         if payload.get("event") != "tool_dropped":
             return
@@ -565,17 +553,7 @@ class MacGyvBotNode(Node):
         )
 
     def _tool_command_cb(self, msg):
-        try:
-            command = json.loads(msg.data)
-        except json.JSONDecodeError:
-            self.get_logger().warn(f"/tool_command JSON 파싱 실패: {msg.data}")
-            self._publish_robot_status(
-                "rejected",
-                message="명령 JSON을 해석하지 못했습니다.",
-                reason="invalid_json",
-            )
-            return
-
+        command = self._tool_command_payload(msg)
         self.task_controller.handle_command(command)
 
     def _wrench_cb(self, msg):
@@ -593,13 +571,7 @@ class MacGyvBotNode(Node):
         self.state._last_search_status_target = None
 
     def _hand_grasp_cb(self, msg):
-        try:
-            result = json.loads(msg.data)
-        except json.JSONDecodeError:
-            self.get_logger().warn(
-                f"잡기 인식 결과 JSON 파싱 실패: {msg.data}"
-            )
-            return
+        result = self._human_grasp_payload(msg)
 
         result["_received_monotonic_sec"] = time.monotonic()
         self.hand_grasp_adapter.attach_base_position(result)
@@ -607,11 +579,7 @@ class MacGyvBotNode(Node):
         self.state.human_grasped_tool = bool(result.get("human_grasped_tool", False))
 
     def _tool_mask_lock_cb(self, msg):
-        try:
-            result = json.loads(msg.data)
-        except json.JSONDecodeError:
-            self.get_logger().warn(f"공구 mask lock 결과 JSON 파싱 실패: {msg.data}")
-            return
+        result = self._tool_mask_payload(msg)
 
         self.state.last_tool_mask_lock_result = result
         self.state.tool_mask_locked = bool(result.get("locked", False))
@@ -776,14 +744,111 @@ class MacGyvBotNode(Node):
         )
 
     def _publish_status_payload(self, payload):
-        self.robot_status_pub.publish(
-            String(data=json.dumps(payload, ensure_ascii=False))
+        msg = RobotTaskStatus()
+        msg.status = str(payload.get("status", "unknown"))
+        msg.task = str(payload.get("task", ""))
+        msg.tool_name = str(payload.get("tool_name", "unknown"))
+        msg.action = str(payload.get("action", "unknown"))
+        msg.message = str(payload.get("message", ""))
+        msg.reason = str(payload.get("reason", ""))
+        command = payload.get("command")
+        msg.command_json = (
+            json.dumps(command, ensure_ascii=False) if command is not None else ""
         )
+        msg.payload_json = json.dumps(payload, ensure_ascii=False)
+        self.robot_status_pub.publish(msg)
 
     def _publish_tool_drop_payload(self, payload):
-        self.tool_drop_pub.publish(
-            String(data=json.dumps(payload, ensure_ascii=False))
+        msg = ToolDropEvent()
+        msg.event = str(payload.get("event", ""))
+        msg.tool_name = str(payload.get("tool_name", "unknown"))
+        msg.action = str(payload.get("action", "unknown"))
+        msg.reason = str(payload.get("reason", ""))
+        width_mm = payload.get("width_mm")
+        msg.has_width_mm = width_mm is not None
+        msg.width_mm = float(width_mm) if width_mm is not None else 0.0
+        status = payload.get("status")
+        msg.gripper_status_json = (
+            json.dumps(status, ensure_ascii=False) if status is not None else ""
         )
+        msg.error = str(payload.get("error", ""))
+        command = payload.get("command")
+        msg.command_json = (
+            json.dumps(command, ensure_ascii=False) if command is not None else ""
+        )
+        msg.payload_json = json.dumps(payload, ensure_ascii=False)
+        self.tool_drop_pub.publish(msg)
+
+    @staticmethod
+    def _tool_command_payload(msg):
+        payload = json.loads(msg.payload_json) if msg.payload_json else {}
+        payload.update({
+            "action": msg.action,
+            "tool_name": msg.tool_name,
+            "target_mode": msg.target_mode,
+            "raw_text": msg.raw_text,
+            "match_method": msg.match_method,
+            "confidence": msg.confidence,
+        })
+        return payload
+
+    @staticmethod
+    def _tool_drop_payload(msg):
+        payload = json.loads(msg.payload_json) if msg.payload_json else {}
+        payload.update({
+            "event": msg.event,
+            "tool_name": msg.tool_name,
+            "action": msg.action,
+            "reason": msg.reason,
+        })
+        if msg.has_width_mm:
+            payload["width_mm"] = msg.width_mm
+        if msg.gripper_status_json:
+            payload["status"] = json.loads(msg.gripper_status_json)
+        if msg.error:
+            payload["error"] = msg.error
+        if msg.command_json:
+            payload["command"] = json.loads(msg.command_json)
+        return payload
+
+    @staticmethod
+    def _human_grasp_payload(msg):
+        payload = json.loads(msg.payload_json) if msg.payload_json else {}
+        payload.update({
+            "state": msg.state,
+            "human_grasped_tool": msg.human_grasped_tool,
+            "grasp_counter": msg.grasp_counter,
+            "grasp_score": msg.grasp_score,
+            "ml_raw_state": msg.ml_raw_state,
+            "ml_stable_state": msg.ml_stable_state,
+            "ml_grasp_confirmed": msg.ml_grasp_confirmed,
+            "depth_grasp_confirmed": msg.depth_grasp_confirmed,
+            "mask_locked": msg.mask_locked,
+            "mask_source": msg.mask_source,
+        })
+        if msg.has_tool_label:
+            payload["tool_label"] = msg.tool_label
+        if msg.has_tool_roi:
+            payload["tool_roi"] = list(msg.tool_roi)
+        if msg.has_hand_pixel:
+            payload["hand_pixel"] = {
+                "u": msg.hand_u,
+                "v": msg.hand_v,
+                "source": msg.hand_pixel_source,
+            }
+        return payload
+
+    @staticmethod
+    def _tool_mask_payload(msg):
+        payload = json.loads(msg.payload_json) if msg.payload_json else {}
+        payload.update({
+            "locked": msg.locked,
+            "mask_source": msg.mask_source,
+            "tool_roi": list(msg.tool_roi) if msg.has_tool_roi else None,
+        })
+        if msg.has_reason:
+            payload["reason"] = msg.reason
+        return payload
 
 
 def main():
