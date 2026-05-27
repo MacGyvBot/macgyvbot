@@ -7,6 +7,7 @@ import math
 from moveit.core.robot_state import RobotState
 
 from macgyvbot_config.drawer import (
+    DRAWER_CLOSE_LIFT_OFFSET_M,
     DRAWER_GRIPPER_SETTLE_SEC,
     DRAWER_HANDLE_JOINT_DEGREES,
     DRAWER_JOINT_NAMES,
@@ -115,15 +116,15 @@ class DrawerMotionFlow:
         if not self._close_gripper("drawer/close/grip_handle", logger):
             return False
 
-        close_offset = [-value for value in DRAWER_OPEN_OFFSET_XYZ_M]
-        if not self._move_by_offset(
-            opened["xyz"],
-            opened["ori"],
-            close_offset,
-            f"drawer {drawer_id} close",
-            logger,
-        ):
-            return False
+        for label, offset in self._close_offsets(drawer_id):
+            if not self._move_by_offset(
+                opened["xyz"],
+                opened["ori"],
+                offset,
+                f"drawer {drawer_id} {label}",
+                logger,
+            ):
+                return False
 
         if not self._open_gripper("drawer/close/release_handle", logger):
             return False
@@ -237,6 +238,23 @@ class DrawerMotionFlow:
             name: math.radians(float(value))
             for name, value in zip(DRAWER_JOINT_NAMES, degrees)
         }
+
+    @staticmethod
+    def _close_offsets(drawer_id):
+        close_offset = [-value for value in DRAWER_OPEN_OFFSET_XYZ_M]
+        if drawer_id != 1:
+            return [("close", close_offset)]
+
+        lifted_offset = [0.0, 0.0, DRAWER_CLOSE_LIFT_OFFSET_M]
+        lifted_close_offset = [
+            close_offset[0],
+            close_offset[1],
+            DRAWER_CLOSE_LIFT_OFFSET_M,
+        ]
+        return [
+            ("lift_before_close", lifted_offset),
+            ("close_lifted", lifted_close_offset),
+        ]
 
     @staticmethod
     def _xyz_from_pose(pose):
