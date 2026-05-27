@@ -88,8 +88,17 @@ class ReturnSequenceRunner:
                 lambda: self._resolve_home_observed_drawer(context),
             ),
             TaskStep(
-                "return/open_close_home_observed_drawer",
-                lambda: self._open_close_home_observed_drawer(context),
+                "return/open_home_observed_drawer",
+                lambda: self._open_home_observed_drawer(context),
+            ),
+            # TODO: 서랍 안에 공구 넣는 동작 추가
+            TaskStep(
+                "return/close_home_observed_drawer",
+                lambda: self._close_home_observed_drawer(context),
+            ),
+            TaskStep(
+                "return/home_after_drawer_close",
+                lambda: self._home_after_drawer_close(context),
             ),
             TaskStep(
                 "return/done",
@@ -238,7 +247,7 @@ class ReturnSequenceRunner:
         )
         return True
 
-    def _open_close_home_observed_drawer(self, context):
+    def _open_home_observed_drawer(self, context):
         drawer_id = context.get("drawer_id")
         observed_tool = context.get("observed_tool")
         if self.drawer_flow is None or drawer_id is None:
@@ -247,10 +256,49 @@ class ReturnSequenceRunner:
         self.reporter.publish(
             "opening_drawer",
             observed_tool,
-            f"{observed_tool} 보관 서랍을 열고 닫습니다.",
+            f"{observed_tool} 보관 서랍을 엽니다.",
             context["command"],
         )
-        return self.drawer_flow.open_and_close(drawer_id, self.state.logger())
+        return self.drawer_flow.open_drawer(drawer_id, self.state.logger())
+
+    def _close_home_observed_drawer(self, context):
+        drawer_id = context.get("drawer_id")
+        observed_tool = context.get("observed_tool")
+        if self.drawer_flow is None or drawer_id is None:
+            return True
+
+        self.reporter.publish(
+            "closing_drawer",
+            observed_tool,
+            f"{observed_tool} 보관 서랍을 닫습니다.",
+            context["command"],
+        )
+        return self.drawer_flow.close_drawer(drawer_id, self.state.logger())
+
+    def _home_after_drawer_close(self, context):
+        drawer_id = context.get("drawer_id")
+        observed_tool = context.get("observed_tool")
+        if self.drawer_flow is None or drawer_id is None:
+            return True
+
+        self.reporter.publish(
+            "returning_home",
+            observed_tool,
+            "서랍을 닫은 뒤 Home 위치로 복귀합니다.",
+            context["command"],
+        )
+        ok = self.motion.move_to_home_joints(self.state.logger())
+        if ok:
+            return True
+
+        self.reporter.fail(
+            observed_tool,
+            "서랍을 닫은 뒤 Home 위치 복귀에 실패했습니다.",
+            "return_home_after_drawer_close_failed",
+            context["command"],
+            self.state.logger(),
+        )
+        return False
 
     def _handle_hand_target(self, target, requested_tool, command, logger):
         self.reporter.publish(
