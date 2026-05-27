@@ -182,6 +182,13 @@ class VLMGraspPointSelector:
                 "SAM-segmented tool mask; choose the grasp point inside that mask."
             )
 
+        self.logger.info(
+            "VLM_GRID stage=input_ready "
+            f"bbox=({x1},{y1},{x2},{y2}) "
+            f"crop_size={crop_image.size} "
+            f"sam_input={sam_source or 'none'}"
+        )
+        self.logger.info("VLM_GRID stage=generate_start event=inference start")
         try:
             result = self.model.select_grasp_region(
                 crop_image,
@@ -192,6 +199,8 @@ class VLMGraspPointSelector:
         except Exception as exc:
             self.logger.warn(f"VLM grasp point 추론 실패: {exc}")
             return None
+        finally:
+            self.logger.info("VLM_GRID stage=generate_done event=inference end")
 
         u = x1 + int(round(result.point[0]))
         v = y1 + int(round(result.point[1]))
@@ -207,9 +216,11 @@ class VLMGraspPointSelector:
             source = f"{GRASP_POINT_MODE_VLM}+depth"
 
         self.logger.info(
-            f"VLM grasp point 선택: pixel=({u}, {v}), "
-            f"angle={result.angle_deg:.1f}deg, "
-            f"rpy_deg={result.orientation_rpy_deg}, source={source}, "
+            "VLM_GRID stage=result "
+            f"pixel=({u},{v}) "
+            f"angle_deg={result.angle_deg:.1f} "
+            f"rpy_deg={result.orientation_rpy_deg} "
+            f"source={source} "
             f"sam_input={sam_source or 'none'}"
         )
 
@@ -267,23 +278,27 @@ class VLMGraspPointSelector:
         if self.model is not None:
             return
 
-        self.logger.info("VLM grasp 모델을 lazy load 준비합니다.")
         self.model = VLMModel()
         runtime = self.model.get_runtime_info()
         self.logger.info(
-            "VLM runtime: "
+            "VLM_GRID stage=model_init model_id=default "
             f"device={runtime['device']}, "
             f"dtype={runtime['dtype']}, "
             f"local_weights={runtime['using_local_weights']}, "
-            f"source={runtime['model_source']}"
+            f"source={runtime['model_source']}, "
+            f"device_map={runtime['device_map']}"
         )
         if runtime["device"] == "cuda":
             self.logger.info("VLM은 CUDA를 사용합니다.")
         else:
             self.logger.warn("VLM이 CUDA를 사용하지 않습니다. (CPU 실행)")
-        self.logger.info("VLM 가중치 로드 시작...")
+        self.logger.info("VLM_GRID stage=model_load_start")
         self.model.load()
-        self.logger.info("VLM 가중치 로드 완료.")
+        runtime = self.model.get_runtime_info()
+        self.logger.info(
+            "VLM_GRID stage=model_load_done "
+            f"device_map={runtime['device_map']}"
+        )
 
     @staticmethod
     def clamp_bbox_to_image(bbox, image):
@@ -402,11 +417,13 @@ class VLMModel:
 
     def get_runtime_info(self):
         model_source = self._resolve_model_source()
+        device_map = getattr(self.model, "hf_device_map", None)
         return {
             "device": self.device,
             "dtype": str(self.torch_dtype).replace("torch.", ""),
             "model_source": model_source,
             "using_local_weights": str(model_source).startswith(str(self.local_model_root)),
+            "device_map": device_map,
         }
 
     def unload(self):

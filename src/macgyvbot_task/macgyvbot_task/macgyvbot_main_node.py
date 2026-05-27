@@ -103,9 +103,13 @@ class VLMStatusLogger:
         if "VLM" not in text:
             return
 
-        if "로드 시작" in text:
+        if "stage=model_load_start" in text:
             status = "vlm_loading"
-        elif "로드 완료" in text:
+        elif "stage=model_load_done" in text:
+            status = "vlm_ready"
+        elif "stage=generate_start" in text:
+            status = "vlm_inference"
+        elif "stage=generate_done" in text:
             status = "vlm_ready"
         elif level == "error" or "실패" in text:
             status = "vlm_error"

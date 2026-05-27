@@ -77,7 +77,14 @@ class VLMOnlyGraspPointSelector:
         crop_bgr = vlm_image[y1:y2, x1:x2]
         crop_rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
         crop_image = Image.fromarray(crop_rgb)
+        self.logger.info(
+            "VLM_ONLY stage=input_ready "
+            f"bbox=({x1},{y1},{x2},{y2}) "
+            f"crop_size={crop_image.size} "
+            f"sam_input={sam_source or 'none'}"
+        )
 
+        self.logger.info("VLM_ONLY stage=generate_start event=inference start")
         try:
             result = self.model.ask(
                 crop_image,
@@ -91,6 +98,8 @@ class VLMOnlyGraspPointSelector:
         except Exception as exc:
             self.logger.warn(f"VLM-only grasp point inference failed: {exc}")
             return None
+        finally:
+            self.logger.info("VLM_ONLY stage=generate_done event=inference end")
 
         data = self.model._as_mapping(result.data)
         point = self.model._extract_point_px(
@@ -123,8 +132,11 @@ class VLMOnlyGraspPointSelector:
             source = f"{GRASP_POINT_MODE_VLM_ONLY}+depth"
 
         self.logger.info(
-            f"VLM-only grasp point selected: pixel=({u}, {v}), "
-            f"yaw={yaw:.1f}deg, source={source}, sam_input={sam_source or 'none'}"
+            "VLM_ONLY stage=result "
+            f"pixel=({u},{v}) "
+            f"yaw_deg={yaw:.1f} "
+            f"source={source} "
+            f"sam_input={sam_source or 'none'}"
         )
         return u, v, source, (0.0, 0.0, yaw)
 
@@ -216,19 +228,27 @@ class VLMOnlyGraspPointSelector:
             return
 
         self.logger.info(
-            f"VLM-only grasp model lazy load preparing: model_id={self.model_id}"
+            "VLM_ONLY stage=model_init "
+            f"model_id={self.model_id} "
+            "max_new_tokens=48"
         )
-        self.model = VLMModel(model_id=self.model_id, max_new_tokens=96)
+        self.model = VLMModel(model_id=self.model_id, max_new_tokens=48)
         runtime = self.model.get_runtime_info()
         self.logger.info(
-            "VLM-only runtime: "
+            "VLM_ONLY stage=model_config "
             f"device={runtime['device']}, "
             f"dtype={runtime['dtype']}, "
             f"local_weights={runtime['using_local_weights']}, "
-            f"source={runtime['model_source']}"
+            f"source={runtime['model_source']}, "
+            f"device_map={runtime['device_map']}"
         )
+        self.logger.info("VLM_ONLY stage=model_load_start")
         self.model.load()
-        self.logger.info("VLM-only weights loaded.")
+        runtime = self.model.get_runtime_info()
+        self.logger.info(
+            "VLM_ONLY stage=model_load_done "
+            f"device_map={runtime['device_map']}"
+        )
 
     @staticmethod
     def clamp_bbox_to_image(bbox, image):

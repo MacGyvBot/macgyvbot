@@ -77,6 +77,7 @@ class HandGraspDetectionNode(Node):
         self.latest_tool_detection: Optional[ToolDetection] = None
         self.latest_tool_mask: Optional[LockedToolMask] = None
         self.mask_tracking_active = False
+        self.vlm_inference_active = False
         self.frame_index = 0
 
         self.color_topic = self.declare_parameter(
@@ -290,6 +291,17 @@ class HandGraspDetectionNode(Node):
             self.get_logger().info("Robot grasp success received. Tool mask lock requested.")
             return
 
+        if status == "vlm_inference":
+            self.vlm_inference_active = True
+            self.get_logger().info("VLM inference active; pausing hand-grasp frame processing.")
+            return
+
+        if status in {"vlm_ready", "vlm_error"}:
+            if self.vlm_inference_active:
+                self.get_logger().info("VLM inference finished; resuming hand-grasp frame processing.")
+            self.vlm_inference_active = False
+            return
+
         if status in {"accepted", "searching", "picking", "grasping"}:
             if status == "accepted":
                 self.lock_requested = False
@@ -318,6 +330,9 @@ class HandGraspDetectionNode(Node):
         self.latest_depth_mm = depth_to_mm(depth_image, msg.encoding)
 
     def _color_cb(self, msg: Image) -> None:
+        if self.vlm_inference_active:
+            return
+
         self.frame_index += 1
         try:
             frame = self.bridge.imgmsg_to_cv2(msg, "bgr8")
