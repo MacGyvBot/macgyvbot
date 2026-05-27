@@ -6,7 +6,7 @@
 #
 # System packages still needed on the robot PC:
 #   sudo apt update
-#   sudo apt install portaudio19-dev python3-pyaudio ffmpeg
+#   sudo apt install portaudio19-dev ffmpeg
 # portaudio19-dev is required when pip builds PyAudio from source.
 
 accelerate==1.13.0
