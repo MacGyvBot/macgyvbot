@@ -771,7 +771,7 @@ class MacGyvBotNode(Node):
     def _depth_cb(self, msg):
         self.state.depth_image = self.bridge.imgmsg_to_cv2(msg, "passthrough")
 
-    def start_pick_sequence(self, bx, by, bz, z_m, vlm_yaw_deg=None):
+    def start_pick_sequence(self, bx, by, bz, vlm_yaw_deg=None):
         if self.state.picking:
             self.get_logger().warn("이미 pick 동작 중이라 새 pick 요청을 무시합니다.")
             return
@@ -785,7 +785,7 @@ class MacGyvBotNode(Node):
             command=self.state.current_command,
         )
 
-        started = self.task_coordinator.start_pick(bx, by, bz, z_m, vlm_yaw_deg)
+        started = self.task_coordinator.start_pick(bx, by, bz, vlm_yaw_deg)
         if not started:
             self.state.picking = False
             self._publish_robot_status(
