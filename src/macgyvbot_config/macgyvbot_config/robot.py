@@ -4,6 +4,7 @@ import math
 
 GROUP_NAME = "manipulator"
 BASE_FRAME = "base_link"
+WORLD_FRAME = "world"
 EE_LINK = "link_6"
 WRIST_JOINT_NAME = "joint_6"
 
