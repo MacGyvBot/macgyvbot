@@ -10,6 +10,8 @@ import json
 import importlib.util
 import math
 import re
+import time
+import warnings
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any
@@ -43,6 +45,13 @@ from macgyvbot_perception.hand_tool_grasp.sam_tool_mask import (
 DEFAULT_VLM_MODEL = VLM_MODEL_SMOL
 DEFAULT_MAX_IMAGE_SIZE = 640
 DEFAULT_GRID_SIZES = ((3, 3), (4, 4), (5, 5))
+
+warnings.filterwarnings(
+    "ignore",
+    message=r"_check_is_size will be removed.*",
+    category=FutureWarning,
+    module=r"bitsandbytes\.backends\.cuda\.ops",
+)
 
 
 def _default_local_model_root():
@@ -150,6 +159,7 @@ class VLMGraspPointSelector:
 
     def preload(self):
         self._ensure_model_loaded()
+        self._ensure_sam_segmenter()
 
     def select_grasp_pixel(
         self,
@@ -166,15 +176,38 @@ class VLMGraspPointSelector:
             self.logger.warn("VLM crop bbox가 비어 있습니다.")
             return None
 
-        self._ensure_model_loaded()
+        trace_start = time.monotonic()
+        self.logger.info(
+            "VLM_TRACE grid_selector stage=select_grasp_pixel_start "
+            f"bbox=({x1},{y1},{x2},{y2}) label={label} target_label={target_label}"
+        )
 
+        load_start = time.monotonic()
+        self._ensure_model_loaded()
+        self.logger.info(
+            "VLM_TRACE grid_selector stage=ensure_model_done "
+            f"elapsed_sec={time.monotonic() - load_start:.3f}"
+        )
+
+        input_start = time.monotonic()
         vlm_image, sam_source = self._build_vlm_input_image(
             color_image,
             (x1, y1, x2, y2),
         )
+        self.logger.info(
+            "VLM_TRACE grid_selector stage=build_vlm_input_done "
+            f"elapsed_sec={time.monotonic() - input_start:.3f} "
+            f"sam_input={sam_source or 'none'}"
+        )
+        crop_start = time.monotonic()
         crop_bgr = vlm_image[y1:y2, x1:x2]
         crop_rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
         crop_image = Image.fromarray(crop_rgb)
+        self.logger.info(
+            "VLM_TRACE grid_selector stage=crop_to_pil_done "
+            f"elapsed_sec={time.monotonic() - crop_start:.3f} "
+            f"crop_size={crop_image.size}"
+        )
         request_text = target_label
         if sam_source is not None:
             request_text = (
@@ -189,6 +222,7 @@ class VLMGraspPointSelector:
             f"sam_input={sam_source or 'none'}"
         )
         self.logger.info("VLM_GRID stage=generate_start event=inference start")
+        region_start = time.monotonic()
         try:
             result = self.model.select_grasp_region(
                 crop_image,
@@ -200,8 +234,12 @@ class VLMGraspPointSelector:
             self.logger.warn(f"VLM grasp point 추론 실패: {exc}")
             return None
         finally:
-            self.logger.info("VLM_GRID stage=generate_done event=inference end")
+            self.logger.info(
+                "VLM_GRID stage=generate_done event=inference end "
+                f"elapsed_sec={time.monotonic() - region_start:.3f}"
+            )
 
+        depth_start = time.monotonic()
         u = x1 + int(round(result.point[0]))
         v = y1 + int(round(result.point[1]))
         source = GRASP_POINT_MODE_VLM
@@ -214,6 +252,11 @@ class VLMGraspPointSelector:
         if refined is not None:
             u, v = refined.point
             source = f"{GRASP_POINT_MODE_VLM}+depth"
+        self.logger.info(
+            "VLM_TRACE grid_selector stage=depth_refine_done "
+            f"elapsed_sec={time.monotonic() - depth_start:.3f} "
+            f"refined={refined is not None}"
+        )
 
         self.logger.info(
             "VLM_GRID stage=result "
@@ -222,6 +265,10 @@ class VLMGraspPointSelector:
             f"rpy_deg={result.orientation_rpy_deg} "
             f"source={source} "
             f"sam_input={sam_source or 'none'}"
+        )
+        self.logger.info(
+            "VLM_TRACE grid_selector stage=select_grasp_pixel_done "
+            f"elapsed_sec={time.monotonic() - trace_start:.3f}"
         )
 
         return u, v, source, result.orientation_rpy_deg
@@ -278,7 +325,7 @@ class VLMGraspPointSelector:
         if self.model is not None:
             return
 
-        self.model = VLMModel()
+        self.model = VLMModel(logger=self.logger)
         runtime = self.model.get_runtime_info()
         self.logger.info(
             "VLM_GRID stage=model_init model_id=default "
@@ -299,6 +346,16 @@ class VLMGraspPointSelector:
             "VLM_GRID stage=model_load_done "
             f"device_map={runtime['device_map']}"
         )
+        self.logger.info("VLM_GRID stage=model_warmup_start")
+        try:
+            self.model.warmup()
+        except Exception as exc:
+            self.logger.warn(
+                "VLM warmup failed; continuing with loaded model: "
+                f"{exc}"
+            )
+        else:
+            self.logger.info("VLM_GRID stage=model_warmup_done")
 
     @staticmethod
     def clamp_bbox_to_image(bbox, image):
@@ -324,11 +381,14 @@ class VLMModel:
         max_image_size: int = DEFAULT_MAX_IMAGE_SIZE,
         max_new_tokens: int = 96,
         use_4bit: bool = True,
+        logger=None,
     ):
         self.model_id = model_id
         self.max_image_size = max_image_size
         self.max_new_tokens = max_new_tokens
         self.use_4bit = use_4bit
+        self.logger = logger
+        self._ask_count = 0
         self.local_model_root = DEFAULT_LOCAL_MODEL_ROOT
 
         self.processor = None
@@ -408,6 +468,24 @@ class VLMModel:
 
         self.model.eval()
 
+    def warmup(self):
+        """Run one tiny generation so first-request setup happens during preload."""
+        self.load()
+
+        original_max_new_tokens = self.max_new_tokens
+        try:
+            self.max_new_tokens = 1
+            self.ask(
+                Image.new(
+                    "RGB",
+                    (self.max_image_size, self.max_image_size),
+                    color=(0, 0, 0),
+                ),
+                "Reply with {}.",
+            )
+        finally:
+            self.max_new_tokens = original_max_new_tokens
+
     def _resolve_model_source(self):
         # Prefer pre-downloaded local weights under weights/vlm/<org>__<model>.
         local_dir = self.local_model_root / self.model_id.replace("/", "__")
@@ -436,9 +514,33 @@ class VLMModel:
 
     def ask(self, image: Image.Image, prompt: str) -> VLMResult:
         """Run one VLM request and return plain text plus parsed JSON if present."""
+        trace_start = time.monotonic()
+        self._ask_count += 1
+        ask_id = self._ask_count
+        original_size = image.size
+        self._trace(
+            "ask_start",
+            ask_id=ask_id,
+            image_size=original_size,
+            prompt_chars=len(prompt or ""),
+            max_new_tokens=self.max_new_tokens,
+        )
+        load_start = time.monotonic()
         self.load()
+        self._trace(
+            "ask_load_done",
+            ask_id=ask_id,
+            elapsed_sec=time.monotonic() - load_start,
+        )
 
+        prepare_start = time.monotonic()
         image = self._prepare_image(image)
+        self._trace(
+            "ask_prepare_image_done",
+            ask_id=ask_id,
+            elapsed_sec=time.monotonic() - prepare_start,
+            prepared_size=image.size,
+        )
         messages = [
             {
                 "role": "user",
@@ -449,6 +551,7 @@ class VLMModel:
             }
         ]
 
+        template_start = time.monotonic()
         inputs = self.processor.apply_chat_template(
             messages,
             add_generation_prompt=True,
@@ -458,8 +561,27 @@ class VLMModel:
                 "return_tensors": "pt",
             },
         )
+        input_len = None
+        if isinstance(inputs, dict) and "input_ids" in inputs:
+            input_len = int(inputs["input_ids"].shape[-1])
+        elif hasattr(inputs, "shape"):
+            input_len = int(inputs.shape[-1])
+        self._trace(
+            "ask_template_done",
+            ask_id=ask_id,
+            elapsed_sec=time.monotonic() - template_start,
+            input_tokens=input_len,
+        )
+        move_start = time.monotonic()
         inputs = self._move_inputs_to_device(inputs)
+        self._trace(
+            "ask_move_inputs_done",
+            ask_id=ask_id,
+            elapsed_sec=time.monotonic() - move_start,
+        )
 
+        generate_start = time.monotonic()
+        self._trace("ask_generate_start", ask_id=ask_id)
         with torch.inference_mode():
             if isinstance(inputs, dict):
                 generated_ids = self.model.generate(
@@ -473,18 +595,50 @@ class VLMModel:
                     max_new_tokens=self.max_new_tokens,
                     do_sample=False,
                 )
+        self._trace(
+            "ask_generate_done",
+            ask_id=ask_id,
+            elapsed_sec=time.monotonic() - generate_start,
+        )
 
         if isinstance(inputs, dict) and "input_ids" in inputs:
             prompt_len = inputs["input_ids"].shape[-1]
         else:
             prompt_len = inputs.shape[-1]
         generated_ids = generated_ids[:, prompt_len:]
+        decode_start = time.monotonic()
         text = self.processor.batch_decode(
             generated_ids,
             skip_special_tokens=True,
         )[0].strip()
+        self._trace(
+            "ask_decode_done",
+            ask_id=ask_id,
+            elapsed_sec=time.monotonic() - decode_start,
+            output_chars=len(text),
+        )
 
-        return VLMResult(text=text, data=self._try_parse_json(text))
+        parse_start = time.monotonic()
+        data = self._try_parse_json(text)
+        self._trace(
+            "ask_done",
+            ask_id=ask_id,
+            parse_elapsed_sec=time.monotonic() - parse_start,
+            total_elapsed_sec=time.monotonic() - trace_start,
+            parsed=data is not None,
+        )
+        return VLMResult(text=text, data=data)
+
+    def _trace(self, stage: str, **fields):
+        if self.logger is None:
+            return
+
+        parts = [f"VLM_TRACE model stage={stage}"]
+        for key, value in fields.items():
+            if isinstance(value, float):
+                value = f"{value:.3f}"
+            parts.append(f"{key}={value}")
+        self.logger.info(" ".join(parts))
 
     def select_candidate(
         self,
@@ -521,23 +675,59 @@ class VLMModel:
         orientation are computed locally from those selected cells, keeping
         metric execution outside the model.
         """
+        trace_start = time.monotonic()
         original_width, original_height = image.size
+        self._trace(
+            "region_start",
+            image_size=image.size,
+            object_label=object_label,
+            grid_sizes=grid_sizes,
+            max_retries_per_grid=max_retries_per_grid,
+        )
+        prepare_start = time.monotonic()
         work_image = self._prepare_image(image)
+        self._trace(
+            "region_prepare_image_done",
+            elapsed_sec=time.monotonic() - prepare_start,
+            work_size=work_image.size,
+        )
         scale_x = original_width / float(work_image.size[0])
         scale_y = original_height / float(work_image.size[1])
 
+        context_start = time.monotonic()
         context = self.describe_grasp_context(
             work_image,
             object_label=object_label,
             user_request=user_request,
         )
+        self._trace(
+            "region_context_done",
+            elapsed_sec=time.monotonic() - context_start,
+            context_chars=len(context or ""),
+        )
 
         choices = []
         retry_limit = max(1, int(max_retries_per_grid))
         for rows, cols in grid_sizes:
+            grid_start = time.monotonic()
+            self._trace("region_grid_start", rows=rows, cols=cols)
+            overlay_start = time.monotonic()
             overlay = self._draw_numbered_grid(work_image, rows, cols)
+            self._trace(
+                "region_grid_overlay_done",
+                rows=rows,
+                cols=cols,
+                elapsed_sec=time.monotonic() - overlay_start,
+            )
             choice = None
             for attempt in range(1, retry_limit + 1):
+                attempt_start = time.monotonic()
+                self._trace(
+                    "region_grid_attempt_start",
+                    rows=rows,
+                    cols=cols,
+                    attempt=attempt,
+                )
                 result = self._choose_grid_cell(
                     overlay,
                     rows=rows,
@@ -552,23 +742,61 @@ class VLMModel:
                     cols=cols,
                     image_size=work_image.size,
                 )
+                self._trace(
+                    "region_grid_attempt_done",
+                    rows=rows,
+                    cols=cols,
+                    attempt=attempt,
+                    elapsed_sec=time.monotonic() - attempt_start,
+                    valid=choice is not None,
+                )
                 if choice is not None:
                     break
 
             if choice is None:
+                self._trace(
+                    "region_grid_done",
+                    rows=rows,
+                    cols=cols,
+                    elapsed_sec=time.monotonic() - grid_start,
+                    valid=False,
+                )
                 continue
 
             choices.append(choice)
+            self._trace(
+                "region_grid_done",
+                rows=rows,
+                cols=cols,
+                elapsed_sec=time.monotonic() - grid_start,
+                valid=True,
+                choices=len(choices),
+            )
 
             if self._has_converged(choices, work_image.size, early_stop_radius):
+                self._trace(
+                    "region_grid_converged",
+                    rows=rows,
+                    cols=cols,
+                    choices=len(choices),
+                )
                 break
 
         if not choices:
             raise RuntimeError("VLM did not return a valid grasp grid cell.")
 
+        pose_start = time.monotonic()
         coarse_point, angle_rad = self._estimate_grasp_pose(choices)
         coarse_yaw_deg = math.degrees(angle_rad)
+        self._trace(
+            "region_coarse_pose_done",
+            elapsed_sec=time.monotonic() - pose_start,
+            choices=len(choices),
+            coarse_point=coarse_point,
+            coarse_yaw_deg=coarse_yaw_deg,
+        )
 
+        precise_start = time.monotonic()
         precise = self._estimate_precise_point_and_yaw(
             work_image,
             object_label=object_label,
@@ -578,6 +806,11 @@ class VLMModel:
             coarse_yaw_deg=coarse_yaw_deg,
             max_retries=max_retries_per_grid,
         )
+        self._trace(
+            "region_precise_done",
+            elapsed_sec=time.monotonic() - precise_start,
+            success=precise is not None,
+        )
         if precise is not None:
             point_work, yaw_deg = precise
             point = (point_work[0] * scale_x, point_work[1] * scale_y)
@@ -585,12 +818,23 @@ class VLMModel:
         else:
             point = (coarse_point[0] * scale_x, coarse_point[1] * scale_y)
 
+        orientation_start = time.monotonic()
         orientation_rpy_deg = self._estimate_grasp_orientation_rpy(
             work_image,
             object_label=object_label,
             user_request=user_request,
             context=context,
             yaw_hint_deg=math.degrees(angle_rad),
+        )
+        self._trace(
+            "region_orientation_done",
+            elapsed_sec=time.monotonic() - orientation_start,
+        )
+        self._trace(
+            "region_done",
+            total_elapsed_sec=time.monotonic() - trace_start,
+            point=point,
+            angle_deg=math.degrees(angle_rad),
         )
 
         return GraspRegionResult(

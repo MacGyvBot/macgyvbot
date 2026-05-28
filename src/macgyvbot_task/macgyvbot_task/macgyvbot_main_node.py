@@ -667,25 +667,60 @@ class MacGyvBotNode(Node):
             )
 
     def _refine_pick_target_after_centering(self, target_label):
+        trace_start = time.monotonic()
+        self.get_logger().info(
+            "VLM_TRACE main_node stage=refine_after_centering_start "
+            f"target_label={target_label}"
+        )
         if not self.pick_target_resolver.should_defer_vlm_until_top_view():
+            self.get_logger().info(
+                "VLM_TRACE main_node stage=refine_after_centering_skip "
+                "reason=mode_does_not_defer"
+            )
             return None
 
         if not self.frame_processor.has_camera_state():
             self.get_logger().warn("상단 view VLM 갱신을 위한 camera state가 없습니다.")
+            self.get_logger().info(
+                "VLM_TRACE main_node stage=refine_after_centering_skip "
+                "reason=no_camera_state"
+            )
             return None
 
+        copy_start = time.monotonic()
         color_image = self.state.color_image.copy()
         depth_image = self.state.depth_image.copy()
         intrinsics = dict(self.state.intrinsics)
-        results = self.detector.detect(color_image)
+        self.get_logger().info(
+            "VLM_TRACE main_node stage=camera_snapshot_done "
+            f"elapsed_sec={time.monotonic() - copy_start:.3f}"
+        )
 
-        return self.pick_target_resolver.target_from_boxes(
-            results[0].boxes,
+        detect_start = time.monotonic()
+        results = self.detector.detect(color_image)
+        boxes = results[0].boxes
+        box_count = len(boxes) if boxes is not None else 0
+        self.get_logger().info(
+            "VLM_TRACE main_node stage=yolo_detect_done "
+            f"elapsed_sec={time.monotonic() - detect_start:.3f} "
+            f"boxes={box_count}"
+        )
+
+        resolve_start = time.monotonic()
+        target = self.pick_target_resolver.target_from_boxes(
+            boxes,
             target_label,
             color_image,
             depth_image,
             intrinsics,
         )
+        self.get_logger().info(
+            "VLM_TRACE main_node stage=target_from_boxes_done "
+            f"elapsed_sec={time.monotonic() - resolve_start:.3f} "
+            f"total_elapsed_sec={time.monotonic() - trace_start:.3f} "
+            f"found={target is not None and target.found}"
+        )
+        return target
 
     def start_return_sequence(self, command):
         if self.state.picking:

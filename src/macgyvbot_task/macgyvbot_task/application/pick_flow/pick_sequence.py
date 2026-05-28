@@ -200,13 +200,39 @@ class PickSequenceRunner:
         return False
 
     def _refine_target_and_apply_vlm_yaw(self, context):
+        trace_start = time.monotonic()
+        self.state.logger().info("VLM_TRACE pick_step stage=refine_yaw_start")
+        if self._interrupted():
+            self.state.logger().info(
+                "VLM_TRACE pick_step stage=refine_yaw_skip reason=interrupted"
+            )
+            return False
+
         log = self.state.logger()
         refined_target = self._refine_target_after_xy_move(log)
+        log.info(
+            "VLM_TRACE pick_step stage=refine_target_return "
+            f"elapsed_sec={time.monotonic() - trace_start:.3f} "
+            f"has_target={refined_target is not None}"
+        )
+        if self._interrupted():
+            log.info(
+                "VLM_TRACE pick_step stage=refine_yaw_stop_after_vlm "
+                f"elapsed_sec={time.monotonic() - trace_start:.3f} "
+                "reason=interrupted"
+            )
+            return False
+
         if refined_target is not None:
+            plan_start = time.monotonic()
             bx, by, bz = refined_target.base_xyz
             context["z_m"] = refined_target.depth_m
             context["vlm_yaw_deg"] = refined_target.yaw_deg
             context["plan"] = self.target_planner.plan(bx, by, bz, log)
+            log.info(
+                "VLM_TRACE pick_step stage=target_plan_done "
+                f"elapsed_sec={time.monotonic() - plan_start:.3f}"
+            )
             plan = context["plan"]
             log.info(
                 "상단 view VLM 결과로 pick target 갱신: "
@@ -218,9 +244,26 @@ class PickSequenceRunner:
 
         vlm_yaw_deg = context.get("vlm_yaw_deg")
         if vlm_yaw_deg is None:
+            log.info(
+                "VLM_TRACE pick_step stage=refine_yaw_done "
+                f"elapsed_sec={time.monotonic() - trace_start:.3f} "
+                "rotate_wrist=false"
+            )
             return True
 
-        return self._rotate_wrist(vlm_yaw_deg, context)
+        rotate_start = time.monotonic()
+        ok = self._rotate_wrist(vlm_yaw_deg, context)
+        log.info(
+            "VLM_TRACE pick_step stage=rotate_wrist_done "
+            f"elapsed_sec={time.monotonic() - rotate_start:.3f} "
+            f"ok={ok}"
+        )
+        log.info(
+            "VLM_TRACE pick_step stage=refine_yaw_done "
+            f"elapsed_sec={time.monotonic() - trace_start:.3f} "
+            "rotate_wrist=true"
+        )
+        return ok
 
     def _rotate_wrist(self, vlm_yaw_deg, context):
         log = self.state.logger()
@@ -409,16 +452,55 @@ class PickSequenceRunner:
             time.sleep(min(SEQUENCE_WAIT_POLL_SEC, max(0.0, remaining)))
 
     def _refine_target_after_xy_move(self, log):
+        trace_start = time.monotonic()
+        log.info("VLM_TRACE pick_step stage=refine_target_start")
         if self.refine_pick_target is None:
+            log.info(
+                "VLM_TRACE pick_step stage=refine_target_skip "
+                "reason=no_callback"
+            )
+            return None
+
+        if self._interrupted():
+            log.info(
+                "VLM_TRACE pick_step stage=refine_target_skip "
+                "reason=interrupted"
+            )
             return None
 
         target_label = self.state.target_label
         if not target_label:
+            log.info(
+                "VLM_TRACE pick_step stage=refine_target_skip "
+                "reason=no_target_label"
+            )
             return None
 
+        wait_start = time.monotonic()
         self.cooperative_wait(0.2)
+        log.info(
+            "VLM_TRACE pick_step stage=pre_vlm_wait_done "
+            f"elapsed_sec={time.monotonic() - wait_start:.3f}"
+        )
+        if self._interrupted():
+            log.info(
+                "VLM_TRACE pick_step stage=refine_target_skip_after_wait "
+                "reason=interrupted"
+            )
+            return None
+
         try:
+            callback_start = time.monotonic()
+            log.info(
+                "VLM_TRACE pick_step stage=refine_pick_target_call_start "
+                f"target_label={target_label}"
+            )
             target = self.refine_pick_target(target_label)
+            log.info(
+                "VLM_TRACE pick_step stage=refine_pick_target_call_done "
+                f"elapsed_sec={time.monotonic() - callback_start:.3f} "
+                f"total_elapsed_sec={time.monotonic() - trace_start:.3f}"
+            )
         except Exception as exc:
             log.warn(f"상단 view VLM target 갱신 실패: {exc}")
             return None
@@ -429,6 +511,16 @@ class PickSequenceRunner:
                 "상단 view VLM target을 얻지 못해 bbox center plan을 유지합니다. "
                 f"reason={reason}"
             )
+            log.info(
+                "VLM_TRACE pick_step stage=refine_target_done "
+                f"elapsed_sec={time.monotonic() - trace_start:.3f} "
+                "found=false"
+            )
             return None
 
+        log.info(
+            "VLM_TRACE pick_step stage=refine_target_done "
+            f"elapsed_sec={time.monotonic() - trace_start:.3f} "
+            "found=true"
+        )
         return target

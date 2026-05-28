@@ -7,6 +7,7 @@
 
 - `architecture/`: 패키지 경계, topic 계약, runtime 구조 같은 장기 유지 문서
 - `vlm-advancement-plan.md`: VLM 개선 계획
+- `vlm-latency-notes.md`: VLM grid latency 진단 메모
 - 이슈/브랜치별 상세 기록은 필요할 때 별도 파일로 추가한다.
 
 ## 작성 기준

@@ -7,6 +7,7 @@ SAM-augmented crop to the local VLM and asks for x, y, and yaw only.
 from __future__ import annotations
 
 import math
+import time
 from pathlib import Path
 
 import cv2
@@ -52,6 +53,7 @@ class VLMOnlyGraspPointSelector:
 
     def preload(self):
         self._ensure_model_loaded()
+        self._ensure_sam_segmenter()
 
     def select_grasp_pixel(
         self,
@@ -68,15 +70,37 @@ class VLMOnlyGraspPointSelector:
             self.logger.warn("VLM-only crop bbox is empty.")
             return None
 
+        trace_start = time.monotonic()
+        self.logger.info(
+            "VLM_TRACE vlm_only_selector stage=select_grasp_pixel_start "
+            f"bbox=({x1},{y1},{x2},{y2}) label={label} target_label={target_label}"
+        )
+        load_start = time.monotonic()
         self._ensure_model_loaded()
+        self.logger.info(
+            "VLM_TRACE vlm_only_selector stage=ensure_model_done "
+            f"elapsed_sec={time.monotonic() - load_start:.3f}"
+        )
 
+        input_start = time.monotonic()
         vlm_image, sam_source = self._build_vlm_input_image(
             color_image,
             (x1, y1, x2, y2),
         )
+        self.logger.info(
+            "VLM_TRACE vlm_only_selector stage=build_vlm_input_done "
+            f"elapsed_sec={time.monotonic() - input_start:.3f} "
+            f"sam_input={sam_source or 'none'}"
+        )
+        crop_start = time.monotonic()
         crop_bgr = vlm_image[y1:y2, x1:x2]
         crop_rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
         crop_image = Image.fromarray(crop_rgb)
+        self.logger.info(
+            "VLM_TRACE vlm_only_selector stage=crop_to_pil_done "
+            f"elapsed_sec={time.monotonic() - crop_start:.3f} "
+            f"crop_size={crop_image.size}"
+        )
         self.logger.info(
             "VLM_ONLY stage=input_ready "
             f"bbox=({x1},{y1},{x2},{y2}) "
@@ -85,6 +109,7 @@ class VLMOnlyGraspPointSelector:
         )
 
         self.logger.info("VLM_ONLY stage=generate_start event=inference start")
+        ask_start = time.monotonic()
         try:
             result = self.model.ask(
                 crop_image,
@@ -99,8 +124,12 @@ class VLMOnlyGraspPointSelector:
             self.logger.warn(f"VLM-only grasp point inference failed: {exc}")
             return None
         finally:
-            self.logger.info("VLM_ONLY stage=generate_done event=inference end")
+            self.logger.info(
+                "VLM_ONLY stage=generate_done event=inference end "
+                f"elapsed_sec={time.monotonic() - ask_start:.3f}"
+            )
 
+        parse_start = time.monotonic()
         data = self.model._as_mapping(result.data)
         point = self.model._extract_point_px(
             data,
@@ -109,6 +138,11 @@ class VLMOnlyGraspPointSelector:
             crop_image.size[1],
         )
         yaw = self.model._extract_yaw_deg(data, result.text)
+        self.logger.info(
+            "VLM_TRACE vlm_only_selector stage=parse_result_done "
+            f"elapsed_sec={time.monotonic() - parse_start:.3f} "
+            f"has_point={point is not None} has_yaw={yaw is not None}"
+        )
 
         if point is None or yaw is None:
             self.logger.warn(
@@ -122,6 +156,7 @@ class VLMOnlyGraspPointSelector:
         yaw = self.model._normalize_angle_deg(float(yaw))
         source = GRASP_POINT_MODE_VLM_ONLY
 
+        depth_start = time.monotonic()
         refined = VLMModel.refine_grasp_point_with_depth(
             depth_image,
             (u, v),
@@ -130,6 +165,11 @@ class VLMOnlyGraspPointSelector:
         if refined is not None:
             u, v = refined.point
             source = f"{GRASP_POINT_MODE_VLM_ONLY}+depth"
+        self.logger.info(
+            "VLM_TRACE vlm_only_selector stage=depth_refine_done "
+            f"elapsed_sec={time.monotonic() - depth_start:.3f} "
+            f"refined={refined is not None}"
+        )
 
         self.logger.info(
             "VLM_ONLY stage=result "
@@ -137,6 +177,10 @@ class VLMOnlyGraspPointSelector:
             f"yaw_deg={yaw:.1f} "
             f"source={source} "
             f"sam_input={sam_source or 'none'}"
+        )
+        self.logger.info(
+            "VLM_TRACE vlm_only_selector stage=select_grasp_pixel_done "
+            f"elapsed_sec={time.monotonic() - trace_start:.3f}"
         )
         return u, v, source, (0.0, 0.0, yaw)
 
@@ -232,7 +276,11 @@ class VLMOnlyGraspPointSelector:
             f"model_id={self.model_id} "
             "max_new_tokens=48"
         )
-        self.model = VLMModel(model_id=self.model_id, max_new_tokens=48)
+        self.model = VLMModel(
+            model_id=self.model_id,
+            max_new_tokens=48,
+            logger=self.logger,
+        )
         runtime = self.model.get_runtime_info()
         self.logger.info(
             "VLM_ONLY stage=model_config "
@@ -249,6 +297,16 @@ class VLMOnlyGraspPointSelector:
             "VLM_ONLY stage=model_load_done "
             f"device_map={runtime['device_map']}"
         )
+        self.logger.info("VLM_ONLY stage=model_warmup_start")
+        try:
+            self.model.warmup()
+        except Exception as exc:
+            self.logger.warn(
+                "VLM-only warmup failed; continuing with loaded model: "
+                f"{exc}"
+            )
+        else:
+            self.logger.info("VLM_ONLY stage=model_warmup_done")
 
     @staticmethod
     def clamp_bbox_to_image(bbox, image):

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 from macgyvbot_config.vlm import (
     DEFAULT_GRASP_POINT_MODE,
     GRASP_POINT_MODE_API,
@@ -105,9 +107,16 @@ class GraspPointSelector:
         intrinsics,
         target_label,
     ):
+        trace_start = time.monotonic()
         bbox = box.xyxy[0].cpu().numpy()
+        self.logger.info(
+            "VLM_TRACE selector stage=select_start "
+            f"mode={self.mode} label={label} target_label={target_label} "
+            f"bbox=({bbox[0]:.1f},{bbox[1]:.1f},{bbox[2]:.1f},{bbox[3]:.1f})"
+        )
 
         if self.mode == GRASP_POINT_MODE_VLM:
+            branch_start = time.monotonic()
             vlm_pixel = self._select_vlm_grasp_pixel(
                 bbox,
                 label,
@@ -115,6 +124,12 @@ class GraspPointSelector:
                 depth_image,
                 intrinsics,
                 target_label,
+            )
+            self.logger.info(
+                "VLM_TRACE selector stage=vlm_branch_done "
+                f"elapsed_sec={time.monotonic() - branch_start:.3f} "
+                f"total_elapsed_sec={time.monotonic() - trace_start:.3f} "
+                f"success={vlm_pixel is not None}"
             )
             if vlm_pixel is not None:
                 return vlm_pixel
@@ -124,6 +139,7 @@ class GraspPointSelector:
             )
 
         if self.mode in VLM_ONLY_MODES:
+            branch_start = time.monotonic()
             vlm_only_pixel = self._select_vlm_only_grasp_pixel(
                 bbox,
                 label,
@@ -131,6 +147,12 @@ class GraspPointSelector:
                 depth_image,
                 intrinsics,
                 target_label,
+            )
+            self.logger.info(
+                "VLM_TRACE selector stage=vlm_only_branch_done "
+                f"elapsed_sec={time.monotonic() - branch_start:.3f} "
+                f"total_elapsed_sec={time.monotonic() - trace_start:.3f} "
+                f"success={vlm_only_pixel is not None}"
             )
             if vlm_only_pixel is not None:
                 return vlm_only_pixel
@@ -226,6 +248,8 @@ class GraspPointSelector:
         intrinsics,
         target_label,
     ):
+        trace_start = time.monotonic()
+        self.logger.info("VLM_TRACE selector stage=vlm_selector_start")
         try:
             from macgyvbot_perception.grasp_point.vlm_grasp_point_selector import (
                 VLMGraspPointSelector,
@@ -235,6 +259,7 @@ class GraspPointSelector:
             return None
 
         if self.vlm_grasp_point_selector is None:
+            create_start = time.monotonic()
             self.vlm_grasp_point_selector = VLMGraspPointSelector(
                 self.logger,
                 sam_enabled=self.sam_enabled,
@@ -243,8 +268,13 @@ class GraspPointSelector:
                 sam_model_type=self.sam_model_type,
                 sam_device=self.sam_device,
             )
+            self.logger.info(
+                "VLM_TRACE selector stage=vlm_selector_created "
+                f"elapsed_sec={time.monotonic() - create_start:.3f}"
+            )
 
-        return self.vlm_grasp_point_selector.select_grasp_pixel(
+        call_start = time.monotonic()
+        result = self.vlm_grasp_point_selector.select_grasp_pixel(
             bbox,
             label,
             color_image,
@@ -252,6 +282,12 @@ class GraspPointSelector:
             intrinsics,
             target_label,
         )
+        self.logger.info(
+            "VLM_TRACE selector stage=vlm_selector_done "
+            f"elapsed_sec={time.monotonic() - call_start:.3f} "
+            f"total_elapsed_sec={time.monotonic() - trace_start:.3f}"
+        )
+        return result
 
     def _preload_vlm_only(self):
         try:
@@ -287,6 +323,8 @@ class GraspPointSelector:
         intrinsics,
         target_label,
     ):
+        trace_start = time.monotonic()
+        self.logger.info("VLM_TRACE selector stage=vlm_only_selector_start")
         try:
             from macgyvbot_perception.grasp_point.vlm_only_grasp_point_selector import (
                 VLMOnlyGraspPointSelector,
@@ -296,6 +334,7 @@ class GraspPointSelector:
             return None
 
         if self.vlm_only_grasp_point_selector is None:
+            create_start = time.monotonic()
             self.vlm_only_grasp_point_selector = VLMOnlyGraspPointSelector(
                 self.logger,
                 sam_enabled=self.sam_enabled,
@@ -305,8 +344,13 @@ class GraspPointSelector:
                 sam_device=self.sam_device,
                 model_id=self._vlm_only_model_id(),
             )
+            self.logger.info(
+                "VLM_TRACE selector stage=vlm_only_selector_created "
+                f"elapsed_sec={time.monotonic() - create_start:.3f}"
+            )
 
-        return self.vlm_only_grasp_point_selector.select_grasp_pixel(
+        call_start = time.monotonic()
+        result = self.vlm_only_grasp_point_selector.select_grasp_pixel(
             bbox,
             label,
             color_image,
@@ -314,6 +358,12 @@ class GraspPointSelector:
             intrinsics,
             target_label,
         )
+        self.logger.info(
+            "VLM_TRACE selector stage=vlm_only_selector_done "
+            f"elapsed_sec={time.monotonic() - call_start:.3f} "
+            f"total_elapsed_sec={time.monotonic() - trace_start:.3f}"
+        )
+        return result
 
     def _vlm_only_model_id(self):
         mode = self.mode

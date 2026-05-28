@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 
 
@@ -25,8 +26,25 @@ class ExitHomeRecovery:
         self.logger_provider = logger_provider
         self.current_command_provider = current_command_provider
         self.release_gripper = release_gripper
+        self._lock = threading.Lock()
+        self._thread = None
 
     def move_home_after_exit(self, reason):
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():
+                self.logger().info("exit Home 복귀가 이미 진행 중입니다.")
+                return True
+
+            self._thread = threading.Thread(
+                target=self._move_home_after_exit,
+                args=(reason,),
+                name="exit_home_recovery",
+                daemon=True,
+            )
+            self._thread.start()
+        return True
+
+    def _move_home_after_exit(self, reason):
         logger = self.logger()
         command = self.current_command_provider()
         if not self._wait_for_task_queue_to_stop(logger):
@@ -79,7 +97,7 @@ class ExitHomeRecovery:
         )
         return False
 
-    def _wait_for_task_queue_to_stop(self, logger, timeout_sec=3.0):
+    def _wait_for_task_queue_to_stop(self, logger, timeout_sec=60.0):
         deadline = time.monotonic() + timeout_sec
         while self.task_coordinator.is_running() and time.monotonic() < deadline:
             time.sleep(0.02)
