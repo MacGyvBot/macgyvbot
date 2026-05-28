@@ -9,9 +9,12 @@ from typing import Optional
 import rclpy
 
 from macgyvbot_config.handoff import OBSERVATION_TIMEOUT_SEC
-from macgyvbot_config.robot import BASE_FRAME
 from macgyvbot_config.timing import SEQUENCE_WAIT_POLL_SEC
-from macgyvbot_manipulation.handover_targeting import TargetCandidate
+from macgyvbot_config.robot import BASE_FRAME
+from macgyvbot_manipulation.handover_targeting import (
+    TargetCandidate,
+    candidate_from_grasp_result,
+)
 
 
 RETURN_SOURCE_HAND = "hand"
@@ -64,7 +67,9 @@ class ReturnTargetResolver:
             self.wait_fn(self.poll_sec)
 
         if saw_hand_without_position:
-            logger.warn("손은 감지했지만 base 좌표를 계산하지 못했습니다.")
+            logger.warn(
+                "손은 감지했지만 base 좌표를 계산하지 못했습니다."
+            )
             return ReturnTarget(
                 source=RETURN_SOURCE_NONE,
                 tool_name=tool_name,
@@ -85,25 +90,10 @@ class ReturnTargetResolver:
 
     @staticmethod
     def _hand_candidate_from_result(result):
-        position = result.get("position")
-        if not isinstance(position, dict):
-            return None
-        if not all(key in position for key in ("x", "y", "z")):
-            return None
-
-        return TargetCandidate(
-            found=True,
-            x=float(position["x"]),
-            y=float(position["y"]),
-            z=float(position["z"]),
-            frame_id=str(position.get("frame_id", BASE_FRAME)),
+        return candidate_from_grasp_result(
+            result,
             source="return_hand_presence",
-            observed_at_sec=float(
-                result.get(
-                    "position_observed_monotonic_sec",
-                    result.get("_received_monotonic_sec", time.monotonic()),
-                )
-            ),
+            default_frame=BASE_FRAME,
         )
 
     @staticmethod

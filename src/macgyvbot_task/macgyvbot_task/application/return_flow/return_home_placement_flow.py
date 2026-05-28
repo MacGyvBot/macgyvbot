@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from macgyvbot_config.return_flow import RETURN_HOME_RELEASE_WAIT_SEC
 from macgyvbot_manipulation.force_detection import ForceReactionDetector
 from macgyvbot_manipulation.robot_pose import get_ee_matrix, make_safe_pose
 
@@ -37,9 +38,40 @@ class ReturnHomePlacementFlow:
 
     def place_at_robot_home(self, tool_name, ori, command, logger):
         if self.interrupted():
-            logger.info("반납 Home 배치 시작 전 stop/pause 요청으로 중단합니다.")
+            logger.info(
+                "반납 Home 배치 시작 전 stop/pause 요청으로 중단합니다."
+            )
             return False
 
+        if not self._move_to_home_before_release(tool_name, command, logger):
+            return False
+
+        target_x, target_y, approach_z = self._current_home_pose()
+        if not self._descend_to_home_contact(
+            tool_name,
+            target_x,
+            target_y,
+            approach_z,
+            ori,
+            command,
+            logger,
+        ):
+            return False
+
+        if not self._release_tool(tool_name, logger):
+            return False
+
+        return self.move_home_after_return(
+            target_x,
+            target_y,
+            approach_z,
+            ori,
+            tool_name,
+            command,
+            logger,
+        )
+
+    def _move_to_home_before_release(self, tool_name, command, logger):
         self.reporter.publish(
             "placing_return_tool",
             tool_name,
@@ -51,7 +83,10 @@ class ReturnHomePlacementFlow:
         ok = self.motion.move_to_home_joints(logger)
         if not ok:
             if self.interrupted():
-                logger.info("반납 Home joint pose 이동 중 stop/pause 요청으로 중단합니다.")
+                logger.info(
+                    "반납 Home joint pose 이동 중 "
+                    "stop/pause 요청으로 중단합니다."
+                )
                 return False
 
             self.reporter.fail(
@@ -63,11 +98,26 @@ class ReturnHomePlacementFlow:
             )
             return False
 
-        current_pose = get_ee_matrix(self.robot)
-        target_x = float(current_pose[0, 3])
-        target_y = float(current_pose[1, 3])
-        approach_z = float(current_pose[2, 3])
+        return True
 
+    def _current_home_pose(self):
+        current_pose = get_ee_matrix(self.robot)
+        return (
+            float(current_pose[0, 3]),
+            float(current_pose[1, 3]),
+            float(current_pose[2, 3]),
+        )
+
+    def _descend_to_home_contact(
+        self,
+        tool_name,
+        target_x,
+        target_y,
+        approach_z,
+        ori,
+        command,
+        logger,
+    ):
         self.reporter.publish(
             "lowering_return_tool",
             tool_name,
@@ -83,7 +133,9 @@ class ReturnHomePlacementFlow:
         )
         if stop_z is None:
             if self.interrupted():
-                logger.info("반납 Home Z 하강 중 stop/pause 요청으로 중단합니다.")
+                logger.info(
+                    "반납 Home Z 하강 중 stop/pause 요청으로 중단합니다."
+                )
                 return False
 
             self.reporter.fail(
@@ -95,29 +147,27 @@ class ReturnHomePlacementFlow:
             )
             return False
 
+        return True
+
+    def _release_tool(self, tool_name, logger):
         logger.info(f"반납 4단계: {tool_name} Home 위치에 놓기")
         if self.interrupted():
-            logger.info("반납 공구 놓기 전 stop/pause 요청으로 중단합니다.")
+            logger.info(
+                "반납 공구 놓기 전 stop/pause 요청으로 중단합니다."
+            )
             return False
 
         if self.tool_hold_monitor is not None:
             self.tool_hold_monitor.stop("return_home_release")
         self.gripper.open_gripper()
-        self.wait_fn(0.8)
+        self.wait_fn(RETURN_HOME_RELEASE_WAIT_SEC)
         if self.interrupted():
-            logger.info("반납 공구 놓기 후 stop/pause 요청으로 중단합니다.")
+            logger.info(
+                "반납 공구 놓기 후 stop/pause 요청으로 중단합니다."
+            )
             return False
 
-
-        return self.move_home_after_return(
-            target_x,
-            target_y,
-            approach_z,
-            ori,
-            tool_name,
-            command,
-            logger,
-        )
+        return True
 
     def move_home_after_return(
         self,
@@ -130,7 +180,9 @@ class ReturnHomePlacementFlow:
         logger,
     ):
         if self.interrupted():
-            logger.info("반납 후 복귀 시작 전 stop/pause 요청으로 중단합니다.")
+            logger.info(
+                "반납 후 복귀 시작 전 stop/pause 요청으로 중단합니다."
+            )
             return False
 
         logger.info("반납 5단계: 공구를 놓은 뒤 Home 안전 높이로 복귀")
@@ -140,12 +192,18 @@ class ReturnHomePlacementFlow:
         )
         if not ok:
             if self.interrupted():
-                logger.info("반납 후 안전 높이 복귀 중 stop/pause 요청으로 중단합니다.")
+                logger.info(
+                    "반납 후 안전 높이 복귀 중 "
+                    "stop/pause 요청으로 중단합니다."
+                )
                 return False
 
             self.reporter.fail(
                 tool_name,
-                "반납 공구를 놓은 뒤 Home 안전 높이 복귀에 실패했습니다.",
+                (
+                    "반납 공구를 놓은 뒤 Home 안전 높이 복귀에 "
+                    "실패했습니다."
+                ),
                 "return_home_retreat_failed",
                 command,
                 logger,
@@ -156,7 +214,10 @@ class ReturnHomePlacementFlow:
         ok = self.motion.move_to_home_joints(logger)
         if not ok:
             if self.interrupted():
-                logger.info("반납 후 Home 복귀 중 stop/pause 요청으로 중단합니다.")
+                logger.info(
+                    "반납 후 Home 복귀 중 "
+                    "stop/pause 요청으로 중단합니다."
+                )
                 return False
 
             self.reporter.fail(
