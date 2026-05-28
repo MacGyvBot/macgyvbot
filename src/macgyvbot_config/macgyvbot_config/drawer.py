@@ -1,4 +1,6 @@
-"""Drawer handle poses, offsets, and tool mapping."""
+"""Drawer handle poses, offsets, marker targets, and tool mapping."""
+
+from macgyvbot_config.robot import HOME_JOINTS
 
 DRAWER_JOINT_NAMES = [
     "joint_1",
@@ -19,9 +21,18 @@ TOOL_DRAWER_IDS = {
     "pliers": 0,
 }
 
+DRAWER_ARUCO_MARKER_IDS = {
+    1: 11,
+    0: 10,
+}
+
+DRAWER_STORE_TOOL_OBSERVE_POINT = dict(HOME_JOINTS)
+
 DRAWER_OPEN_OFFSET_XYZ_M = [0.0, -0.14, 0.0]
 DRAWER_OBSERVE_OFFSET_XYZ_M = [0.0, 0.06, 0.20]
 DRAWER_GRIPPER_SETTLE_SEC = 0.8
 DRAWER_1_SAFE_Z_OFFSET_M = 0.08
+DRAWER_STORE_MARKER_APPROACH_Z_OFFSET_M = 0.08
+DRAWER_STORE_MARKER_RELEASE_Z_OFFSET_M = 0.02
 DRAWER_CLOSE_LIFT_OFFSET_M = 0.01
 DRAWER_OBSERVATION_J6_DEG = 0.0
