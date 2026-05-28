@@ -154,7 +154,11 @@ class VLMOnlyGraspPointSelector:
         self.logger.info(
             f"VLM-only grasp model lazy load preparing: model_id={self.model_id}"
         )
-        self.model = VLMOnly(model_id=self.model_id, max_new_tokens=96)
+        self.model = VLMOnly(
+            model_id=self.model_id,
+            max_new_tokens=96,
+            logger=self.logger,
+        )
         runtime = self.model.get_runtime_info()
         self.logger.info(
             "VLM-only runtime: "

@@ -123,7 +123,7 @@ class VLMGraspPointSelector:
             return
 
         self.logger.info("VLM grasp model lazy load preparing.")
-        self.model = VLM()
+        self.model = VLM(logger=self.logger)
         runtime = self.model.get_runtime_info()
         self.logger.info(
             "VLM runtime: "

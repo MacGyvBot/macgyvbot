@@ -24,7 +24,6 @@ from sensor_msgs.msg import Image
 
 from macgyvbot_config.topics import CAMERA_COLOR_TOPIC
 from macgyvbot_config.vlm import (
-    GRASP_POINT_MODE_VLM_ONLY,
     GRASP_POINT_MODE_VLM_ONLY_QWEN3B,
     GRASP_POINT_MODE_VLM_ONLY_QWEN7B,
     GRASP_POINT_MODE_VLM_ONLY_SMOL,
@@ -90,35 +89,16 @@ def run_debug_generate(model, image, prompt, logger):
     model.load()
 
     prepared = model._prepare_image(image)
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "image", "image": prepared},
-                {"type": "text", "text": prompt},
-            ],
-        }
-    ]
-    inputs = model.processor.apply_chat_template(
-        messages,
-        add_generation_prompt=True,
-        tokenize=True,
-        processor_kwargs={
-            "return_dict": True,
-            "return_tensors": "pt",
-        },
-    )
-    if isinstance(inputs, dict) and "input_ids" in inputs:
-        prompt_len = int(inputs["input_ids"].shape[-1])
-        logger.info(f"Debug prompt_len={prompt_len}")
-    elif hasattr(inputs, "shape"):
-        prompt_len = int(inputs.shape[-1])
+    inputs = model._build_inputs(prepared, prompt)
+    prompt_len = model._input_prompt_len(inputs)
+    if prompt_len:
         logger.info(f"Debug prompt_len={prompt_len}")
     else:
-        prompt_len = 0
         logger.info(f"Debug prompt_len=unknown inputs_type={type(inputs)}")
 
     inputs = model._move_inputs_to_device(inputs)
+    model._log_inference_device(inputs)
+    progress_criteria = model._build_progress_criteria(prompt_len)
 
     if torch is None:
         raise RuntimeError("torch is required for debug generate")
@@ -130,15 +110,19 @@ def run_debug_generate(model, image, prompt, logger):
                 **inputs,
                 max_new_tokens=model.max_new_tokens,
                 do_sample=False,
+                **progress_criteria,
             )
         else:
             generated_ids = model.model.generate(
                 inputs,
                 max_new_tokens=model.max_new_tokens,
                 do_sample=False,
+                **progress_criteria,
             )
     logger.info(f"Debug generate elapsed_sec={time.monotonic() - start:.3f}")
     logger.info(f"Debug generated_shape={tuple(generated_ids.shape)}")
+    sliced_ids = generated_ids[:, prompt_len:] if prompt_len else generated_ids
+    model._log_inference_complete(sliced_ids)
 
     full_text = model.processor.batch_decode(
         generated_ids,
@@ -148,7 +132,6 @@ def run_debug_generate(model, image, prompt, logger):
         generated_ids,
         skip_special_tokens=True,
     )[0]
-    sliced_ids = generated_ids[:, prompt_len:] if prompt_len else generated_ids
     sliced_text = model.processor.batch_decode(
         sliced_ids,
         skip_special_tokens=False,
@@ -178,7 +161,6 @@ def parse_args():
     parser.add_argument(
         "--mode",
         choices=(
-            GRASP_POINT_MODE_VLM_ONLY,
             GRASP_POINT_MODE_VLM_ONLY_SMOL,
             GRASP_POINT_MODE_VLM_ONLY_QWEN3B,
             GRASP_POINT_MODE_VLM_ONLY_QWEN7B,

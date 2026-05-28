@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import math
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -58,6 +59,14 @@ def _load_transformers_classes():
     return AutoProcessor, AutoVLMModel
 
 
+def _load_stopping_criteria_classes():
+    try:
+        from transformers import StoppingCriteria, StoppingCriteriaList
+    except ImportError:
+        return None, None
+    return StoppingCriteria, StoppingCriteriaList
+
+
 @dataclass(frozen=True)
 class VLMResult:
     """Plain-text VLM output plus parsed JSON when available."""
@@ -95,6 +104,38 @@ class GraspRegionResult:
     raw_text: str = ""
 
 
+class VLMProgressLogger:
+    """Log token-generation progress without stopping generation."""
+
+    def __init__(
+        self,
+        logger,
+        prompt_len: int,
+        max_new_tokens: int,
+        step_percent: int = 10,
+    ):
+        self.logger = logger
+        self.prompt_len = max(0, int(prompt_len))
+        self.max_new_tokens = max(1, int(max_new_tokens))
+        self.step_percent = max(1, int(step_percent))
+        self.next_percent = self.step_percent
+
+    def __call__(self, input_ids, scores, **kwargs):
+        if self.logger is None or not hasattr(input_ids, "shape"):
+            return False
+
+        generated = max(0, int(input_ids.shape[-1]) - self.prompt_len)
+        percent = min(99, int(generated * 100 / self.max_new_tokens))
+        if percent >= self.next_percent:
+            self.logger.info(
+                "VLM inference progress: "
+                f"{percent}% ({generated}/{self.max_new_tokens} tokens)"
+            )
+            while self.next_percent <= percent:
+                self.next_percent += self.step_percent
+        return False
+
+
 class _BaseVLM:
     """Shared local VLM loading and request execution."""
 
@@ -104,11 +145,13 @@ class _BaseVLM:
         max_image_size: int = DEFAULT_MAX_IMAGE_SIZE,
         max_new_tokens: int = 96,
         use_4bit: bool = True,
+        logger=None,
     ):
         self.model_id = model_id
         self.max_image_size = max_image_size
         self.max_new_tokens = max_new_tokens
         self.use_4bit = use_4bit
+        self.logger = logger
         self.local_model_root = DEFAULT_LOCAL_MODEL_ROOT
         self.processor = None
         self.model = None
@@ -141,6 +184,8 @@ class _BaseVLM:
         has_bitsandbytes = importlib.util.find_spec("bitsandbytes") is not None
         device_map = "auto" if self.device == "cuda" and has_accelerate else None
         quant_config = self._make_quantization_config(has_bitsandbytes)
+        if quant_config is not None:
+            self._suppress_known_bitsandbytes_future_warning()
         model_kwargs = {
             "dtype": self.torch_dtype,
             "device_map": device_map,
@@ -176,7 +221,67 @@ class _BaseVLM:
         """Run one VLM request."""
         self.load()
         image = self._prepare_image(image)
-        messages = [
+        inputs = self._build_inputs(image, prompt)
+        inputs = self._move_inputs_to_device(inputs)
+        self._log_inference_device(inputs)
+        prompt_len = self._input_prompt_len(inputs)
+        progress_criteria = self._build_progress_criteria(prompt_len)
+
+        with torch.inference_mode():
+            if isinstance(inputs, dict):
+                generated_ids = self.model.generate(
+                    **inputs,
+                    max_new_tokens=self.max_new_tokens,
+                    do_sample=False,
+                    **progress_criteria,
+                )
+            else:
+                generated_ids = self.model.generate(
+                    inputs,
+                    max_new_tokens=self.max_new_tokens,
+                    do_sample=False,
+                    **progress_criteria,
+                )
+
+        generated_ids = generated_ids[:, prompt_len:]
+        self._log_inference_complete(generated_ids)
+        text = self.processor.batch_decode(
+            generated_ids,
+            skip_special_tokens=True,
+        )[0].strip()
+        return VLMResult(text=text, data=self._try_parse_json(text))
+
+    def _build_inputs(self, image: Image.Image, prompt: str):
+        """Build generation inputs with an attention mask when possible."""
+        messages = self._build_messages(image, prompt)
+        errors = []
+
+        try:
+            text = self.processor.apply_chat_template(
+                messages,
+                add_generation_prompt=True,
+                tokenize=False,
+            )
+            return self._processor_inputs_from_text_and_image(text, image)
+        except Exception as exc:
+            errors.append(f"processor call path: {exc}")
+
+        try:
+            inputs = self.processor.apply_chat_template(
+                messages,
+                add_generation_prompt=True,
+                tokenize=True,
+                processor_kwargs={"return_tensors": "pt"},
+            )
+            return self._ensure_attention_mask(inputs)
+        except Exception as exc:
+            errors.append(f"chat template tokenization path: {exc}")
+
+        raise RuntimeError("VLM input preparation failed: " + "; ".join(errors))
+
+    @staticmethod
+    def _build_messages(image: Image.Image, prompt: str):
+        return [
             {
                 "role": "user",
                 "content": [
@@ -185,38 +290,61 @@ class _BaseVLM:
                 ],
             }
         ]
-        inputs = self.processor.apply_chat_template(
-            messages,
-            add_generation_prompt=True,
-            tokenize=True,
-            processor_kwargs={"return_dict": True, "return_tensors": "pt"},
-        )
-        inputs = self._move_inputs_to_device(inputs)
 
-        with torch.inference_mode():
-            if isinstance(inputs, dict):
-                generated_ids = self.model.generate(
-                    **inputs,
-                    max_new_tokens=self.max_new_tokens,
-                    do_sample=False,
-                )
-            else:
-                generated_ids = self.model.generate(
-                    inputs,
-                    max_new_tokens=self.max_new_tokens,
-                    do_sample=False,
-                )
+    def _processor_inputs_from_text_and_image(self, text, image: Image.Image):
+        text_values = [text]
+        if isinstance(text, str):
+            text_values.insert(0, [text])
 
-        if isinstance(inputs, dict) and "input_ids" in inputs:
-            prompt_len = inputs["input_ids"].shape[-1]
-        else:
-            prompt_len = inputs.shape[-1]
-        generated_ids = generated_ids[:, prompt_len:]
-        text = self.processor.batch_decode(
-            generated_ids,
-            skip_special_tokens=True,
-        )[0].strip()
-        return VLMResult(text=text, data=self._try_parse_json(text))
+        image_values = ([image], [[image]], image)
+        errors = []
+        for text_value in text_values:
+            for image_value in image_values:
+                try:
+                    inputs = self.processor(
+                        text=text_value,
+                        images=image_value,
+                        return_tensors="pt",
+                        padding=True,
+                    )
+                except Exception as exc:
+                    errors.append(str(exc))
+                    continue
+                if self._input_ids(inputs) is not None:
+                    return self._ensure_attention_mask(inputs)
+
+        detail = errors[-1] if errors else "processor did not return input_ids"
+        raise RuntimeError(detail)
+
+    def _ensure_attention_mask(self, inputs):
+        input_ids = self._input_ids(inputs)
+        if (
+            torch is not None
+            and input_ids is not None
+            and hasattr(inputs, "items")
+            and "attention_mask" not in inputs
+        ):
+            inputs["attention_mask"] = torch.ones_like(input_ids)
+        if torch is not None and input_ids is not None and not hasattr(inputs, "items"):
+            return {
+                "input_ids": input_ids,
+                "attention_mask": torch.ones_like(input_ids),
+            }
+        return inputs
+
+    @staticmethod
+    def _input_ids(inputs):
+        if hasattr(inputs, "items"):
+            return inputs.get("input_ids")
+        if hasattr(inputs, "shape"):
+            return inputs
+        return None
+
+    def _input_prompt_len(self, inputs):
+        input_ids = self._input_ids(inputs)
+        if input_ids is None:
+            raise RuntimeError("VLM inputs do not include input_ids.")
+        return input_ids.shape[-1]
 
     def get_runtime_info(self):
         model_source = self._resolve_model_source()
@@ -255,6 +383,7 @@ class _BaseVLM:
     def _make_quantization_config(self, has_bitsandbytes: bool):
         if not self.use_4bit or self.device != "cuda" or not has_bitsandbytes:
             return None
+        self._suppress_known_bitsandbytes_future_warning()
         from transformers import BitsAndBytesConfig
 
         return BitsAndBytesConfig(
@@ -262,6 +391,15 @@ class _BaseVLM:
             bnb_4bit_quant_type="nf4",
             bnb_4bit_compute_dtype=self.torch_dtype,
             bnb_4bit_use_double_quant=True,
+        )
+
+    @staticmethod
+    def _suppress_known_bitsandbytes_future_warning():
+        warnings.filterwarnings(
+            "ignore",
+            message=r"_check_is_size will be removed in a future PyTorch release.*",
+            category=FutureWarning,
+            module=r"bitsandbytes\.backends\.cuda\.ops",
         )
 
     def _move_inputs_to_device(self, inputs):
@@ -283,6 +421,87 @@ class _BaseVLM:
             else:
                 moved[key] = value.to(target_device)
         return moved
+
+    def _log_inference_device(self, inputs):
+        if self.logger is None:
+            return
+
+        cuda_available = torch is not None and torch.cuda.is_available()
+        input_ids = self._input_ids(inputs)
+        input_device = getattr(input_ids, "device", "unknown")
+        model_device = self._model_input_device()
+        placement = self._model_placement_summary()
+        self.logger.info(
+            "VLM inference device check: "
+            f"cuda_available={cuda_available}, "
+            f"configured_device={self.device}, "
+            f"model_input_device={model_device}, "
+            f"input_ids_device={input_device}, "
+            f"model_placement={placement}"
+        )
+
+    def _build_progress_criteria(self, prompt_len):
+        if self.logger is None:
+            return {}
+
+        StoppingCriteria, StoppingCriteriaList = _load_stopping_criteria_classes()
+        if StoppingCriteria is None or StoppingCriteriaList is None:
+            return {}
+
+        class _ProgressStoppingCriteria(StoppingCriteria):
+            def __init__(self, progress):
+                self.progress = progress
+
+            def __call__(self, input_ids, scores, **kwargs):
+                return self.progress(input_ids, scores, **kwargs)
+
+        return {
+            "stopping_criteria": StoppingCriteriaList(
+                [
+                    _ProgressStoppingCriteria(
+                        VLMProgressLogger(
+                            self.logger,
+                            prompt_len,
+                            self.max_new_tokens,
+                        )
+                    )
+                ]
+            )
+        }
+
+    def _log_inference_complete(self, generated_ids):
+        if self.logger is None:
+            return
+        generated_tokens = (
+            int(generated_ids.shape[-1]) if hasattr(generated_ids, "shape") else 0
+        )
+        self.logger.info(
+            "VLM inference complete: "
+            f"generated_tokens={generated_tokens}/{self.max_new_tokens}"
+        )
+
+    def _model_placement_summary(self):
+        device_map = getattr(self.model, "hf_device_map", None)
+        if not device_map:
+            try:
+                return f"single_device:{next(self.model.parameters()).device}"
+            except StopIteration:
+                return f"single_device:{self.device}"
+
+        counts = {}
+        for device in device_map.values():
+            device_name = self._device_name(device)
+            counts[device_name] = counts.get(device_name, 0) + 1
+
+        parts = [f"{device}:{count}" for device, count in sorted(counts.items())]
+        offload = any(device in ("cpu", "disk") for device in counts)
+        return f"hf_device_map({', '.join(parts)}; offload={offload})"
+
+    @staticmethod
+    def _device_name(device):
+        if isinstance(device, int):
+            return f"cuda:{device}"
+        return str(device)
 
     def _model_input_device(self):
         if hasattr(self.model, "hf_device_map"):
