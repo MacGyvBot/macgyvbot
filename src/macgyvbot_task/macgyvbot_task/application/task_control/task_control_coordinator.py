@@ -195,6 +195,8 @@ class TaskControlCoordinator:
         self.state.target_label = None
         self.state.human_grasped_tool = False
         self.state.current_command = None
+        self.state.drawer_prepared_tool = None
+        self.state.drawer_preparing_tool = None
 
     def _run_cleanup_callbacks(self, log):
         for cleanup in self.cleanup_callbacks:
