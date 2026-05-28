@@ -56,7 +56,7 @@ class PickSequenceRunner:
             interrupted=self._interrupted,
         )
 
-    def build_steps(self, bx, by, bz, z_m, vlm_yaw_deg=None):
+    def build_steps(self, bx, by, bz, vlm_yaw_deg=None):
         self.state.human_grasped_tool = False
         self.state.last_grasp_result = None
         self.state.tool_mask_locked = False
@@ -76,16 +76,26 @@ class PickSequenceRunner:
             "ori": self.state.home_ori,
             "drawer_id": drawer_id,
             "safe_z_min": safe_z_min,
+            "vlm_yaw_deg": vlm_yaw_deg,
         }
+
+        def refine_target_and_apply_vlm_yaw_step():
+            nonlocal plan
+
+            updated_plan = self._refine_target_and_apply_vlm_yaw(context, plan)
+            if updated_plan is None:
+                return False
+
+            plan = updated_plan
+            return True
 
         log.info(
             f"시퀀스 시작: Target({plan.target_x:.3f}, {plan.target_y:.3f}), "
-            f"depth={z_m:.3f}, raw_bz={bz:.3f}, "
+            f"safe_z_min={safe_z_min:.3f}, raw_bz={bz:.3f}, "
             f"corrected_bz={plan.corrected_bz:.3f}, "
             f"travel_z={plan.travel_z:.3f}, "
             f"approach_z={plan.approach_z:.3f}, "
-            f"grasp_z={plan.grasp_z:.3f}, "
-            f"safe_z_min={safe_z_min:.3f}"
+            f"grasp_z={plan.grasp_z:.3f}"
         )
 
         steps = [
@@ -116,106 +126,58 @@ class PickSequenceRunner:
                     "xy_move_failed",
                 ),
             ),
-        ]
-
-        if vlm_yaw_deg is not None:
-            steps.append(
-                TaskStep(
-                    "pick/apply_vlm_yaw",
-                    lambda: self._rotate_wrist(vlm_yaw_deg, context),
-                )
-            )
-
-            refined_target = self._refine_target_after_xy_move(log)
-            if refined_target is not None:
-                bx, by, bz = refined_target.base_xyz
-                z_m = refined_target.depth_m
-                vlm_yaw_deg = refined_target.yaw_deg
-                plan = self.target_planner.plan(bx, by, bz, log)
-                log.info(
-                    "상단 view VLM 결과로 pick target 갱신: "
-                    f"pixel={refined_target.pixel}, "
-                    f"base=({plan.target_x:.3f}, {plan.target_y:.3f}, "
-                    f"{bz:.3f}), depth={z_m:.3f}, "
-                    f"yaw={vlm_yaw_deg}"
-                )
-
-            if vlm_yaw_deg is not None:
-                ok = self.motion.rotate_wrist_by_yaw_deg(vlm_yaw_deg, log)
-                if not ok:
-                    log.error("J6 회전 실패. Pick 시퀀스 중단")
-                    self.state._publish_robot_status(
-                        "failed",
-                        message="J6 회전 실패",
-                        reason="wrist_rotation_failed",
-                        command=self.state.current_command,
-                    )
-                    return
-                ori = current_ee_orientation(self.robot)
-
-            log.info("3단계: 타겟 상단 접근")
-            ok = self.motion.plan_and_execute(
-                log,
-                pose_goal=make_safe_pose(
+            TaskStep(
+                "pick/refine_target_and_apply_vlm_yaw",
+                refine_target_and_apply_vlm_yaw_step,
+            ),
+            TaskStep(
+                "pick/approach",
+                lambda: self._move_to_pose(
+                    "3단계: 타겟 상단 접근",
                     plan.target_x,
                     plan.target_y,
                     plan.approach_z,
-                    ori,
-                    log,
+                    context["ori"],
+                    "상단 접근 실패. Pick 시퀀스 중단",
+                    "상단 접근 실패",
+                    "approach_failed",
                 ),
-            )
-
-        steps.extend(
-            [
-                TaskStep(
-                    "pick/approach",
-                    lambda: self._move_to_pose(
-                        "3단계: 타겟 상단 접근",
-                        plan.target_x,
-                        plan.target_y,
-                        plan.approach_z,
-                        context["ori"],
-                        "상단 접근 실패. Pick 시퀀스 중단",
-                        "상단 접근 실패",
-                        "approach_failed",
-                    ),
+            ),
+            TaskStep(
+                "pick/grasp_descent",
+                lambda: self._descend_to_grasp(plan, context["ori"]),
+            ),
+            TaskStep("pick/grasp_tool", self._grasp_tool),
+            TaskStep("pick/wait_tool_mask_lock", self._wait_tool_mask_lock),
+            TaskStep(
+                "pick/lift",
+                lambda: self._move_to_pose(
+                    "7단계: 안전 높이 복귀",
+                    plan.target_x,
+                    plan.target_y,
+                    plan.travel_z,
+                    context["ori"],
+                    "안전 높이 복귀 실패",
+                    "안전 높이 복귀 실패",
+                    "lift_failed",
                 ),
-                TaskStep(
-                    "pick/grasp_descent",
-                    lambda: self._descend_to_grasp(plan, context["ori"]),
-                ),
-                TaskStep("pick/grasp_tool", self._grasp_tool),
-                TaskStep("pick/wait_tool_mask_lock", self._wait_tool_mask_lock),
-                TaskStep(
-                    "pick/lift",
-                    lambda: self._move_to_pose(
-                        "7단계: 안전 높이 복귀",
-                        plan.target_x,
-                        plan.target_y,
-                        plan.travel_z,
-                        context["ori"],
-                        "안전 높이 복귀 실패",
-                        "안전 높이 복귀 실패",
-                        "lift_failed",
-                    ),
-                ),
-                TaskStep(
-                    "pick/move_to_handoff",
-                    lambda: self._move_to_handoff(plan, context),
-                ),
-                TaskStep(
-                    "pick/wait_human_grasp",
-                    lambda: self._wait_human_grasp(plan, context),
-                ),
-                TaskStep("pick/release_to_human", self._release_to_human),
-                TaskStep(
-                    "pick/close_drawer",
-                    lambda: self._close_drawer_after_handoff(context),
-                ),
-                TaskStep("pick/home_after_handoff", self._home_after_handoff),
-                TaskStep("pick/done", self._publish_done, retry_on_pause=False),
-            ]
-        )
+            ),
+            TaskStep(
+                "pick/move_to_handoff",
+                lambda: self._move_to_handoff(plan, context),
+            ),
+            TaskStep(
+                "pick/wait_human_grasp",
+                lambda: self._wait_human_grasp(plan, context),
+            ),
+            TaskStep("pick/release_to_human", self._release_to_human),
+            TaskStep(
+                "pick/close_drawer",
+                lambda: self._close_drawer_after_handoff(context),
+            ),
+            TaskStep("pick/home_after_handoff", self._home_after_handoff),
+            TaskStep("pick/done", self._publish_done, retry_on_pause=False),
+        ]
         return steps
 
     def _open_gripper(self):
@@ -254,6 +216,38 @@ class PickSequenceRunner:
             command=self.state.current_command,
         )
         return False
+
+    def _refine_target_and_apply_vlm_yaw(self, context, plan):
+        log = self.state.logger()
+        refined_target = self._refine_target_after_xy_move(log)
+        if refined_target is not None:
+            bx, by, bz = refined_target.base_xyz
+            context["vlm_yaw_deg"] = refined_target.yaw_deg
+            plan = self.target_planner.plan(
+                bx,
+                by,
+                bz,
+                log,
+                safe_z_min=context["safe_z_min"],
+            )
+            log.info(
+                "상단 view VLM 결과로 pick target 갱신: "
+                f"pixel={refined_target.pixel}, "
+                f"base=({plan.target_x:.3f}, {plan.target_y:.3f}, "
+                f"{bz:.3f}), "
+                f"depth={getattr(refined_target, 'depth_m', None)}, "
+                f"yaw={context['vlm_yaw_deg']}, "
+                f"safe_z_min={context['safe_z_min']:.3f}"
+            )
+
+        vlm_yaw_deg = context.get("vlm_yaw_deg")
+        if vlm_yaw_deg is None:
+            return plan
+
+        if self._rotate_wrist(vlm_yaw_deg, context):
+            return plan
+
+        return None
 
     def _rotate_wrist(self, vlm_yaw_deg, context):
         log = self.state.logger()
@@ -415,7 +409,7 @@ class PickSequenceRunner:
         return True
 
     def _home_after_handoff(self):
-        self.state.logger().info("10단계: 전달 후 Home 위치로 복귀")
+        self.state.logger().info("11단계: 전달 후 Home 위치로 복귀")
         return self.handoff.move_home_after_handoff(self.state.logger())
 
     def _close_drawer_after_handoff(self, context):
