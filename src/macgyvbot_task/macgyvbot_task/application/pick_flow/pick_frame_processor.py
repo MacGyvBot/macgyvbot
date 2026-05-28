@@ -73,7 +73,7 @@ class PickFrameProcessor:
             bx, by, bz = target.base_xyz
             u, v = target.pixel
             self.draw_grasp_marker(annotated_frame, u, v, target.source)
-            self.start_pick_sequence(bx, by, bz, target.depth_m, target.yaw_deg)
+            self.start_pick_sequence(bx, by, bz, target.yaw_deg)
             return
 
         if target.reason == "target_not_found":

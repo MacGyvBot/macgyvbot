@@ -39,14 +39,13 @@ class TaskControlCoordinator:
         self._lock = threading.Lock()
         self._thread = None
 
-    def start_pick(self, bx, by, bz, z_m, vlm_yaw_deg=None):
+    def start_pick(self, bx, by, bz, vlm_yaw_deg=None):
         return self._start(
             task_name="pick",
             step_builder=lambda: self.pick_sequence.build_steps(
                 bx,
                 by,
                 bz,
-                z_m,
                 vlm_yaw_deg,
             ),
         )
