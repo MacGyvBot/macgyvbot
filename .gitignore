@@ -29,6 +29,8 @@ log/
 *.mp4
 *.mov
 *.avi
+*.jsonl
+*.json
 
 # Local environment
 .env
@@ -41,3 +43,6 @@ src/macgyvbot_resources/weights/vlm/*
 
 # Local collected VLM grasp datasets
 src/macgyvbot_perception/data/grasp_dataset/
+
+# macgyvbot_monitor launch log output
+macgyvbot_monitor/macgyvbot_log/
