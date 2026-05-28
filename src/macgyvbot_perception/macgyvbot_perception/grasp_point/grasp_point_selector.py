@@ -7,7 +7,9 @@ from macgyvbot_config.vlm import (
     GRASP_POINT_MODE_API,
     GRASP_POINT_MODE_CENTER,
     GRASP_POINT_MODE_VLM,
-    GRASP_POINT_MODE_VLM_ONLY,
+    GRASP_POINT_MODE_VLM_ONLY_QWEN3B,
+    GRASP_POINT_MODE_VLM_ONLY_QWEN7B,
+    GRASP_POINT_MODE_VLM_ONLY_SMOL,
     VLM_ONLY_MODEL_BY_MODE,
     VLM_ONLY_MODES,
 )
@@ -271,6 +273,7 @@ class GraspPointSelector:
                 sam_model_type=self.sam_model_type,
                 sam_device=self.sam_device,
                 model_id=self._vlm_only_model_id(),
+                mode=self._vlm_only_mode(),
             )
 
         try:
@@ -304,6 +307,7 @@ class GraspPointSelector:
                 sam_model_type=self.sam_model_type,
                 sam_device=self.sam_device,
                 model_id=self._vlm_only_model_id(),
+                mode=self._vlm_only_mode(),
             )
 
         return self.vlm_only_grasp_point_selector.select_grasp_pixel(
@@ -316,13 +320,16 @@ class GraspPointSelector:
         )
 
     def _vlm_only_model_id(self):
-        mode = self.mode
-        if mode == GRASP_POINT_MODE_API:
-            mode = DEFAULT_GRASP_POINT_MODE
+        mode = self._vlm_only_mode()
         return VLM_ONLY_MODEL_BY_MODE.get(
             mode,
-            VLM_ONLY_MODEL_BY_MODE[GRASP_POINT_MODE_VLM_ONLY],
+            VLM_ONLY_MODEL_BY_MODE[GRASP_POINT_MODE_VLM_ONLY_SMOL],
         )
+
+    def _vlm_only_mode(self):
+        if self.mode == GRASP_POINT_MODE_API:
+            return DEFAULT_GRASP_POINT_MODE
+        return self.mode
 
     def _select_api_grasp_pixel(
         self,
@@ -362,12 +369,17 @@ class GraspPointSelector:
 
 def normalize_grasp_point_mode(mode, logger):
     """Return a supported grasp point mode, falling back to center."""
-    if mode == "grasp_point_mode_vlm_only":
-        return GRASP_POINT_MODE_VLM_ONLY
+    if mode in ("grasp_point_mode_vlm_only", "vlm_only"):
+        logger.warn(
+            "'vlm_only' is deprecated. Use 'vlm_only_smol', "
+            "'vlm_only_qwen3b', or 'vlm_only_qwen7b'. "
+            "Falling back to 'vlm_only_smol'."
+        )
+        return GRASP_POINT_MODE_VLM_ONLY_SMOL
     if mode == "vlm_only_qwen_3b":
-        return "vlm_only_qwen3b"
+        return GRASP_POINT_MODE_VLM_ONLY_QWEN3B
     if mode == "vlm_only_qwen_7b":
-        return "vlm_only_qwen7b"
+        return GRASP_POINT_MODE_VLM_ONLY_QWEN7B
 
     if mode in (
         GRASP_POINT_MODE_CENTER,

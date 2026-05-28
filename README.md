@@ -135,13 +135,13 @@ ros2 launch macgyvbot_bringup macgyvbot.launch.py
 ## Grasp Point Mode
 
 개발 중 일반적으로 바꿔 쓰는 launch argument는 `grasp_point_mode`입니다.
-기본 launch 값은 `vlm`입니다. 관련 mode 상수는 `macgyvbot_config.vlm`에서 관리합니다.
+기본 launch 값은 `vlm_only_qwen3b`입니다. 관련 mode 상수는 `macgyvbot_config.vlm`에서 관리합니다.
 
 예시:
 
 ```bash
 ros2 launch macgyvbot_bringup macgyvbot.launch.py grasp_point_mode:=vlm
-ros2 launch macgyvbot_bringup macgyvbot.launch.py grasp_point_mode:=vlm_only
+ros2 launch macgyvbot_bringup macgyvbot.launch.py grasp_point_mode:=vlm_only_smol
 ros2 launch macgyvbot_bringup macgyvbot.launch.py grasp_point_mode:=vlm_only_qwen3b
 ros2 launch macgyvbot_bringup macgyvbot.launch.py grasp_point_mode:=vlm_only_qwen7b
 ros2 launch macgyvbot_bringup macgyvbot.launch.py grasp_point_mode:=center
@@ -149,6 +149,11 @@ ros2 launch macgyvbot_bringup macgyvbot.launch.py grasp_point_mode:=api
 ```
 
 지원 mode는 `src/macgyvbot_config/macgyvbot_config/vlm.py`에서 관리합니다.
+
+VLM inference history 저장 기능은 기본 비활성화되어 있습니다. 설정은
+`macgyvbot_config.vlm`의 `VLM_INFERENCE_HISTORY_ENABLED`와
+`VLM_INFERENCE_HISTORY_DIR`에서 관리하며, 활성화하면 입력 crop 이미지와 CSV 결과가
+`src/macgyvbot_perception/data/vlm_traces/` 아래에 저장됩니다.
 
 그 외 모델 경로, threshold, topic, runtime 상수는 `macgyvbot_config`와 관련
 launch 파일이 소유합니다. README에는 긴 parameter 목록을 두지 않고, 운영
