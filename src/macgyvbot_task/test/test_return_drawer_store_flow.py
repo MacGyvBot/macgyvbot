@@ -1,3 +1,4 @@
+import math
 import sys
 import types
 
@@ -62,8 +63,10 @@ sys.modules.setdefault("scipy", scipy_module)
 sys.modules.setdefault("scipy.spatial", scipy_spatial_module)
 sys.modules.setdefault("scipy.spatial.transform", scipy_transform_module)
 
-from macgyvbot_config.drawer import DRAWER_STORE_TOOL_OBSERVE_POINT
-from macgyvbot_config.robot import HOME_JOINTS
+from macgyvbot_config.drawer import (
+    DRAWER_STORE_FORCE_DESCENT_START_Z_OFFSET_M,
+    DRAWER_STORE_TOOL_OBSERVE_POINT,
+)
 from macgyvbot_task.application.return_flow.return_sequence import (
     ReturnSequenceRunner,
 )
@@ -99,9 +102,23 @@ class FakeDrawerFlow:
         return {"screwdriver": 1}.get(tool_name)
 
 
-def test_drawer_store_observe_point_defaults_to_home_joints():
-    assert DRAWER_STORE_TOOL_OBSERVE_POINT == HOME_JOINTS
-    assert DRAWER_STORE_TOOL_OBSERVE_POINT is not HOME_JOINTS
+def test_drawer_store_observe_point_uses_staging_joint_pose():
+    expected_degrees = {
+        "joint_1": -22.82,
+        "joint_2": 3.95,
+        "joint_3": 85.9,
+        "joint_4": -0.02,
+        "joint_5": 90.16,
+        "joint_6": 67.19,
+    }
+    for joint_name, expected_degree in expected_degrees.items():
+        assert math.isclose(
+            math.degrees(DRAWER_STORE_TOOL_OBSERVE_POINT[joint_name]),
+            expected_degree,
+            abs_tol=0.001,
+        )
+
+    assert DRAWER_STORE_FORCE_DESCENT_START_Z_OFFSET_M == 0.03
 
 
 def test_return_sequence_builds_drawer_store_step_order():

@@ -180,11 +180,12 @@ GUI의 `복귀` 버튼과 Home 복귀 표현은 `/tool_command`의 `action=home`
 GUI와 command node를 종료합니다.
 
 `return` 흐름은 사용자에게 공구를 받은 뒤 `macgyvbot_config.drawer`의
-`DRAWER_STORE_TOOL_OBSERVE_POINT`에 임시로 내려놓고, 해당 위치에서 YOLO
-라벨/bbox를 다시 확인한 다음 서랍을 열어 ArUco marker 중심으로 공구를
-옮깁니다. 이 상수는 현재 `HOME_JOINTS`와 같은 초기값이지만, Home 복귀용이
-아니라 서랍 보관용 임시 관찰/배치 위치입니다. 실제 서랍 open 상태에서
-충돌이나 시야 문제가 있으면 이 상수만 조정합니다.
+`DRAWER_STORE_TOOL_OBSERVE_POINT` 임시 관찰 위치에 공구를 내려놓고, 해당
+위치에서 YOLO 라벨/bbox를 다시 확인한 다음 서랍을 열어 ArUco marker 중심으로
+공구를 옮깁니다. 이 기준점은 Home 복귀용이 아니라 서랍 보관용 임시
+관찰/배치 joint pose입니다. 반력 확인 하강은 safe workspace 최소 Z보다 3cm
+높은 위치에서 시작합니다. 실제 서랍 open 상태에서 충돌이나 시야 문제가
+있으면 `DRAWER_STORE_TOOL_OBSERVE_POINT`를 조정합니다.
 
 ## 테스트
 

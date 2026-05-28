@@ -4,13 +4,17 @@ from __future__ import annotations
 
 from moveit.core.robot_state import RobotState
 
-from macgyvbot_config.drawer import DRAWER_STORE_TOOL_OBSERVE_POINT
+from macgyvbot_config.drawer import (
+    DRAWER_STORE_FORCE_DESCENT_START_Z_OFFSET_M,
+    DRAWER_STORE_TOOL_OBSERVE_POINT,
+)
 from macgyvbot_manipulation.force_detection import ForceReactionDetector
 from macgyvbot_manipulation.robot_pose import (
     current_ee_orientation,
     get_ee_matrix,
     make_safe_pose,
 )
+from macgyvbot_manipulation.robot_safezone import SAFE_Z_MIN
 
 
 class ReturnStagingPlacementFlow:
@@ -75,6 +79,9 @@ class ReturnStagingPlacementFlow:
         target_y = float(current_pose[1, 3])
         approach_z = float(current_pose[2, 3])
         ori = current_ee_orientation(self.robot)
+        descent_start_z = (
+            SAFE_Z_MIN + DRAWER_STORE_FORCE_DESCENT_START_Z_OFFSET_M
+        )
 
         self.reporter.publish(
             "lowering_return_tool",
@@ -82,10 +89,21 @@ class ReturnStagingPlacementFlow:
             "임시 관찰 위치에서 Z를 낮추며 반력을 확인합니다.",
             command,
         )
+        if not self._move_to_force_descent_start(
+            target_x,
+            target_y,
+            descent_start_z,
+            ori,
+            tool_name,
+            command,
+            logger,
+        ):
+            return False
+
         stop_z = self.force_detector.descend_until_z_reaction(
             target_x,
             target_y,
-            approach_z,
+            descent_start_z,
             ori,
             logger,
         )
@@ -135,6 +153,50 @@ class ReturnStagingPlacementFlow:
         state_goal.joint_positions = dict(DRAWER_STORE_TOOL_OBSERVE_POINT)
         state_goal.update()
         return self.motion.plan_and_execute(logger, state_goal=state_goal)
+
+    def _move_to_force_descent_start(
+        self,
+        target_x,
+        target_y,
+        descent_start_z,
+        ori,
+        tool_name,
+        command,
+        logger,
+    ):
+        if self.interrupted():
+            logger.info("반력 하강 시작 위치 이동 전 stop/pause 요청으로 중단합니다.")
+            return False
+
+        logger.info(
+            "반력 확인 하강 시작 위치 이동: "
+            f"z={descent_start_z:.3f} "
+            f"(SAFE_Z_MIN + {DRAWER_STORE_FORCE_DESCENT_START_Z_OFFSET_M:.3f})"
+        )
+        ok = self.motion.plan_and_execute(
+            logger,
+            pose_goal=make_safe_pose(
+                target_x,
+                target_y,
+                descent_start_z,
+                ori,
+                logger,
+            ),
+        )
+        if ok:
+            return True
+
+        if self.interrupted():
+            return False
+
+        self.reporter.fail(
+            tool_name,
+            "반납 임시 관찰 위치 반력 하강 시작점 이동에 실패했습니다.",
+            "return_store_observe_descent_failed",
+            command,
+            logger,
+        )
+        return False
 
     def retreat_after_staging_release(
         self,
