@@ -22,6 +22,7 @@ from macgyvbot_manipulation.handover_targeting import (
     start_async_observation_search,
 )
 from macgyvbot_manipulation.robot_pose import make_safe_pose
+from macgyvbot_manipulation.robot_safezone import SAFE_Z_MIN
 
 
 class PickHandoffFlow:
@@ -53,7 +54,16 @@ class PickHandoffFlow:
         grasp_z,
         ori,
         logger,
+        safe_z_min=SAFE_Z_MIN,
     ):
+        if grasp_z < safe_z_min:
+            logger.warn(
+                f"원래 위치 반환 grasp_z({grasp_z:.3f})가 "
+                f"safe_z_min({safe_z_min:.3f})보다 낮아 "
+                "safe_z_min으로 맞춥니다."
+            )
+            grasp_z = safe_z_min
+
         logger.info("반환 1단계: 원래 공구 위치 상단으로 이동")
         ok = self.motion.plan_and_execute(
             logger,
