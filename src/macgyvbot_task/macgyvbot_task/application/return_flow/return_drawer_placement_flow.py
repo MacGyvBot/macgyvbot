@@ -4,12 +4,16 @@ from __future__ import annotations
 
 from macgyvbot_config.drawer import (
     DRAWER_1_SAFE_Z_OFFSET_M,
+    DRAWER_STORE_MARKER_CLEARANCE_Z_OFFSET_M,
     DRAWER_STORE_MARKER_APPROACH_Z_OFFSET_M,
     DRAWER_STORE_MARKER_RELEASE_Z_OFFSET_M,
 )
-from macgyvbot_config.pick import SAFE_Z
 from macgyvbot_manipulation.grasp_verifier import GraspVerifier
-from macgyvbot_manipulation.robot_pose import current_ee_orientation, make_safe_pose
+from macgyvbot_manipulation.robot_pose import (
+    current_ee_orientation,
+    get_ee_matrix,
+    make_safe_pose,
+)
 from macgyvbot_manipulation.robot_safezone import SAFE_Z_MIN
 from macgyvbot_task.application.pick_flow.pick_target_planner import PickTargetPlanner
 
@@ -162,6 +166,7 @@ class ReturnDrawerPlacementFlow:
 
         marker_x, marker_y, marker_z = marker_target.base_xyz
         safe_z_min = self._safe_z_min_for_drawer(drawer_id)
+        clearance_z = self._clearance_z_for_drawer(drawer_id)
         approach_z = max(
             safe_z_min,
             float(marker_z) + DRAWER_STORE_MARKER_APPROACH_Z_OFFSET_M,
@@ -175,6 +180,7 @@ class ReturnDrawerPlacementFlow:
             "서랍 marker place 높이 계산: "
             f"drawer={drawer_id}, marker_z={marker_z:.3f}, "
             f"safe_z_min={safe_z_min:.3f}, "
+            f"clearance_z={clearance_z:.3f}, "
             f"approach_z={approach_z:.3f}, release_z={release_z:.3f}"
         )
 
@@ -184,10 +190,21 @@ class ReturnDrawerPlacementFlow:
             f"{tool_name}을 서랍 내부 marker 중심으로 이동합니다.",
             command,
         )
+        if not self._move_to_current_xy_clearance(
+            clearance_z,
+            ori,
+            logger,
+            tool_name,
+            command,
+            "return_drawer_marker_move_failed",
+            "서랍 marker 접근 전 clearance 높이 확보에 실패했습니다.",
+        ):
+            return False
+
         if not self._move_to_pose(
             marker_x,
             marker_y,
-            SAFE_Z,
+            clearance_z,
             ori,
             logger,
             tool_name,
@@ -235,7 +252,7 @@ class ReturnDrawerPlacementFlow:
         return self._move_to_pose(
             marker_x,
             marker_y,
-            approach_z,
+            clearance_z,
             ori,
             logger,
             tool_name,
@@ -249,6 +266,38 @@ class ReturnDrawerPlacementFlow:
         if drawer_id == 1:
             return SAFE_Z_MIN + DRAWER_1_SAFE_Z_OFFSET_M
         return SAFE_Z_MIN
+
+    @classmethod
+    def _clearance_z_for_drawer(cls, drawer_id):
+        return (
+            cls._safe_z_min_for_drawer(drawer_id)
+            + DRAWER_STORE_MARKER_CLEARANCE_Z_OFFSET_M
+        )
+
+    def _move_to_current_xy_clearance(
+        self,
+        clearance_z,
+        ori,
+        logger,
+        tool_name,
+        command,
+        failure_reason,
+        failure_message,
+    ):
+        current_pose = get_ee_matrix(self.robot)
+        current_x = float(current_pose[0, 3])
+        current_y = float(current_pose[1, 3])
+        return self._move_to_pose(
+            current_x,
+            current_y,
+            clearance_z,
+            ori,
+            logger,
+            tool_name,
+            command,
+            failure_reason,
+            failure_message,
+        )
 
     def _move_to_pose(
         self,

@@ -185,7 +185,9 @@ GUI와 command node를 종료합니다.
 공구를 옮깁니다. 이 기준점은 Home 복귀용이 아니라 서랍 보관용 임시
 관찰/배치 joint pose입니다. 반력 확인 하강은 safe workspace 최소 Z보다 3cm
 높은 위치에서 시작합니다. 실제 서랍 open 상태에서 충돌이나 시야 문제가
-있으면 `DRAWER_STORE_TOOL_OBSERVE_POINT`를 조정합니다.
+있으면 `DRAWER_STORE_TOOL_OBSERVE_POINT`를 조정합니다. 서랍 내부 marker로
+접근하거나 marker에서 빠져나올 때는 해당 서랍의 최소 Z 클램프보다 10cm 높은
+clearance 높이를 먼저 확보해 서랍 내부 접촉을 줄입니다.
 
 ## 테스트
 
