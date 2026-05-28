@@ -414,6 +414,7 @@ class ReturnSequenceRunner:
             observed_tool,
             context["command"],
             self.state.logger(),
+            drawer_id=context.get("drawer_id"),
         )
 
     def _close_observed_tool_drawer(self, context):

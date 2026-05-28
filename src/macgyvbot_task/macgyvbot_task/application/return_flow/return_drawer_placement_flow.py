@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from macgyvbot_config.drawer import (
+    DRAWER_1_SAFE_Z_OFFSET_M,
     DRAWER_STORE_MARKER_APPROACH_Z_OFFSET_M,
     DRAWER_STORE_MARKER_RELEASE_Z_OFFSET_M,
 )
@@ -132,7 +133,14 @@ class ReturnDrawerPlacementFlow:
             "임시 공구 파지 후 안전 높이 복귀에 실패했습니다.",
         )
 
-    def place_tool_at_marker(self, marker_target, tool_name, command, logger):
+    def place_tool_at_marker(
+        self,
+        marker_target,
+        tool_name,
+        command,
+        logger,
+        drawer_id=None,
+    ):
         if marker_target is None or not marker_target.found:
             self.reporter.fail(
                 tool_name,
@@ -153,15 +161,22 @@ class ReturnDrawerPlacementFlow:
             return False
 
         marker_x, marker_y, marker_z = marker_target.base_xyz
+        safe_z_min = self._safe_z_min_for_drawer(drawer_id)
         approach_z = max(
-            SAFE_Z_MIN,
+            safe_z_min,
             float(marker_z) + DRAWER_STORE_MARKER_APPROACH_Z_OFFSET_M,
         )
         release_z = max(
-            SAFE_Z_MIN,
+            safe_z_min,
             float(marker_z) + DRAWER_STORE_MARKER_RELEASE_Z_OFFSET_M,
         )
         ori = current_ee_orientation(self.robot)
+        logger.info(
+            "서랍 marker place 높이 계산: "
+            f"drawer={drawer_id}, marker_z={marker_z:.3f}, "
+            f"safe_z_min={safe_z_min:.3f}, "
+            f"approach_z={approach_z:.3f}, release_z={release_z:.3f}"
+        )
 
         self.reporter.publish(
             "placing_drawer_tool",
@@ -228,6 +243,12 @@ class ReturnDrawerPlacementFlow:
             "return_drawer_place_failed",
             "서랍 내부 공구를 놓은 뒤 후퇴에 실패했습니다.",
         )
+
+    @staticmethod
+    def _safe_z_min_for_drawer(drawer_id):
+        if drawer_id == 1:
+            return SAFE_Z_MIN + DRAWER_1_SAFE_Z_OFFSET_M
+        return SAFE_Z_MIN
 
     def _move_to_pose(
         self,
