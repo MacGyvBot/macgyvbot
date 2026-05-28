@@ -5,6 +5,7 @@ from __future__ import annotations
 from macgyvbot_config.drawer import (
     DRAWER_1_SAFE_Z_OFFSET_M,
     DRAWER_STORE_MARKER_CLEARANCE_Z_OFFSET_M,
+    DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M,
     DRAWER_STORE_MARKER_APPROACH_Z_OFFSET_M,
     DRAWER_STORE_MARKER_RELEASE_Z_OFFSET_M,
 )
@@ -249,7 +250,7 @@ class ReturnDrawerPlacementFlow:
         self.gripper.open_gripper()
         self.wait_fn(0.8)
 
-        return self._move_to_pose(
+        if not self._move_to_pose(
             marker_x,
             marker_y,
             clearance_z,
@@ -259,6 +260,29 @@ class ReturnDrawerPlacementFlow:
             command,
             "return_drawer_place_failed",
             "서랍 내부 공구를 놓은 뒤 후퇴에 실패했습니다.",
+        ):
+            return False
+
+        exit_x = marker_x + DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M[0]
+        exit_y = marker_y + DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M[1]
+        exit_z = clearance_z + DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M[2]
+        logger.info(
+            "서랍 marker release 후 exit offset 이동: "
+            f"offset=({DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M[0]:.3f}, "
+            f"{DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M[1]:.3f}, "
+            f"{DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M[2]:.3f}), "
+            f"target=({exit_x:.3f}, {exit_y:.3f}, {exit_z:.3f})"
+        )
+        return self._move_to_pose(
+            exit_x,
+            exit_y,
+            exit_z,
+            ori,
+            logger,
+            tool_name,
+            command,
+            "return_drawer_place_failed",
+            "서랍 내부 공구를 놓은 뒤 y축 exit offset 이동에 실패했습니다.",
         )
 
     @staticmethod
