@@ -190,7 +190,7 @@ GUI와 command node를 종료합니다.
 있으면 `DRAWER_STORE_TOOL_OBSERVE_POINT`를 조정합니다. 서랍 내부 marker로
 접근하거나 marker에서 빠져나올 때는 해당 서랍의 최소 Z 클램프보다 10cm 높은
 clearance 높이를 먼저 확보하고, 공구를 놓은 뒤에는 같은 높이에서 base y축
--10cm로 추가 이동해 서랍 내부 접촉을 줄입니다.
+-15cm로 추가 이동해 서랍 내부 접촉을 줄입니다.
 
 ## Task Coordinator
 
