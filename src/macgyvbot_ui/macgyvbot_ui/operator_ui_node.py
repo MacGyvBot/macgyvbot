@@ -671,8 +671,27 @@ class OperatorUiNode(Node):
     @staticmethod
     def _chat_robot_statuses():
         return {
+            'accepted',
+            'searching_drawer',
+            'moving_to_drawer',
+            'searching_drawer_handle',
+            'opening_drawer',
+            'closing_drawer',
+            'searching',
+            'picking',
+            'approaching_tool',
+            'grasping',
+            'grasp_success',
+            'lifting_tool',
+            'moving_to_handoff',
+            'searching_hand',
             'waiting_handoff',
+            'handoff_complete',
             'waiting_return_handoff',
+            'moving_return_grasp_pose',
+            'checking_return_target',
+            'return_hand_detected',
+            'placing_return_tool',
             'returning_home',
             'done',
             'completed',
@@ -685,7 +704,7 @@ class OperatorUiNode(Node):
             'cancelled',
             'rejected',
             'tool_dropped',
-            'handoff_complete',
+            'returned',
             'vlm_loading',
             'vlm_ready',
             'vlm_warning',
@@ -723,9 +742,40 @@ class OperatorUiNode(Node):
 
     @staticmethod
     def _robot_log_message(status, state, target_label, message, reason):
-        base = f'robot_status={state}, target={target_label}, message={message}'
+        task = status.get('task')
+        action = status.get('action')
+        tool_name = status.get('tool_name')
+        base_parts = [
+            'topic=/robot_task_status',
+            f'status={state}',
+        ]
+        if task not in (None, ''):
+            base_parts.append(f'task={task}')
+        if action not in (None, ''):
+            base_parts.append(f'action={action}')
+        if tool_name not in (None, ''):
+            base_parts.append(f'tool={tool_name}')
+        base_parts.extend(
+            [
+                f'target={target_label}',
+                f'message="{message}"',
+            ]
+        )
+        base = ', '.join(base_parts)
         details = []
-        for key in ('action', 'step', 'phase', 'progress', 'source'):
+        for key in (
+            'step',
+            'phase',
+            'progress',
+            'source',
+            'reason',
+            'bx',
+            'by',
+            'bz',
+            'vlm_yaw_deg',
+            'drawer_id',
+            'width_mm',
+        ):
             value = status.get(key)
             if value not in (None, ''):
                 details.append(f'{key}={value}')
@@ -744,7 +794,7 @@ class OperatorUiNode(Node):
                 if value not in (None, ''):
                     details.append(f'{label}={value}')
 
-        if reason:
+        if reason and not any(item == f'reason={reason}' for item in details):
             details.append(f'reason={reason}')
         if details:
             return f'{base}, {", ".join(details)}'
