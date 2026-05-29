@@ -49,7 +49,14 @@ class GraspPointSelector:
         self.vlm_grasp_point_selector = None
         self.vlm_only_grasp_point_selector = None
         self.api_grasp_point_selector = None
-        self.center_grasp_point_selector = CenterGraspPointSelector(logger)
+        self.center_grasp_point_selector = CenterGraspPointSelector(
+            logger,
+            sam_enabled=self.sam_enabled,
+            sam_checkpoint=self.sam_checkpoint,
+            sam_backend=self.sam_backend,
+            sam_model_type=self.sam_model_type,
+            sam_device=self.sam_device,
+        )
 
     def preload_vlm_if_needed(self):
         if not self._uses_vlm():

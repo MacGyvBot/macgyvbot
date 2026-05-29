@@ -8,9 +8,13 @@ from PIL import Image
 
 from macgyvbot_config.vlm import (
     GRASP_POINT_MODE_VLM_ONLY_QWEN3B,
+    PCA_YAW_SAM_DEFAULT_CONFIG,
     VLM_INFERENCE_HISTORY_DIR,
     VLM_INFERENCE_HISTORY_ENABLED,
     VLM_MODEL_QWEN3B,
+)
+from macgyvbot_perception.grasp_point.grasp_method.yaw_estimation import (
+    SamPcaYawRefiner,
 )
 from macgyvbot_perception.grasp_point.vlm.inference_history_recode import (
     InferenceHistoryConfig,
@@ -42,6 +46,20 @@ class VLMOnlyGraspPointSelector:
         self.mode = mode
         self.model = None
         self.parser = Parser()
+        self.sam_enabled = sam_enabled
+        self.sam_checkpoint = sam_checkpoint
+        self.sam_backend = sam_backend
+        self.sam_model_type = sam_model_type
+        self.sam_device = sam_device
+        self.yaw_refiner = SamPcaYawRefiner(
+            logger,
+            sam_enabled=sam_enabled,
+            sam_checkpoint=sam_checkpoint,
+            sam_backend=sam_backend,
+            sam_model_type=sam_model_type,
+            sam_device=sam_device,
+            config=dict(PCA_YAW_SAM_DEFAULT_CONFIG),
+        )
         self.history = InferenceHistoryRecode(
             InferenceHistoryConfig(enabled=history_enabled, root_dir=history_dir),
             logger=logger,
@@ -123,6 +141,19 @@ class VLMOnlyGraspPointSelector:
             return None
 
         point, yaw = parsed
+        parsed_data = self.parser.as_mapping(result.data)
+        grasp_result = {
+            "x_px": int(round(point[0])),
+            "y_px": int(round(point[1])),
+            "yaw_deg": float(yaw),
+            "confidence": self.parser.as_float(parsed_data.get("confidence")),
+            "reason": str(parsed_data.get("reason", "")),
+        }
+        final_grasp_result, yaw_debug = self.yaw_refiner.refine(
+            grasp_result,
+            crop_bgr,
+        )
+        yaw = float(final_grasp_result["yaw_deg"])
         u = x1 + int(round(point[0]))
         v = y1 + int(round(point[1]))
         orientation = (0.0, 0.0, yaw)
@@ -141,6 +172,18 @@ class VLMOnlyGraspPointSelector:
             success=True,
         )
 
+        self.logger.info(
+            "VLM-only yaw refinement: "
+            f"vlm_yaw={grasp_result['yaw_deg']:.1f}deg, "
+            f"multi_frame_pca_yaw={yaw_debug.get('pca_yaw_deg')}, "
+            f"final_yaw={yaw:.1f}deg, "
+            f"sam_success={yaw_debug.get('sam_success')}, "
+            f"aggregation_success={yaw_debug.get('aggregation_success')}, "
+            f"pca_success={yaw_debug.get('pca_success')}, "
+            f"fallback_used={yaw_debug.get('fallback_used')}, "
+            f"fallback_source={yaw_debug.get('fallback_source')}, "
+            f"invert_yaw_sign={yaw_debug.get('invert_yaw_sign_applied')}"
+        )
         self.logger.info(
             f"VLM-only grasp point selected: pixel=({u}, {v}), "
             f"yaw={yaw:.1f}deg, source={self.mode}"

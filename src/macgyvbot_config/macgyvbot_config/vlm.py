@@ -28,3 +28,17 @@ VLM_ONLY_MODES = tuple(VLM_ONLY_MODEL_BY_MODE.keys())
 VLM_GRASP_SERVICE_NAME = "/vlm_grasp"
 VLM_SERVICE_WAIT_TIMEOUT_SEC = 2.0
 VLM_SERVICE_RESPONSE_TIMEOUT_SEC = 30.0
+
+PCA_YAW_SAM_DEFAULT_CONFIG = {
+    "invert_yaw_sign": False,
+    "min_mask_area_ratio": 0.01,
+    "max_mask_area_ratio": 0.95,
+    "min_valid_masks": 2,
+    "mask_vote_threshold": 0.5,
+    "aggregation_mode": "majority",
+    "fallback_to_vlm_yaw": True,
+    "morph_kernel_size": 3,
+    "morph_open_iterations": 1,
+    "morph_close_iterations": 1,
+    "min_pca_pixels": 30,
+}
