@@ -143,13 +143,13 @@ ros2 run macgyvbot_monitor launch_monitor -- ros2 launch macgyvbot_bringup macgy
 ## Grasp Point Mode
 
 개발 중 일반적으로 바꿔 쓰는 launch argument는 `grasp_point_mode`입니다.
-기본 launch 값은 `vlm`입니다. 관련 mode 상수는 `macgyvbot_config.vlm`에서 관리합니다.
+기본 launch 값은 `vlm_only_qwen3b`입니다. 관련 mode 상수는 `macgyvbot_config.vlm`에서 관리합니다.
 
 예시:
 
 ```bash
 ros2 launch macgyvbot_bringup macgyvbot.launch.py grasp_point_mode:=vlm
-ros2 launch macgyvbot_bringup macgyvbot.launch.py grasp_point_mode:=vlm_only
+ros2 launch macgyvbot_bringup macgyvbot.launch.py grasp_point_mode:=vlm_only_smol
 ros2 launch macgyvbot_bringup macgyvbot.launch.py grasp_point_mode:=vlm_only_qwen3b
 ros2 launch macgyvbot_bringup macgyvbot.launch.py grasp_point_mode:=vlm_only_qwen7b
 ros2 launch macgyvbot_bringup macgyvbot.launch.py grasp_point_mode:=center
@@ -157,6 +157,11 @@ ros2 launch macgyvbot_bringup macgyvbot.launch.py grasp_point_mode:=api
 ```
 
 지원 mode는 `src/macgyvbot_config/macgyvbot_config/vlm.py`에서 관리합니다.
+
+VLM inference history 저장 기능은 기본 비활성화되어 있습니다. 설정은
+`macgyvbot_config.vlm`의 `VLM_INFERENCE_HISTORY_ENABLED`와
+`VLM_INFERENCE_HISTORY_DIR`에서 관리하며, 활성화하면 입력 crop 이미지와 CSV 결과가
+`src/macgyvbot_perception/data/vlm_traces/` 아래에 저장됩니다.
 
 그 외 모델 경로, threshold, topic, runtime 상수는 `macgyvbot_config`와 관련
 launch 파일이 소유합니다. README에는 긴 parameter 목록을 두지 않고, 운영
@@ -189,17 +194,6 @@ GUI의 `복귀` 버튼과 Home 복귀 표현은 `/tool_command`의 `action=home`
 종료하고 Home 복귀가 완료된 뒤
 GUI와 command node를 종료합니다.
 
-`return` 흐름은 사용자에게 공구를 받은 뒤 `macgyvbot_config.drawer`의
-`DRAWER_STORE_TOOL_OBSERVE_POINT` 임시 관찰 위치에 공구를 내려놓고, 해당
-위치에서 YOLO 라벨/bbox를 다시 확인한 다음 서랍을 열어 ArUco marker 중심으로
-공구를 옮깁니다. 이 기준점은 Home 복귀용이 아니라 서랍 보관용 임시
-관찰/배치 joint pose입니다. 반력 확인 하강은 safe workspace 최소 Z보다 3cm
-높은 위치에서 시작합니다. 실제 서랍 open 상태에서 충돌이나 시야 문제가
-있으면 `DRAWER_STORE_TOOL_OBSERVE_POINT`를 조정합니다. 서랍 내부 marker로
-접근하거나 marker에서 빠져나올 때는 해당 서랍의 최소 Z 클램프보다 10cm 높은
-clearance 높이를 먼저 확보하고, 공구를 놓은 뒤에는 같은 높이에서 base y축
--15cm로 추가 이동해 서랍 내부 접촉을 줄입니다.
-
 ## Task Coordinator
 
 `macgyvbot_task`는 command routing과 task execution을 분리합니다.
@@ -212,6 +206,14 @@ MoveIt/RG2 실행 리소스, pick/return workflow, 내부 `TaskStep` queue,
 `ReturnSequenceRunner`의 step queue로 변환되고, 각 step은 worker thread에서
 순차 실행됩니다. 자세한 흐름과 topic ownership은
 [EXPLAIN.md](./EXPLAIN.md)를 참고합니다.
+
+## Motion Safety
+
+MoveIt pose goal 이동은 `macgyvbot_manipulation.moveit_controller`에서
+현재 joint state 기준 IK sampling을 먼저 수행합니다. 여러 seed에서 얻은 IK 후보는
+현재 joint와 가장 가까운 동치 각도로 보정한 뒤 joint delta가 가장 작은 후보를
+RobotState goal로 사용합니다. 안전 한계를 넘는 큰 joint delta가 남으면 pose goal
+fallback으로 우회하지 않고 planning을 중단합니다.
 
 ## 테스트
 

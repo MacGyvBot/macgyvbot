@@ -24,6 +24,253 @@ from macgyvbot_manipulation.robot_pose import normalize_angle_deg
 
 
 DEFAULT_TRAJECTORY_ACTION_NAME = "/dsr_moveit_controller/follow_joint_trajectory"
+POSE_GOAL_IK_TIMEOUT_SEC = 0.1
+POSE_GOAL_IK_MAX_SEEDS = 10
+POSE_GOAL_IK_SEED_PERTURB_RAD = math.radians(10.0)
+POSE_GOAL_MAX_JOINT_DELTA_RAD = math.radians(120.0)
+_TWO_PI = 2.0 * math.pi
+
+
+def _nearest_equivalent_value(current, target):
+    nearest_k = int(round((float(current) - float(target)) / _TWO_PI))
+    candidates = [
+        float(target) + _TWO_PI * k
+        for k in range(nearest_k - 1, nearest_k + 2)
+    ]
+    return min(candidates, key=lambda value: abs(value - float(current)))
+
+
+def _nearest_equivalent_positions(current_positions, target_positions):
+    return np.array(
+        [
+            _nearest_equivalent_value(current, target)
+            for current, target in zip(current_positions, target_positions)
+        ],
+        dtype=float,
+    )
+
+
+def _principal_joint_positions(positions):
+    return np.array(
+        [math.atan2(math.sin(value), math.cos(value)) for value in positions],
+        dtype=float,
+    )
+
+
+def _ik_seed_positions(current_positions):
+    seeds = [np.array(current_positions, copy=True)]
+    principal_positions = _principal_joint_positions(current_positions)
+
+    if not np.allclose(principal_positions, current_positions, atol=1e-6):
+        seeds.append(principal_positions)
+
+    for index in range(len(current_positions)):
+        if np.isclose(
+            principal_positions[index],
+            current_positions[index],
+            atol=1e-6,
+        ):
+            continue
+        seed = np.array(current_positions, copy=True)
+        seed[index] = principal_positions[index]
+        seeds.append(seed)
+
+    for index in range(len(current_positions)):
+        for direction in (1.0, -1.0):
+            seed = np.array(current_positions, copy=True)
+            seed[index] += direction * POSE_GOAL_IK_SEED_PERTURB_RAD
+            seeds.append(seed)
+
+    unique_seeds = []
+    seen = set()
+    for seed in seeds:
+        key = tuple(round(float(value), 6) for value in seed)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_seeds.append(seed)
+        if len(unique_seeds) >= POSE_GOAL_IK_MAX_SEEDS:
+            break
+
+    return unique_seeds
+
+
+def _state_satisfies_bounds(state, joint_model_group):
+    satisfies_bounds = getattr(state, "satisfies_bounds", None)
+    if satisfies_bounds is None:
+        return True
+
+    for args in ((joint_model_group,), (GROUP_NAME,), ()):
+        try:
+            return bool(satisfies_bounds(*args))
+        except TypeError:
+            continue
+    return True
+
+
+def _format_joint_deltas(joint_names, current_positions, raw_positions, goal_positions):
+    parts = []
+    for name, current, raw, goal in zip(
+        joint_names,
+        current_positions,
+        raw_positions,
+        goal_positions,
+    ):
+        raw_delta = float(raw) - float(current)
+        goal_delta = float(goal) - float(current)
+        parts.append(
+            f"{name}: curr={math.degrees(current):.1f}deg, "
+            f"ik={math.degrees(raw):.1f}deg, "
+            f"raw={math.degrees(raw_delta):.1f}deg, "
+            f"short={math.degrees(goal_delta):.1f}deg"
+        )
+    return "; ".join(parts)
+
+
+def _pose_goal_to_near_current_state_goal(robot, pose_goal, logger):
+    robot_model = robot.get_robot_model()
+    jmg = robot_model.get_joint_model_group(GROUP_NAME)
+    joint_names = list(jmg.active_joint_model_names)
+
+    try:
+        with robot.get_planning_scene_monitor().read_only() as scene:
+            current_positions = np.array(
+                scene.current_state.get_joint_group_positions(GROUP_NAME),
+                dtype=float,
+            )
+    except Exception as exc:
+        logger.warn(
+            "pose_goal IK seed용 현재 joint state를 읽지 못했습니다. "
+            f"pose_goal planning을 중단합니다: {exc}"
+        )
+        return None
+
+    if len(current_positions) != len(joint_names):
+        logger.warn(
+            "pose_goal IK seed joint 수가 맞지 않습니다. "
+            "pose_goal planning을 중단합니다: "
+            f"positions={len(current_positions)}, joints={len(joint_names)}"
+        )
+        return None
+
+    candidates = []
+    candidate_keys = set()
+    ik_failures = 0
+
+    for seed_index, seed_positions in enumerate(
+        _ik_seed_positions(current_positions),
+        start=1,
+    ):
+        ik_state = RobotState(robot_model)
+        ik_state.set_joint_group_positions(GROUP_NAME, seed_positions)
+        ik_state.update()
+
+        try:
+            found_ik = ik_state.set_from_ik(
+                GROUP_NAME,
+                pose_goal.pose,
+                EE_LINK,
+                POSE_GOAL_IK_TIMEOUT_SEC,
+            )
+        except Exception as exc:
+            ik_failures += 1
+            logger.warn(
+                "pose_goal IK 계산 실패: "
+                f"seed={seed_index}, error={exc}"
+            )
+            continue
+
+        if not found_ik:
+            ik_failures += 1
+            continue
+
+        ik_state.update()
+        raw_positions = np.array(
+            ik_state.get_joint_group_positions(GROUP_NAME),
+            dtype=float,
+        )
+        goal_positions = _nearest_equivalent_positions(
+            current_positions,
+            raw_positions,
+        )
+        candidate_key = tuple(round(float(value), 6) for value in goal_positions)
+        if candidate_key in candidate_keys:
+            continue
+        candidate_keys.add(candidate_key)
+
+        goal_state = RobotState(robot_model)
+        goal_state.set_joint_group_positions(GROUP_NAME, goal_positions)
+        goal_state.update()
+        if not _state_satisfies_bounds(goal_state, jmg):
+            logger.warn(
+                "pose_goal IK 후보가 joint bounds를 벗어나 제외합니다: "
+                + _format_joint_deltas(
+                    joint_names,
+                    current_positions,
+                    raw_positions,
+                    goal_positions,
+                )
+            )
+            continue
+
+        deltas = goal_positions - current_positions
+        abs_deltas = np.abs(deltas)
+        max_delta = float(np.max(abs_deltas))
+        total_delta = float(np.sum(abs_deltas))
+        candidates.append(
+            (
+                max_delta,
+                total_delta,
+                seed_index,
+                goal_state,
+                raw_positions,
+                goal_positions,
+            )
+        )
+
+    if not candidates:
+        logger.warn(
+            "pose_goal IK 후보를 찾지 못했습니다. "
+            f"seeds={POSE_GOAL_IK_MAX_SEEDS}, failures={ik_failures}"
+        )
+        return None
+
+    candidates.sort(key=lambda candidate: (candidate[0], candidate[1]))
+    (
+        max_delta,
+        total_delta,
+        seed_index,
+        goal_state,
+        raw_positions,
+        goal_positions,
+    ) = candidates[0]
+
+    logger.info(
+        "pose_goal IK best candidate: "
+        f"seed={seed_index}, candidates={len(candidates)}, "
+        f"max_delta={math.degrees(max_delta):.1f}deg, "
+        f"total_delta={math.degrees(total_delta):.1f}deg"
+    )
+    logger.info(
+        "pose_goal IK selected delta: "
+        + _format_joint_deltas(
+            joint_names,
+            current_positions,
+            raw_positions,
+            goal_positions,
+        )
+    )
+
+    if max_delta > POSE_GOAL_MAX_JOINT_DELTA_RAD:
+        logger.warn(
+            "pose_goal IK 후보의 최대 joint delta가 안전 한계를 초과해 "
+            "planning을 중단합니다: "
+            f"max_delta={math.degrees(max_delta):.1f}deg, "
+            f"limit={math.degrees(POSE_GOAL_MAX_JOINT_DELTA_RAD):.1f}deg"
+        )
+        return None
+
+    return goal_state
 
 
 def plan_and_execute(
@@ -51,10 +298,21 @@ def plan_and_execute(
         pose_goal.pose.position.y = sy
         pose_goal.pose.position.z = sz
 
-        arm.set_goal_state(
-            pose_stamped_msg=pose_goal,
-            pose_link=EE_LINK,
+        ik_state_goal = _pose_goal_to_near_current_state_goal(
+            robot,
+            pose_goal,
+            logger,
         )
+
+        if ik_state_goal is not None:
+            arm.set_goal_state(robot_state=ik_state_goal)
+        else:
+            logger.error(
+                "pose_goal을 현재 joint 기준 가까운 IK joint goal로 "
+                "변환하지 못해 planning을 중단합니다."
+            )
+            return False
+
     elif state_goal:
         arm.set_goal_state(robot_state=state_goal)
 

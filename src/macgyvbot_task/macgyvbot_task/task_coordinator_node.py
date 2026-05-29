@@ -113,13 +113,13 @@ class VLMStatusLogger:
         if "VLM" not in text:
             return
 
-        if "로드 시작" in text:
+        if "로드 시작" in text or "weights loading" in text:
             status = "vlm_loading"
-        elif "로드 완료" in text:
+        elif "로드 완료" in text or "weights loaded" in text:
             status = "vlm_ready"
         elif level == "error" or "실패" in text:
             status = "vlm_error"
-        elif level == "warn" or "CPU 실행" in text:
+        elif level == "warn" or "CPU 실행" in text or "not using CUDA" in text:
             status = "vlm_warning"
         else:
             return
@@ -193,6 +193,7 @@ class TaskCoordinatorNode(Node):
         self._suspended_step = None
         self._suspended_task_name = None
         self._exit_home_thread = None
+        self._vlm_preload_timer = None
 
         self.grasp_point_mode = self._read_grasp_point_mode()
         self.yolo_model = self._read_yolo_model()
@@ -224,7 +225,6 @@ class TaskCoordinatorNode(Node):
             **self._read_grasp_point_api_config(),
             **self._read_vlm_sam_config(),
         )
-        self.grasp_point_selector.preload_vlm_if_needed()
 
         calib_file = self._resolve_calibration_file("T_gripper2camera.npy")
         self.gripper2cam = np.load(str(calib_file)).astype(float)
@@ -335,9 +335,19 @@ class TaskCoordinatorNode(Node):
 
         self._create_subscriptions()
         self._log_startup()
+        self._vlm_preload_timer = self.create_timer(
+            3.0,
+            self._preload_vlm_after_startup,
+        )
 
     def _base_to_camera_matrix(self):
         return get_ee_matrix(self.robot) @ self.gripper2cam
+
+    def _preload_vlm_after_startup(self):
+        if self._vlm_preload_timer is not None:
+            self._vlm_preload_timer.cancel()
+
+        self.grasp_point_selector.preload_vlm_if_needed()
 
     def _drawer_observation_orientation(self):
         joint_positions = dict(HOME_JOINTS)

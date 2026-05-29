@@ -7,9 +7,14 @@ from macgyvbot_config.vlm import (
     GRASP_POINT_MODE_API,
     GRASP_POINT_MODE_CENTER,
     GRASP_POINT_MODE_VLM,
-    GRASP_POINT_MODE_VLM_ONLY,
+    GRASP_POINT_MODE_VLM_ONLY_QWEN3B,
+    GRASP_POINT_MODE_VLM_ONLY_QWEN7B,
+    GRASP_POINT_MODE_VLM_ONLY_SMOL,
     VLM_ONLY_MODEL_BY_MODE,
     VLM_ONLY_MODES,
+)
+from macgyvbot_perception.grasp_point.center_method.selector import (
+    CenterGraspPointSelector,
 )
 
 
@@ -44,6 +49,7 @@ class GraspPointSelector:
         self.vlm_grasp_point_selector = None
         self.vlm_only_grasp_point_selector = None
         self.api_grasp_point_selector = None
+        self.center_grasp_point_selector = CenterGraspPointSelector(logger)
 
     def preload_vlm_if_needed(self):
         if not self._uses_vlm():
@@ -94,7 +100,11 @@ class GraspPointSelector:
         )
 
     def should_defer_vlm_until_top_view(self):
-        return self.mode == GRASP_POINT_MODE_VLM or self.mode in VLM_ONLY_MODES
+        return (
+            self.mode == GRASP_POINT_MODE_CENTER
+            or self.mode == GRASP_POINT_MODE_VLM
+            or self.mode in VLM_ONLY_MODES
+        )
 
     def select(
         self,
@@ -170,14 +180,27 @@ class GraspPointSelector:
                 "기본 grasp point 모드도 실패했습니다. bbox center로 대체합니다."
             )
 
-        return self._select_bbox_center_pixel(bbox)
+        return self._select_bbox_center_pixel(
+            bbox,
+            label,
+            color_image,
+            target_label,
+        )
 
-    @staticmethod
-    def _select_bbox_center_pixel(bbox):
+    def _select_bbox_center_pixel(
+        self,
+        bbox,
+        label=None,
+        color_image=None,
+        target_label=None,
+    ):
         """Return the center pixel of an object bounding box."""
-        u = int((bbox[0] + bbox[2]) / 2)
-        v = int((bbox[1] + bbox[3]) / 2)
-        return u, v, GRASP_POINT_MODE_CENTER, None
+        return self.center_grasp_point_selector.select_grasp_pixel(
+            bbox,
+            label=label,
+            color_image=color_image,
+            target_label=target_label,
+        )
 
     def select_bbox_center(self, box):
         bbox = box.xyxy[0].cpu().numpy()
@@ -213,7 +236,12 @@ class GraspPointSelector:
             )
 
         if DEFAULT_GRASP_POINT_MODE == GRASP_POINT_MODE_CENTER:
-            return self._select_bbox_center_pixel(bbox)
+            return self._select_bbox_center_pixel(
+                bbox,
+                label,
+                color_image,
+                target_label,
+            )
 
         return None
 
@@ -271,6 +299,7 @@ class GraspPointSelector:
                 sam_model_type=self.sam_model_type,
                 sam_device=self.sam_device,
                 model_id=self._vlm_only_model_id(),
+                mode=self._vlm_only_mode(),
             )
 
         try:
@@ -304,6 +333,7 @@ class GraspPointSelector:
                 sam_model_type=self.sam_model_type,
                 sam_device=self.sam_device,
                 model_id=self._vlm_only_model_id(),
+                mode=self._vlm_only_mode(),
             )
 
         return self.vlm_only_grasp_point_selector.select_grasp_pixel(
@@ -316,13 +346,16 @@ class GraspPointSelector:
         )
 
     def _vlm_only_model_id(self):
-        mode = self.mode
-        if mode == GRASP_POINT_MODE_API:
-            mode = DEFAULT_GRASP_POINT_MODE
+        mode = self._vlm_only_mode()
         return VLM_ONLY_MODEL_BY_MODE.get(
             mode,
-            VLM_ONLY_MODEL_BY_MODE[GRASP_POINT_MODE_VLM_ONLY],
+            VLM_ONLY_MODEL_BY_MODE[GRASP_POINT_MODE_VLM_ONLY_QWEN3B],
         )
+
+    def _vlm_only_mode(self):
+        if self.mode == GRASP_POINT_MODE_API:
+            return DEFAULT_GRASP_POINT_MODE
+        return self.mode
 
     def _select_api_grasp_pixel(
         self,
@@ -362,12 +395,17 @@ class GraspPointSelector:
 
 def normalize_grasp_point_mode(mode, logger):
     """Return a supported grasp point mode, falling back to center."""
-    if mode == "grasp_point_mode_vlm_only":
-        return GRASP_POINT_MODE_VLM_ONLY
+    if mode in ("grasp_point_mode_vlm_only", "vlm_only"):
+        logger.warn(
+            "'vlm_only' is deprecated. Use 'vlm_only_smol', "
+            "'vlm_only_qwen3b', or 'vlm_only_qwen7b'. "
+            "Falling back to 'vlm_only_qwen3b'."
+        )
+        return GRASP_POINT_MODE_VLM_ONLY_QWEN3B
     if mode == "vlm_only_qwen_3b":
-        return "vlm_only_qwen3b"
+        return GRASP_POINT_MODE_VLM_ONLY_QWEN3B
     if mode == "vlm_only_qwen_7b":
-        return "vlm_only_qwen7b"
+        return GRASP_POINT_MODE_VLM_ONLY_QWEN7B
 
     if mode in (
         GRASP_POINT_MODE_CENTER,

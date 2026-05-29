@@ -11,6 +11,16 @@
 - 큰 VLM 모델, SAM mask, VLM 호출 타이밍 조정, prompt/tuning을 통해 grasp point 품질을 개선한다.
 - launch 시작 시 VLM 가중치를 미리 로드해 첫 pick 동작에서 발생하는 지연을 줄인다.
 
+## 현재 리팩토링 방향
+
+- 기본 grasp point mode는 `vlm_only_qwen3b`로 둔다.
+- `grasp_point/vlm/`에는 local VLM 모델 class, VLM 응답 parser, inference history 기록만 둔다.
+- `grasp_point/vlm_method/`는 기존 grid 기반 `vlm` 선정 방식을 소유한다.
+- `grasp_point/vlm_only_method/`는 단일 호출 기반 `vlm_only_smol`, `vlm_only_qwen3b`, `vlm_only_qwen7b` 선정 방식을 소유한다.
+- `grasp_point/api_method/`는 Gemini API 기반 `api` 선정 방식을 소유한다.
+- SAM 입력 생성과 depth refinement 전용 로직은 이 리팩토링의 VLM 공통 폴더에 두지 않는다.
+- inference history가 활성화되면 입력 crop 이미지와 CSV 결과를 `src/macgyvbot_perception/data/vlm_traces/`에 저장한다.
+
 ## 변경하려는 알고리즘
 
 기존 방식:
