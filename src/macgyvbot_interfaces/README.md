@@ -5,10 +5,9 @@ Shared ROS message, service, and action contracts for MacGyvBot packages.
 This package should contain only interface definitions. It should not depend on
 runtime packages such as perception, manipulation, command, or task.
 
-The current migrated runtime still publishes compatibility JSON over
-`std_msgs/String`. The messages in `msg/` are typed migration targets for those
-JSON payloads, not a runtime behavior change. Publishers and subscribers should
-move to these types only when both ends of a topic are migrated together.
+Runtime package-boundary topics use the message types in this package. Plain
+text operator/STT inputs and ROS sensor/image topics keep their native ROS
+types rather than being wrapped in custom messages.
 
 For migration compatibility, typed messages include `payload_json` where the
 legacy payload has extra fields, nested objects, or fields that are still being
@@ -27,6 +26,9 @@ msg/
   ToolCommand.msg
   CommandFeedback.msg
   RobotTaskStatus.msg
+  RobotTaskControl.msg
+  CommandShutdown.msg
+  ToolDropEvent.msg
   HumanGraspResult.msg
   ToolMaskLock.msg
 

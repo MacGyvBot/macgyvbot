@@ -15,6 +15,7 @@ from macgyvbot_command.input_mapping.command_vocabulary import (
     ALLOWED_INTENTS,
     ALLOWED_TARGET_MODES,
     ALLOWED_TOOLS,
+    CANCEL_KEYWORDS,
     DEICTIC_WORDS,
     EXIT_KEYWORDS,
     HOME_KEYWORDS,
@@ -89,6 +90,19 @@ class CommandLlmParser:
                     'target_mode': 'unknown',
                     'raw_text': text,
                     'match_method': 'resume_keyword',
+                    'match_score': 1.0,
+                    'confidence': 1.0,
+                }
+            )
+
+        if self._has_cancel_intent(text):
+            return self._accepted_result(
+                {
+                    'tool_name': 'unknown',
+                    'action': 'cancel',
+                    'target_mode': 'unknown',
+                    'raw_text': text,
+                    'match_method': 'cancel_keyword',
                     'match_score': 1.0,
                     'confidence': 1.0,
                 }
@@ -319,6 +333,19 @@ class CommandLlmParser:
                 'confidence': 1.0,
             }
             self._info('local parser가 재개 명령으로 확정했습니다.')
+            return command
+
+        if action == 'cancel':
+            command = {
+                'tool_name': 'unknown',
+                'action': 'cancel',
+                'target_mode': 'unknown',
+                'raw_text': text,
+                'match_method': 'cancel_keyword',
+                'match_score': 1.0,
+                'confidence': 1.0,
+            }
+            self._info('local parser가 현재 작업 취소 명령으로 확정했습니다.')
             return command
 
         if action == 'exit':
@@ -630,6 +657,8 @@ class CommandLlmParser:
             return '정지 명령으로 이해했습니다.'
         if action == 'resume':
             return '재개 명령으로 이해했습니다. 작업 재개 요청으로 전달합니다.'
+        if action == 'cancel':
+            return '현재 작업을 취소합니다. 다음 명령을 기다리겠습니다.'
         if action == 'exit':
             return '종료 요청을 전달했습니다. 작업을 정리하고 Home 위치로 복귀한 뒤 종료합니다.'
         if action == 'home':
@@ -733,6 +762,7 @@ class CommandLlmParser:
 - release: {ALLOWED_ACTIONS['release']}
 - pause: {ALLOWED_ACTIONS['pause']}
 - resume: {ALLOWED_ACTIONS['resume']}
+- cancel: {ALLOWED_ACTIONS['cancel']}
 - exit: {ALLOWED_ACTIONS['exit']}
 - home: {ALLOWED_ACTIONS['home']}
 - unknown: {ALLOWED_ACTIONS['unknown']}
@@ -771,12 +801,13 @@ class CommandLlmParser:
 - status_query와 smalltalk는 assistant_message에 사용자가 볼 짧은 한국어 응답을 넣는다.
 - "멈춰", "정지", "중지", "중단", "스탑", "stop", "pause"처럼 명확한 정지 표현만 pause action이다.
 - "재개", "다시 시작", "계속해", "계속 진행해", "resume", "restart"처럼 명확한 재개 표현만 resume action이다.
+- "취소", "이번 작업 취소", "작업 취소", "cancel"처럼 현재 작업만 중단하라는 표현은 cancel action이다. cancel은 시스템 종료가 아니다.
 - "종료", "끝내", "프로그램 꺼줘", "앱 닫아줘", "GUI 종료", "exit", "quit"처럼 명확한 종료 표현만 exit action이다.
 - "카메라 꺼줘"처럼 프로그램 종료 대상이 아닌 장치를 끄라는 문장을 exit action으로 해석하지 않는다.
 - "홈위치로 가", "홈으로 가", "복귀해", "원위치로 가", "초기 위치로 이동해", "home"처럼 명확한 Home 복귀 표현만 home action이다.
-- "종료하지 마", "복귀하지 마", "정지하지 마", "그리퍼 열지 마" 같은 부정문은 어떤 command도 실행하지 않는다.
-- "종료됐어?", "복귀 중이야?", "현재 정지 상태야?" 같은 질문은 status_query이며 command가 아니다.
-- 이해하지 못한 문장을 pause, resume, exit, home으로 추측하지 말고 action unknown으로 둔다.
+- "종료하지 마", "취소하지 마", "복귀하지 마", "정지하지 마", "그리퍼 열지 마" 같은 부정문은 어떤 command도 실행하지 않는다.
+- "종료됐어?", "취소됐어?", "복귀 중이야?", "현재 정지 상태야?" 같은 질문은 status_query이며 command가 아니다.
+- 이해하지 못한 문장을 pause, resume, cancel, exit, home으로 추측하지 말고 action unknown으로 둔다.
 
 예시:
 입력: 드라이버 가져다줘
@@ -818,6 +849,9 @@ class CommandLlmParser:
 
 입력: 다시 시작해
 출력: {{"intent":"command","tool_name":"unknown","action":"resume","target_mode":"unknown","confidence":0.90,"needs_confirmation":false,"context_used":"none"}}
+
+입력: 이번 작업 취소
+출력: {{"intent":"command","tool_name":"unknown","action":"cancel","target_mode":"unknown","confidence":0.90,"needs_confirmation":false,"context_used":"none"}}
 
 입력: 종료해
 출력: {{"intent":"command","tool_name":"unknown","action":"exit","target_mode":"unknown","confidence":0.90,"needs_confirmation":false,"context_used":"none"}}
@@ -1105,6 +1139,20 @@ class CommandLlmParser:
                 ),
             }
 
+        if action == 'cancel' and not self._has_cancel_intent(raw_text):
+            self._warn('명확한 취소 표현이 없어 cancel 명령을 무시합니다.')
+            candidate_command['action'] = 'unknown'
+            return {
+                'command': None,
+                'feedback': self._feedback(
+                    status='rejected',
+                    raw_text=raw_text,
+                    reason='unknown_action',
+                    message='무엇을 해야 하는지 확정하지 못했습니다. 다시 입력해주세요.',
+                    command=candidate_command,
+                ),
+            }
+
         if action == 'exit' and not self._has_exit_intent(raw_text):
             self._warn('명확한 종료 표현이 없어 exit 명령을 무시합니다.')
             candidate_command['action'] = 'unknown'
@@ -1218,6 +1266,10 @@ class CommandLlmParser:
             return 'resume'
         if action == 'resume':
             return 'unknown'
+        if self._has_cancel_intent(raw_text):
+            return 'cancel'
+        if action == 'cancel':
+            return 'unknown'
         if self._has_exit_intent(raw_text):
             return 'exit'
         if action == 'exit':
@@ -1282,6 +1334,11 @@ class CommandLlmParser:
         return any(normalize_text(keyword) in normalized for keyword in RESUME_KEYWORDS)
 
     @staticmethod
+    def _has_cancel_intent(raw_text):
+        normalized = normalize_text(raw_text)
+        return any(normalize_text(keyword) in normalized for keyword in CANCEL_KEYWORDS)
+
+    @staticmethod
     def _has_exit_intent(raw_text):
         normalized = normalize_text(raw_text)
         return any(normalize_text(keyword) in normalized for keyword in EXIT_KEYWORDS)
@@ -1312,6 +1369,7 @@ class CommandLlmParser:
         return (
             self._has_stop_intent(raw_text)
             or self._has_resume_intent(raw_text)
+            or self._has_cancel_intent(raw_text)
             or self._has_exit_intent(raw_text)
             or self._has_home_intent(raw_text)
             or self._has_release_intent(raw_text)

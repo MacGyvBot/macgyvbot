@@ -26,9 +26,9 @@ except ImportError:  # pragma: no cover - runtime environment guidance
 else:
 
     class VoiceCommandGuiWindow(QMainWindow):
-        def __init__(self, node):
+        def __init__(self, on_user_text=None):
             super().__init__()
-            self._node = node
+            self._on_user_text = on_user_text
             self.setWindowTitle('MacGyvBot Assistant')
             self.resize(1420, 900)
             self.setMinimumSize(1280, 800)
@@ -228,7 +228,8 @@ else:
 
             self._input.clear()
             self.append_user(text)
-            self._node.publish_user_text(text)
+            if self._on_user_text is not None:
+                self._on_user_text(text)
 
         def append_user(self, text, source='keyboard'):
             self._append_bubble('나', text, align='right', role='user')
@@ -485,11 +486,13 @@ else:
 
         def _send_quick_reply(self, text):
             self.append_user(text)
-            self._node.publish_user_text(text)
+            if self._on_user_text is not None:
+                self._on_user_text(text)
 
         def _send_control_text(self, text):
             self.append_user(text)
-            self._node.publish_user_text(text)
+            if self._on_user_text is not None:
+                self._on_user_text(text)
 
         def _add_chat_widget(self, widget):
             self._chat_layout.insertWidget(self._chat_layout.count() - 1, widget)
@@ -670,6 +673,7 @@ else:
                 'release': '놓기',
                 'pause': '정지',
                 'resume': '재개',
+                'cancel': '취소',
                 'exit': '종료',
                 'home': 'Home 복귀',
                 'unknown': '알 수 없음',
@@ -732,6 +736,7 @@ else:
                 'llm': 'LLM',
                 'local_deictic': 'Local',
                 'resume_keyword': 'Control',
+                'cancel_keyword': 'Control',
                 'exit_keyword': 'Control',
                 'home_keyword': 'Control',
                 'unknown': 'Unknown',

@@ -8,6 +8,9 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ToolCommand.msg"
   "msg/CommandFeedback.msg"
   "msg/RobotTaskStatus.msg"
+  "msg/RobotTaskControl.msg"
+  "msg/CommandShutdown.msg"
+  "msg/ToolDropEvent.msg"
   "msg/HumanGraspResult.msg"
   "msg/ToolMaskLock.msg"
 )

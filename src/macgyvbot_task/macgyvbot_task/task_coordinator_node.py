@@ -22,6 +22,14 @@ from rclpy.node import Node
 from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import String
 
+from macgyvbot_interfaces.msg import (
+    HumanGraspResult,
+    RobotTaskControl,
+    RobotTaskStatus,
+    ToolDropEvent,
+    ToolMaskLock,
+)
+
 from macgyvbot_config.drawer import DRAWER_OBSERVATION_J6_DEG
 from macgyvbot_config.models import YOLO_MODEL_NAME
 from macgyvbot_config.robot import GROUP_NAME, HOME_JOINTS, WRIST_JOINT_NAME
@@ -148,8 +156,16 @@ class TaskCoordinatorNode(Node):
         self.grasp_point_mode = self._read_grasp_point_mode()
         self.yolo_model = self._read_yolo_model()
         self.force_torque_topic = self._read_force_torque_topic()
-        self.robot_status_pub = self.create_publisher(String, ROBOT_STATUS_TOPIC, 10)
-        self.tool_drop_pub = self.create_publisher(String, TOOL_DROP_TOPIC, 10)
+        self.robot_status_pub = self.create_publisher(
+            RobotTaskStatus,
+            ROBOT_STATUS_TOPIC,
+            10,
+        )
+        self.tool_drop_pub = self.create_publisher(
+            ToolDropEvent,
+            TOOL_DROP_TOPIC,
+            10,
+        )
 
         self.state = TaskRuntimeState(
             logger_provider=self.get_logger,
@@ -364,12 +380,17 @@ class TaskCoordinatorNode(Node):
         self.create_subscription(Image, CAMERA_DEPTH_TOPIC, self._depth_cb, 10)
         self.create_subscription(String, TASK_REQUEST_TOPIC, self._task_request_cb, 10)
         self.create_subscription(
-            String,
+            RobotTaskControl,
             ROBOT_TASK_CONTROL_TOPIC,
             self._task_control_cb,
             10,
         )
-        self.create_subscription(String, HAND_GRASP_TOPIC, self._hand_grasp_cb, 10)
+        self.create_subscription(
+            HumanGraspResult,
+            HAND_GRASP_TOPIC,
+            self._hand_grasp_cb,
+            10,
+        )
         self.create_subscription(
             Image,
             HAND_GRASP_IMAGE_TOPIC,
@@ -377,7 +398,7 @@ class TaskCoordinatorNode(Node):
             10,
         )
         self.create_subscription(
-            String,
+            ToolMaskLock,
             HAND_GRASP_MASK_LOCK_TOPIC,
             self._tool_mask_lock_cb,
             10,
@@ -388,7 +409,7 @@ class TaskCoordinatorNode(Node):
             self._wrench_cb,
             10,
         )
-        self.create_subscription(String, TOOL_DROP_TOPIC, self._tool_drop_cb, 10)
+        self.create_subscription(ToolDropEvent, TOOL_DROP_TOPIC, self._tool_drop_cb, 10)
 
     def _log_startup(self):
         self.get_logger().info("task coordinator node 초기화 완료")
@@ -562,8 +583,9 @@ class TaskCoordinatorNode(Node):
         )
 
     def _task_control_cb(self, msg):
-        action, reason = self._parse_task_control_payload(msg.data)
-        if action is None:
+        action = str(msg.action or "").strip().lower()
+        reason = str(msg.reason or "").strip()
+        if not action:
             return
         if action == "pause":
             self._handle_pause(reason)
@@ -571,25 +593,13 @@ class TaskCoordinatorNode(Node):
         if action == "resume":
             self._handle_resume(reason)
             return
+        if action == "cancel":
+            self._handle_cancel(reason)
+            return
         if action == "exit":
             self._handle_exit(reason)
             return
         self.get_logger().warn(f"지원하지 않는 task control action: {action}")
-
-    @staticmethod
-    def _parse_task_control_payload(payload):
-        raw = (payload or "").strip()
-        if not raw:
-            return None, ""
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError:
-            return raw.lower(), raw.lower()
-        if not isinstance(data, dict):
-            return None, ""
-        action = str(data.get("action", "")).strip().lower()
-        reason = str(data.get("reason", "")).strip()
-        return action or None, reason
 
     def _handle_pause(self, reason):
         if self.exit_req.is_set():
@@ -629,6 +639,32 @@ class TaskCoordinatorNode(Node):
             command=self.state.current_command,
         )
         self._dispatch_next()
+        return True
+
+    def _handle_cancel(self, reason, publish_status=True):
+        self.get_logger().warn(f"task queue cancel 요청: reason={reason}")
+        task_running = self.is_running() or self.state.picking
+        self.exit_req.set()
+        self.pause_req.clear()
+        self.resume_req.clear()
+        self.motion.cancel_current_goal(self.get_logger(), reason=reason or "cancel")
+        with self._queue_lock:
+            self._queue.clear()
+            self._suspended_step = None
+            self._suspended_task_name = None
+
+        if not task_running:
+            self.exit_req.clear()
+            self._clear_task_state()
+
+        if publish_status:
+            self._publish_robot_status(
+                "cancelled",
+                action="cancel",
+                message="현재 작업을 취소했습니다. 다음 명령을 기다립니다.",
+                reason=reason or "cancel_requested",
+                command=self.state.current_command,
+            )
         return True
 
     def _handle_exit(self, reason, publish_status=True):
@@ -730,11 +766,7 @@ class TaskCoordinatorNode(Node):
         return True
 
     def _tool_drop_cb(self, msg):
-        try:
-            payload = json.loads(msg.data)
-        except json.JSONDecodeError:
-            self.get_logger().warn(f"공구 drop 이벤트 JSON 파싱 실패: {msg.data}")
-            return
+        payload = self._tool_drop_payload(msg)
         if payload.get("event") != "tool_dropped":
             return
         reason = payload.get("reason") or "tool_dropped"
@@ -1069,22 +1101,14 @@ class TaskCoordinatorNode(Node):
             time.sleep(min(SEQUENCE_WAIT_POLL_SEC, max(0.0, remaining)))
 
     def _hand_grasp_cb(self, msg):
-        try:
-            result = json.loads(msg.data)
-        except json.JSONDecodeError:
-            self.get_logger().warn(f"잡기 인식 결과 JSON 파싱 실패: {msg.data}")
-            return
+        result = self._human_grasp_payload(msg)
         result["_received_monotonic_sec"] = time.monotonic()
         self.hand_grasp_adapter.attach_base_position(result)
         self.state.last_grasp_result = result
         self.state.human_grasped_tool = bool(result.get("human_grasped_tool", False))
 
     def _tool_mask_lock_cb(self, msg):
-        try:
-            result = json.loads(msg.data)
-        except json.JSONDecodeError:
-            self.get_logger().warn(f"공구 mask lock 결과 JSON 파싱 실패: {msg.data}")
-            return
+        result = self._tool_mask_payload(msg)
         self.state.last_tool_mask_lock_result = result
         self.state.tool_mask_locked = bool(result.get("locked", False))
 
@@ -1159,10 +1183,104 @@ class TaskCoordinatorNode(Node):
         )
 
     def _publish_status_payload(self, payload):
-        self.robot_status_pub.publish(String(data=json.dumps(payload, ensure_ascii=False)))
+        msg = RobotTaskStatus()
+        msg.status = str(payload.get("status", "unknown"))
+        msg.task = str(payload.get("task", ""))
+        msg.tool_name = str(payload.get("tool_name", "unknown"))
+        msg.action = str(payload.get("action", "unknown"))
+        msg.message = str(payload.get("message", ""))
+        msg.reason = str(payload.get("reason", ""))
+        command = payload.get("command")
+        msg.command_json = (
+            json.dumps(command, ensure_ascii=False) if command is not None else ""
+        )
+        msg.payload_json = json.dumps(payload, ensure_ascii=False)
+        self.robot_status_pub.publish(msg)
 
     def _publish_tool_drop_payload(self, payload):
-        self.tool_drop_pub.publish(String(data=json.dumps(payload, ensure_ascii=False)))
+        msg = ToolDropEvent()
+        msg.event = str(payload.get("event", ""))
+        msg.tool_name = str(payload.get("tool_name", "unknown"))
+        msg.action = str(payload.get("action", "unknown"))
+        msg.reason = str(payload.get("reason", ""))
+        width_mm = payload.get("width_mm")
+        msg.has_width_mm = width_mm is not None
+        msg.width_mm = float(width_mm) if width_mm is not None else 0.0
+        status = payload.get("status")
+        msg.gripper_status_json = (
+            json.dumps(status, ensure_ascii=False) if status is not None else ""
+        )
+        msg.error = str(payload.get("error", ""))
+        command = payload.get("command")
+        msg.command_json = (
+            json.dumps(command, ensure_ascii=False) if command is not None else ""
+        )
+        msg.payload_json = json.dumps(payload, ensure_ascii=False)
+        self.tool_drop_pub.publish(msg)
+
+    @staticmethod
+    def _tool_drop_payload(msg):
+        payload = json.loads(msg.payload_json) if msg.payload_json else {}
+        payload.update(
+            {
+                "event": msg.event,
+                "tool_name": msg.tool_name,
+                "action": msg.action,
+                "reason": msg.reason,
+            }
+        )
+        if msg.has_width_mm:
+            payload["width_mm"] = msg.width_mm
+        if msg.gripper_status_json:
+            payload["status"] = json.loads(msg.gripper_status_json)
+        if msg.error:
+            payload["error"] = msg.error
+        if msg.command_json:
+            payload["command"] = json.loads(msg.command_json)
+        return payload
+
+    @staticmethod
+    def _human_grasp_payload(msg):
+        payload = json.loads(msg.payload_json) if msg.payload_json else {}
+        payload.update(
+            {
+                "state": msg.state,
+                "human_grasped_tool": msg.human_grasped_tool,
+                "grasp_counter": msg.grasp_counter,
+                "grasp_score": msg.grasp_score,
+                "ml_raw_state": msg.ml_raw_state,
+                "ml_stable_state": msg.ml_stable_state,
+                "ml_grasp_confirmed": msg.ml_grasp_confirmed,
+                "depth_grasp_confirmed": msg.depth_grasp_confirmed,
+                "mask_locked": msg.mask_locked,
+                "mask_source": msg.mask_source,
+            }
+        )
+        if msg.has_tool_label:
+            payload["tool_label"] = msg.tool_label
+        if msg.has_tool_roi:
+            payload["tool_roi"] = list(msg.tool_roi)
+        if msg.has_hand_pixel:
+            payload["hand_pixel"] = {
+                "u": msg.hand_u,
+                "v": msg.hand_v,
+                "source": msg.hand_pixel_source,
+            }
+        return payload
+
+    @staticmethod
+    def _tool_mask_payload(msg):
+        payload = json.loads(msg.payload_json) if msg.payload_json else {}
+        payload.update(
+            {
+                "locked": msg.locked,
+                "mask_source": msg.mask_source,
+                "tool_roi": list(msg.tool_roi) if msg.has_tool_roi else None,
+            }
+        )
+        if msg.has_reason:
+            payload["reason"] = msg.reason
+        return payload
 
 
 def main():

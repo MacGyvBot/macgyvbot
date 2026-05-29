@@ -14,6 +14,7 @@ from macgyvbot_config.topics import (
     TASK_REQUEST_TOPIC,
     TOOL_COMMAND_TOPIC,
 )
+from macgyvbot_interfaces.msg import RobotTaskStatus, ToolCommand
 from macgyvbot_task.application import RobotStatusPublisher, ToolCommandController
 
 
@@ -30,10 +31,10 @@ class MacGyvBotNode(Node):
         "waiting_return_handoff",
         "checking_return_target",
         "returning_home",
-        "opening_drawer",
         "closing_drawer",
         "paused",
         "resumed",
+        "tool_dropped",
     }
     _FINAL_STATUSES = {
         "done",
@@ -45,6 +46,14 @@ class MacGyvBotNode(Node):
         "rejected",
         "busy",
     }
+    _ROUTED_ACTIONS = {
+        "bring",
+        "return",
+        "exit",
+        "cancel",
+        "home",
+        "release",
+    }
 
     def __init__(self):
         super().__init__("macgyvbot_main_node")
@@ -54,7 +63,11 @@ class MacGyvBotNode(Node):
         self._current_command = None
 
         self.task_request_pub = self.create_publisher(String, TASK_REQUEST_TOPIC, 10)
-        self.robot_status_pub = self.create_publisher(String, ROBOT_STATUS_TOPIC, 10)
+        self.robot_status_pub = self.create_publisher(
+            RobotTaskStatus,
+            ROBOT_STATUS_TOPIC,
+            10,
+        )
         self.status_publisher = RobotStatusPublisher(
             self._publish_status_payload,
             target_label_provider=lambda: self._target_label,
@@ -72,9 +85,14 @@ class MacGyvBotNode(Node):
         )
 
         self.create_subscription(String, "/target_label", self._target_label_cb, 10)
-        self.create_subscription(String, TOOL_COMMAND_TOPIC, self._tool_command_cb, 10)
         self.create_subscription(
-            String,
+            ToolCommand,
+            TOOL_COMMAND_TOPIC,
+            self._tool_command_cb,
+            10,
+        )
+        self.create_subscription(
+            RobotTaskStatus,
             ROBOT_STATUS_TOPIC,
             self._robot_status_cb,
             10,
@@ -93,13 +111,13 @@ class MacGyvBotNode(Node):
 
     def _tool_command_cb(self, msg):
         try:
-            command = json.loads(msg.data)
+            command = self._tool_command_payload(msg)
         except json.JSONDecodeError:
-            self.get_logger().warn(f"/tool_command JSON 파싱 실패: {msg.data}")
+            self.get_logger().warn("/tool_command payload_json 파싱 실패")
             self._publish_robot_status(
                 "rejected",
-                message="명령 JSON을 해석하지 못했습니다.",
-                reason="invalid_json",
+                message="명령 payload를 해석하지 못했습니다.",
+                reason="invalid_payload_json",
             )
             return
 
@@ -206,18 +224,18 @@ class MacGyvBotNode(Node):
 
     def _robot_status_cb(self, msg):
         try:
-            payload = json.loads(msg.data)
+            payload = self._robot_status_payload(msg)
         except json.JSONDecodeError:
             return
 
         action = str(payload.get("action", "")).strip().lower()
         status = str(payload.get("status", payload.get("state", ""))).strip().lower()
-        if action not in ("bring", "return", "exit", "home", "release"):
+        if action not in self._ROUTED_ACTIONS:
             return
 
         if status in self._FINAL_STATUSES:
             self._task_active = False
-            if action in ("bring", "return", "exit"):
+            if action in ("bring", "return", "exit", "cancel"):
                 self._target_label = None
                 self._current_command = None
             return
@@ -250,7 +268,51 @@ class MacGyvBotNode(Node):
         )
 
     def _publish_status_payload(self, payload):
-        self.robot_status_pub.publish(String(data=json.dumps(payload, ensure_ascii=False)))
+        msg = RobotTaskStatus()
+        msg.status = str(payload.get("status", "unknown"))
+        msg.task = str(payload.get("task", ""))
+        msg.tool_name = str(payload.get("tool_name", "unknown"))
+        msg.action = str(payload.get("action", "unknown"))
+        msg.message = str(payload.get("message", ""))
+        msg.reason = str(payload.get("reason", ""))
+        command = payload.get("command")
+        msg.command_json = (
+            json.dumps(command, ensure_ascii=False) if command is not None else ""
+        )
+        msg.payload_json = json.dumps(payload, ensure_ascii=False)
+        self.robot_status_pub.publish(msg)
+
+    @staticmethod
+    def _tool_command_payload(msg):
+        payload = json.loads(msg.payload_json) if msg.payload_json else {}
+        payload.update(
+            {
+                "action": msg.action,
+                "tool_name": msg.tool_name,
+                "target_mode": msg.target_mode,
+                "raw_text": msg.raw_text,
+                "match_method": msg.match_method,
+                "confidence": msg.confidence,
+            }
+        )
+        return payload
+
+    @staticmethod
+    def _robot_status_payload(msg):
+        payload = json.loads(msg.payload_json) if msg.payload_json else {}
+        payload.update(
+            {
+                "status": msg.status,
+                "task": msg.task,
+                "tool_name": msg.tool_name,
+                "action": msg.action,
+                "message": msg.message,
+                "reason": msg.reason,
+            }
+        )
+        if msg.command_json:
+            payload["command"] = json.loads(msg.command_json)
+        return payload
 
 
 def main():
