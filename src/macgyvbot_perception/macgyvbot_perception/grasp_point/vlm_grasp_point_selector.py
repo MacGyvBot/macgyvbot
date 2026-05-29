@@ -272,6 +272,7 @@ class VLMGraspPointSelector:
         runtime = self.model.get_runtime_info()
         self.logger.info(
             "VLM runtime: "
+            f"model_id={runtime['model_id']}, "
             f"device={runtime['device']}, "
             f"dtype={runtime['dtype']}, "
             f"local_weights={runtime['using_local_weights']}, "
@@ -281,9 +282,17 @@ class VLMGraspPointSelector:
             self.logger.info("VLM은 CUDA를 사용합니다.")
         else:
             self.logger.warn("VLM이 CUDA를 사용하지 않습니다. (CPU 실행)")
-        self.logger.info("VLM 가중치 로드 시작...")
+        self.logger.info(
+            "VLM 가중치 로드 시작: "
+            f"model_id={runtime['model_id']}, "
+            f"source={runtime['model_source']}"
+        )
         self.model.load()
-        self.logger.info("VLM 가중치 로드 완료.")
+        self.logger.info(
+            "VLM 가중치 로드 완료: "
+            f"model_id={runtime['model_id']}, "
+            f"source={runtime['model_source']}"
+        )
 
     @staticmethod
     def clamp_bbox_to_image(bbox, image):
@@ -403,6 +412,7 @@ class VLMModel:
     def get_runtime_info(self):
         model_source = self._resolve_model_source()
         return {
+            "model_id": self.model_id,
             "device": self.device,
             "dtype": str(self.torch_dtype).replace("torch.", ""),
             "model_source": model_source,

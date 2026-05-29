@@ -222,13 +222,23 @@ class VLMOnlyGraspPointSelector:
         runtime = self.model.get_runtime_info()
         self.logger.info(
             "VLM-only runtime: "
+            f"model_id={runtime['model_id']}, "
             f"device={runtime['device']}, "
             f"dtype={runtime['dtype']}, "
             f"local_weights={runtime['using_local_weights']}, "
             f"source={runtime['model_source']}"
         )
+        self.logger.info(
+            "VLM-only 가중치 로드 시작: "
+            f"model_id={runtime['model_id']}, "
+            f"source={runtime['model_source']}"
+        )
         self.model.load()
-        self.logger.info("VLM-only weights loaded.")
+        self.logger.info(
+            "VLM-only 가중치 로드 완료: "
+            f"model_id={runtime['model_id']}, "
+            f"source={runtime['model_source']}"
+        )
 
     @staticmethod
     def clamp_bbox_to_image(bbox, image):
