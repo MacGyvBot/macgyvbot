@@ -2,6 +2,10 @@
 
 import time
 
+import rclpy
+
+from macgyvbot_config.pick import OBSERVE_X_OFFSET_M
+
 from macgyvbot_manipulation.robot_pose import (
     current_ee_orientation,
     make_safe_pose,
@@ -105,7 +109,7 @@ class PickSequenceRunner:
                 "pick/xy_move",
                 lambda: self._move_to_pose(
                     "2단계: 안전 높이에서 XY 수평 이동",
-                    context["plan"].target_x,
+                    context["plan"].target_x-OBSERVE_X_OFFSET_M,
                     context["plan"].target_y,
                     context["plan"].travel_z,
                     context["ori"],
