@@ -31,6 +31,7 @@ import sys
 import time
 import uuid
 from datetime import datetime
+from urllib.error import HTTPError
 
 # ── 설정 (환경변수로 덮어쓸 수 있음) ─────────────────────────────────────────
 WEBHOOK = os.environ.get("DISCORD_WEBHOOK", "").strip()
@@ -72,6 +73,21 @@ METRIC_PATTERN = re.compile(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def _format_post_error(exc: Exception) -> str:
+    if not isinstance(exc, HTTPError):
+        return str(exc)
+
+    try:
+        body = exc.read().decode("utf-8", errors="replace").strip()
+    except Exception:
+        body = ""
+
+    detail = f"HTTP {exc.code} {exc.reason}"
+    if body:
+        detail = f"{detail}: {body[:500]}"
+    return detail
+
+
 def _post(content: str) -> None:
     """Discord webhook 텍스트 전송. 미설정·실패해도 스크립트가 죽지 않는다."""
     if not WEBHOOK:
@@ -81,12 +97,18 @@ def _post(content: str) -> None:
 
     data = json.dumps({"content": content[:1900]}).encode("utf-8")
     req = urllib.request.Request(
-        WEBHOOK, data=data, headers={"Content-Type": "application/json"}
+        WEBHOOK,
+        data=data,
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "macgyvbot-monitor/0.0.0",
+        },
+        method="POST",
     )
     try:
         urllib.request.urlopen(req, timeout=10)
     except Exception as exc:
-        print(f"[launch_monitor] 전송 실패: {exc}", file=sys.stderr)
+        print(f"[launch_monitor] 전송 실패: {_format_post_error(exc)}", file=sys.stderr)
 
 
 def _post_file(content: str, filepath: str) -> None:
@@ -122,12 +144,19 @@ def _post_file(content: str, filepath: str) -> None:
     req = urllib.request.Request(
         WEBHOOK,
         data=body,
-        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        headers={
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "User-Agent": "macgyvbot-monitor/0.0.0",
+        },
+        method="POST",
     )
     try:
         urllib.request.urlopen(req, timeout=30)
     except Exception as exc:
-        print(f"[launch_monitor] 파일 전송 실패: {exc}", file=sys.stderr)
+        print(
+            f"[launch_monitor] 파일 전송 실패: {_format_post_error(exc)}",
+            file=sys.stderr,
+        )
         _post(content)
 
 
@@ -162,6 +191,8 @@ def main() -> None:
     error_count = 0
 
     host = os.uname().nodename
+    print(f"[launch_monitor] full log: {log_path}", file=sys.stderr)
+    print(f"[launch_monitor] signal log: {signal_path}", file=sys.stderr)
     _post(f"🚀 launch 시작 — `{host}` / 로그: `{log_path}`")
 
     with open(log_path, "w") as logf, open(signal_path, "w") as sigf:
@@ -200,6 +231,10 @@ def main() -> None:
 
     rc = proc.wait() if proc is not None else 0
     summary = "✅ 에러 없이 종료" if error_count == 0 else f"⚠️ 에러 {error_count}건"
+    print(
+        f"[launch_monitor] 종료: {summary} / full={log_path} / signal={signal_path}",
+        file=sys.stderr,
+    )
     _post_file(
         f"🏁 launch 종료 — `{host}` · {summary}",
         signal_path,
