@@ -3,7 +3,7 @@
 launch_monitor — ros2 launch 출력을 감시해 에러 줄을 Discord webhook으로 전송한다.
 전체 로그와 신호 로그(에러 + 수치값) 두 파일로 저장한다. 표준 라이브러리만 사용.
 
-저장 파일 (~/macgyvbot_monitor/macgyvbot_log/):
+저장 파일 (<패키지루트>/log/):
   launch_{stamp}.log         — 전체 로그 (블랙박스)
   launch_{stamp}_signal.log  — 에러 줄 + 수치값 줄만 추려낸 압축 로그
 
@@ -35,8 +35,9 @@ from urllib.error import HTTPError
 
 # ── 설정 (환경변수로 덮어쓸 수 있음) ─────────────────────────────────────────
 WEBHOOK = os.environ.get("DISCORD_WEBHOOK", "").strip()
-LOG_DIR = os.path.expanduser(
-    os.environ.get("MACGYVBOT_LOG_DIR", "~/macgyvbot_monitor/macgyvbot_log")
+LOG_DIR = os.environ.get(
+    "MACGYVBOT_LOG_DIR",
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "log"),
 )
 CONTEXT_LINES = int(os.environ.get("CONTEXT_LINES", "5"))
 COOLDOWN_SEC = float(os.environ.get("COOLDOWN_SEC", "10"))
@@ -111,35 +112,41 @@ def _post(content: str) -> None:
         print(f"[launch_monitor] 전송 실패: {_format_post_error(exc)}", file=sys.stderr)
 
 
-def _post_file(content: str, filepath: str) -> None:
-    """Discord webhook 파일 첨부 전송. 파일이 비어있거나 실패하면 텍스트만 전송한다."""
+def _post_files(content: str, *filepaths: str) -> None:
+    """Discord webhook 다중 파일 첨부 전송. 비어있는 파일은 건너뛰고, 실패하면 텍스트만 전송한다."""
     if not WEBHOOK:
         print("[launch_monitor] DISCORD_WEBHOOK 미설정 — 전송 생략", file=sys.stderr)
         return
     import urllib.request
 
-    try:
-        with open(filepath, "rb") as f:
-            file_data = f.read()
-    except Exception as exc:
-        print(f"[launch_monitor] 파일 읽기 실패: {exc}", file=sys.stderr)
+    loaded: list[tuple[str, bytes]] = []
+    for filepath in filepaths:
+        try:
+            with open(filepath, "rb") as f:
+                data = f.read()
+            if data.strip():
+                loaded.append((filepath, data))
+        except Exception as exc:
+            print(f"[launch_monitor] 파일 읽기 실패 ({filepath}): {exc}", file=sys.stderr)
+
+    if not loaded:
         _post(content)
         return
 
-    if not file_data.strip():
-        _post(content)
-        return
-
-    filename = os.path.basename(filepath)
     boundary = uuid.uuid4().hex
     body = (
         f"--{boundary}\r\n"
         f'Content-Disposition: form-data; name="content"\r\n\r\n'
         f"{content[:1900]}\r\n"
-        f"--{boundary}\r\n"
-        f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
-        f"Content-Type: text/plain; charset=utf-8\r\n\r\n"
-    ).encode("utf-8") + file_data + f"\r\n--{boundary}--\r\n".encode("utf-8")
+    ).encode("utf-8")
+    for i, (filepath, data) in enumerate(loaded):
+        filename = os.path.basename(filepath)
+        body += (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="file{i}"; filename="{filename}"\r\n'
+            f"Content-Type: text/plain; charset=utf-8\r\n\r\n"
+        ).encode("utf-8") + data + b"\r\n"
+    body += f"--{boundary}--\r\n".encode("utf-8")
 
     req = urllib.request.Request(
         WEBHOOK,
@@ -191,9 +198,7 @@ def main() -> None:
     error_count = 0
 
     host = os.uname().nodename
-    print(f"[launch_monitor] full log: {log_path}", file=sys.stderr)
-    print(f"[launch_monitor] signal log: {signal_path}", file=sys.stderr)
-    _post(f"🚀 launch 시작 — `{host}` / 로그: `{log_path}`")
+    _post("🚀 launch 시작")
 
     with open(log_path, "w") as logf, open(signal_path, "w") as sigf:
         try:
@@ -221,11 +226,7 @@ def main() -> None:
                     if now - last_sent >= COOLDOWN_SEC:
                         last_sent = now
                         ctx = "\n".join(recent)
-                        _post(
-                            f"❌ **launch 에러 감지** (`{host}`)\n"
-                            f"```\n{ctx}\n```\n"
-                            f"누적 에러 줄: {error_count} · 전체 로그: `{log_path}`"
-                        )
+                        _post(f"❌ 에러 감지\n```\n{ctx}\n```")
         except KeyboardInterrupt:
             pass
 
@@ -235,10 +236,8 @@ def main() -> None:
         f"[launch_monitor] 종료: {summary} / full={log_path} / signal={signal_path}",
         file=sys.stderr,
     )
-    _post_file(
-        f"🏁 launch 종료 — `{host}` · {summary}",
-        signal_path,
-    )
+    _post_files("전체 로그", log_path)
+    _post_files("에러 로그", signal_path)
     sys.exit(rc)
 
 
