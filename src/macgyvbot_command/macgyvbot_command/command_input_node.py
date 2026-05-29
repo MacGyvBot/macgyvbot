@@ -318,7 +318,6 @@ class CommandInputNode(Node):
         msg.raw_text = str(command.get('raw_text', ''))
         msg.match_method = str(command.get('match_method', 'unknown'))
         msg.confidence = float(command.get('confidence', 0.0))
-        msg.payload_json = json.dumps(command, ensure_ascii=False)
         return msg
 
     @staticmethod

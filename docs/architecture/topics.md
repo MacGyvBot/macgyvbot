@@ -17,6 +17,7 @@ typed request/response contract instead of a streamed topic.
 | --- | --- | --- | --- | --- |
 | `/stt_text` | `std_msgs/String` | `macgyvbot_ui` operator UI, optional STT source | `macgyvbot_command` | Plain recognized or typed text |
 | `/tool_command` | `macgyvbot_interfaces/msg/ToolCommand` | `macgyvbot_command` | `macgyvbot_task`, `macgyvbot_ui` | Tool command including `bring`, `return`, `release`, and idle-only `home` |
+| `/task_request` | `macgyvbot_interfaces/msg/TaskRequest` | `macgyvbot_task` main router | `macgyvbot_task` coordinator | Typed task execution request routed from command handling to task execution |
 | `/command_feedback` | `macgyvbot_interfaces/msg/CommandFeedback` | `macgyvbot_command` | `macgyvbot_command` TTS, `macgyvbot_ui` | Command interpretation feedback |
 | `/task_control` | `macgyvbot_interfaces/msg/RobotTaskControl` | `macgyvbot_command`, operator/manual tools | `macgyvbot_task` | `cancel` clears current work/queue and remains idle, while `exit` also returns Home and reports terminal status for UI shutdown |
 | `/command_shutdown` | `macgyvbot_interfaces/msg/CommandShutdown` | `macgyvbot_ui` | `macgyvbot_command` | UI lifecycle signal only; closes the headless command node without issuing robot task control |
@@ -56,8 +57,8 @@ typed request/response contract instead of a streamed topic.
 
 - Topic names should be defined in `macgyvbot_config.topics` when used by more
   than one package.
-- Command/status payload schemas must remain backward compatible unless a
-  dedicated migration issue changes them.
+- Command/task request contracts use typed message fields rather than
+  JSON-over-`std_msgs/String` payloads.
 - UI code should render topic payloads; it must not import command parser, STT,
   or TTS internals.
 - Command code should publish feedback/status payloads; it must not import GUI

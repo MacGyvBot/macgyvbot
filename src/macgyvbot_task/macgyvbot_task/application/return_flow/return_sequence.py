@@ -1,11 +1,8 @@
 """Return sequence step construction for receiving and storing a user-held tool."""
 
-import time
-
-import rclpy
-
-from macgyvbot_config.timing import SEQUENCE_WAIT_POLL_SEC
+from macgyvbot_config.return_flow import RETURN_PREPARE_GRIPPER_OPEN_WAIT_SEC
 from macgyvbot_manipulation.handover_targeting import move_to_observation_pose
+from macgyvbot_manipulation.timing import cooperative_wait
 from macgyvbot_task.application.return_flow.return_handoff_flow import (
     ReturnHandoffFlow,
 )
@@ -58,7 +55,7 @@ class ReturnSequenceRunner:
         self.reporter = ReturnStatusReporter(state)
         self.target_resolver = ReturnTargetResolver(
             state,
-            self._cooperative_wait,
+            cooperative_wait,
         )
         self.handoff = ReturnHandoffFlow(
             robot,
@@ -66,7 +63,7 @@ class ReturnSequenceRunner:
             gripper,
             state,
             self.reporter,
-            self._cooperative_wait,
+            cooperative_wait,
             tool_hold_monitor,
             interrupted=self._interrupted,
         )
@@ -76,7 +73,7 @@ class ReturnSequenceRunner:
             gripper,
             state,
             self.reporter,
-            self._cooperative_wait,
+            cooperative_wait,
             tool_hold_monitor,
             interrupted=self._interrupted,
         )
@@ -86,7 +83,7 @@ class ReturnSequenceRunner:
             gripper,
             state,
             self.reporter,
-            self._cooperative_wait,
+            cooperative_wait,
             tool_hold_monitor,
             interrupted=self._interrupted,
         )
@@ -173,7 +170,7 @@ class ReturnSequenceRunner:
             "그리퍼를 열고 사용자 hand-tool grasp 인식을 기다립니다."
         )
         self.gripper.open_gripper()
-        self._cooperative_wait(0.5)
+        cooperative_wait(RETURN_PREPARE_GRIPPER_OPEN_WAIT_SEC)
         return True
 
     def _receive_tool(self, context):
@@ -550,10 +547,3 @@ class ReturnSequenceRunner:
                 self.control_events.get("pause"),
             )
         )
-
-    @staticmethod
-    def _cooperative_wait(duration_sec):
-        end_time = time.monotonic() + max(0.0, float(duration_sec))
-        while rclpy.ok() and time.monotonic() < end_time:
-            remaining = end_time - time.monotonic()
-            time.sleep(min(SEQUENCE_WAIT_POLL_SEC, max(0.0, remaining)))

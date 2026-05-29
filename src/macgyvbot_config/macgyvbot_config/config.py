@@ -8,6 +8,7 @@ older imports keep working during the refactor.
 from macgyvbot_config.grasp import (
     GRASP_ADVANCE_DISTANCE_M,
     GRASP_RETRY_LIMIT,
+    GRASP_RETRY_WAIT_SEC,
     GRASP_VERIFY_POLL_SEC,
     GRASP_VERIFY_STABLE_COUNT,
     GRASP_VERIFY_TIMEOUT_SEC,
@@ -52,6 +53,8 @@ from macgyvbot_config.return_flow import (
     RETURN_HAND_CLOSE_ROI_WIDTH_RATIO,
     RETURN_HOME_DESCENT_STEP_M,
     RETURN_HOME_FORCE_THRESHOLD_N,
+    RETURN_PREPARE_GRIPPER_OPEN_WAIT_SEC,
+    RETURN_TOOL_RELEASE_WAIT_SEC,
 )
 from macgyvbot_config.robot import (
     BASE_FRAME,
@@ -61,7 +64,11 @@ from macgyvbot_config.robot import (
     OBSERVATION_JOINTS,
     WRIST_JOINT_NAME,
 )
-from macgyvbot_config.timing import SEQUENCE_WAIT_POLL_SEC
+from macgyvbot_config.timing import (
+    CAMERA_LOOP_IDLE_SLEEP_SEC,
+    SEQUENCE_WAIT_POLL_SEC,
+    TASK_QUEUE_STOP_POLL_SEC,
+)
 from macgyvbot_config.topics import (
     CAMERA_COLOR_TOPIC,
     CAMERA_DEPTH_TOPIC,

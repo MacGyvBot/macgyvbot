@@ -9,11 +9,9 @@ Runtime package-boundary topics use the message types in this package. Plain
 text operator/STT inputs and ROS sensor/image topics keep their native ROS
 types rather than being wrapped in custom messages.
 
-For migration compatibility, typed messages include `payload_json` where the
-legacy payload has extra fields, nested objects, or fields that are still being
-stabilized. Consumers should prefer typed fields when present and use
-`payload_json` as the compatibility escape hatch. Nested command objects are
-carried as `command_json` on command feedback and robot task status messages.
+Command and task request routing use typed fields only. Some status and
+perception messages still include `payload_json` or `command_json` for extended
+diagnostic details that do not define routing behavior.
 
 Nullable JSON values are represented by `has_*` flags plus a concrete typed
 value. Fixed image ROIs use `[x1, y1, x2, y2]` pixel arrays with a separate
@@ -24,6 +22,7 @@ value. Fixed image ROIs use `[x1, y1, x2, y2]` pixel arrays with a separate
 ```text
 msg/
   ToolCommand.msg
+  TaskRequest.msg
   CommandFeedback.msg
   RobotTaskStatus.msg
   RobotTaskControl.msg

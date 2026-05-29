@@ -13,19 +13,18 @@ import traceback
 
 import numpy as np
 import rclpy
-from ament_index_python.packages import get_package_share_directory
 from cv_bridge import CvBridge
 from geometry_msgs.msg import WrenchStamped
 from moveit.planning import MoveItPy, PlanRequestParameters
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from sensor_msgs.msg import CameraInfo, Image
-from std_msgs.msg import String
 
 from macgyvbot_interfaces.msg import (
     HumanGraspResult,
     RobotTaskControl,
     RobotTaskStatus,
+    TaskRequest,
     ToolDropEvent,
     ToolMaskLock,
 )
@@ -33,7 +32,10 @@ from macgyvbot_interfaces.msg import (
 from macgyvbot_config.drawer import DRAWER_OBSERVATION_J6_DEG
 from macgyvbot_config.models import YOLO_MODEL_NAME
 from macgyvbot_config.robot import GROUP_NAME, HOME_JOINTS, WRIST_JOINT_NAME
-from macgyvbot_config.timing import SEQUENCE_WAIT_POLL_SEC
+from macgyvbot_config.timing import (
+    CAMERA_LOOP_IDLE_SLEEP_SEC,
+    TASK_QUEUE_STOP_POLL_SEC,
+)
 from macgyvbot_config.topics import (
     CAMERA_COLOR_TOPIC,
     CAMERA_DEPTH_TOPIC,
@@ -61,6 +63,7 @@ from macgyvbot_manipulation.robot_pose import (
     get_ee_matrix,
     orientation_from_joint_positions,
 )
+from macgyvbot_manipulation.timing import cooperative_wait
 from macgyvbot_perception.depth_projection import DepthProjector
 from macgyvbot_perception.grasp_point.grasp_point_selector import (
     GraspPointSelector,
@@ -68,6 +71,7 @@ from macgyvbot_perception.grasp_point.grasp_point_selector import (
 )
 from macgyvbot_perception.pick_target_resolver import PickTargetResolver
 from macgyvbot_perception.yolo_detector import YoloDetector
+from macgyvbot_resources.calibration import resolve_calibration_file
 from macgyvbot_task.application import (
     RobotStatusPublisher,
     TaskRuntimeState,
@@ -203,7 +207,7 @@ class TaskCoordinatorNode(Node):
         if self.grasp_point_mode not in (GRASP_POINT_MODE_VLM, *VLM_ONLY_MODES):
             self.grasp_point_selector.preload_vlm_if_needed()
 
-        calib_file = self._resolve_calibration_file("T_gripper2camera.npy")
+        calib_file = resolve_calibration_file("T_gripper2camera.npy")
         self.gripper2cam = np.load(str(calib_file)).astype(float)
         self.gripper2cam[:3, 3] /= 1000.0
 
@@ -239,7 +243,7 @@ class TaskCoordinatorNode(Node):
             self.robot,
             self.motion,
             self.gripper,
-            self._cooperative_wait,
+            cooperative_wait,
             observation_orientation_provider=self._drawer_observation_orientation,
         )
         self.home_initializer = RobotHomeInitializer(
@@ -322,21 +326,6 @@ class TaskCoordinatorNode(Node):
             DRAWER_OBSERVATION_J6_DEG
         )
         return orientation_from_joint_positions(self.robot, joint_positions)
-
-    @staticmethod
-    def _resolve_calibration_file(filename):
-        try:
-            package_share = Path(
-                get_package_share_directory("macgyvbot_resources")
-            )
-            candidate = package_share / "calibration" / filename
-            if candidate.exists():
-                return candidate
-        except Exception:
-            pass
-
-        workspace_src = Path(__file__).resolve().parents[2]
-        return workspace_src / "macgyvbot_resources" / "calibration" / filename
 
     def _read_grasp_point_mode(self):
         self.declare_parameter("grasp_point_mode", DEFAULT_GRASP_POINT_MODE)
@@ -427,7 +416,12 @@ class TaskCoordinatorNode(Node):
         self.create_subscription(CameraInfo, CAMERA_INFO_TOPIC, self._cam_info_cb, 10)
         self.create_subscription(Image, CAMERA_COLOR_TOPIC, self._color_cb, 10)
         self.create_subscription(Image, CAMERA_DEPTH_TOPIC, self._depth_cb, 10)
-        self.create_subscription(String, TASK_REQUEST_TOPIC, self._task_request_cb, 10)
+        self.create_subscription(
+            TaskRequest,
+            TASK_REQUEST_TOPIC,
+            self._task_request_cb,
+            10,
+        )
         self.create_subscription(
             RobotTaskControl,
             ROBOT_TASK_CONTROL_TOPIC,
@@ -469,32 +463,18 @@ class TaskCoordinatorNode(Node):
         self.get_logger().info(f"grasp point mode: {self.grasp_point_mode}")
 
     def _task_request_cb(self, msg):
-        try:
-            payload = json.loads(msg.data)
-        except json.JSONDecodeError:
-            self.get_logger().warn(
-                f"{TASK_REQUEST_TOPIC} JSON 파싱 실패: {msg.data}"
-            )
-            self._publish_robot_status(
-                "rejected",
-                message="task request JSON을 해석하지 못했습니다.",
-                reason="invalid_task_request_json",
-            )
-            return
-
-        task = str(payload.get("task", "")).strip().lower()
+        task = str(msg.task or "").strip().lower()
         if task in ("bring", "pick"):
-            self._handle_bring_request(payload)
+            self._handle_bring_request(msg)
             return
         if task == "return":
-            command = payload.get("command") or {}
-            self.start_return_sequence(command)
+            self.start_return_sequence(self._task_request_command(msg))
             return
         if task == "release":
-            self._handle_release_request(payload)
+            self._handle_release_request(msg)
             return
         if task == "home":
-            self._handle_home_request(payload)
+            self._handle_home_request(msg)
             return
 
         self.get_logger().warn(f"지원하지 않는 task request: {task}")
@@ -502,13 +482,13 @@ class TaskCoordinatorNode(Node):
             "rejected",
             message="지원하지 않는 task request입니다.",
             reason="unsupported_task_request",
-            command=payload.get("command"),
+            command=self._task_request_command(msg),
         )
 
-    def _handle_bring_request(self, payload):
-        command = payload.get("command") or {}
+    def _handle_bring_request(self, request):
+        command = self._task_request_command(request)
         tool_name = (
-            payload.get("tool_name")
+            request.tool_name
             or command.get("tool_name")
             or "unknown"
         )
@@ -534,14 +514,14 @@ class TaskCoordinatorNode(Node):
             )
             return
 
-        if all(key in payload for key in ("bx", "by", "bz")):
+        if request.has_base_target:
             self.state.target_label = tool_name
             self.state.current_command = command
             self.start_pick_sequence(
-                float(payload["bx"]),
-                float(payload["by"]),
-                float(payload["bz"]),
-                payload.get("vlm_yaw_deg"),
+                request.bx,
+                request.by,
+                request.bz,
+                request.vlm_yaw_deg if request.has_vlm_yaw_deg else None,
             )
             return
 
@@ -566,9 +546,9 @@ class TaskCoordinatorNode(Node):
                 command=command,
             )
 
-    def _handle_release_request(self, payload):
-        command = payload.get("command") or {}
-        tool_name = command.get("tool_name", payload.get("tool_name", "unknown"))
+    def _handle_release_request(self, request):
+        command = self._task_request_command(request)
+        tool_name = command.get("tool_name", request.tool_name or "unknown")
         if self.is_running() or self.state.picking:
             self._publish_robot_status(
                 "busy",
@@ -590,9 +570,9 @@ class TaskCoordinatorNode(Node):
             command=command,
         )
 
-    def _handle_home_request(self, payload):
-        command = payload.get("command") or {}
-        tool_name = command.get("tool_name", payload.get("tool_name", "unknown"))
+    def _handle_home_request(self, request):
+        command = self._task_request_command(request)
+        tool_name = command.get("tool_name", request.tool_name or "unknown")
         if self.is_running() or self.state.picking:
             self._publish_robot_status(
                 "busy",
@@ -808,7 +788,7 @@ class TaskCoordinatorNode(Node):
     def _wait_for_task_queue_to_stop(self, logger, timeout_sec=3.0):
         deadline = time.monotonic() + timeout_sec
         while self.is_running() and time.monotonic() < deadline:
-            time.sleep(0.02)
+            time.sleep(TASK_QUEUE_STOP_POLL_SEC)
         if self.is_running():
             logger.warn("exit 요청 후 task queue 종료 대기 시간이 초과되었습니다.")
             return False
@@ -972,10 +952,6 @@ class TaskCoordinatorNode(Node):
         self._clear_task_state()
         self.exit_req.clear()
         self.resume_req.clear()
-
-    def clear_queue(self):
-        with self._queue_lock:
-            self._queue.clear()
 
     def is_running(self):
         with self._queue_lock:
@@ -1174,13 +1150,6 @@ class TaskCoordinatorNode(Node):
     def _motion_interrupted(self):
         return self.exit_req.is_set() or self.pause_req.is_set()
 
-    @staticmethod
-    def _cooperative_wait(duration_sec):
-        end_time = time.monotonic() + max(0.0, float(duration_sec))
-        while rclpy.ok() and time.monotonic() < end_time:
-            remaining = end_time - time.monotonic()
-            time.sleep(min(SEQUENCE_WAIT_POLL_SEC, max(0.0, remaining)))
-
     def _hand_grasp_cb(self, msg):
         result = self._human_grasp_payload(msg)
         result["_received_monotonic_sec"] = time.monotonic()
@@ -1227,7 +1196,7 @@ class TaskCoordinatorNode(Node):
 
         while rclpy.ok():
             if not self.frame_processor.has_camera_state():
-                time.sleep(0.01)
+                time.sleep(CAMERA_LOOP_IDLE_SLEEP_SEC)
                 continue
 
             if self.state.picking:
@@ -1298,6 +1267,18 @@ class TaskCoordinatorNode(Node):
         )
         msg.payload_json = json.dumps(payload, ensure_ascii=False)
         self.tool_drop_pub.publish(msg)
+
+    @staticmethod
+    def _task_request_command(msg):
+        command = msg.command
+        return {
+            "action": command.action,
+            "tool_name": command.tool_name,
+            "target_mode": command.target_mode,
+            "raw_text": command.raw_text,
+            "match_method": command.match_method,
+            "confidence": command.confidence,
+        }
 
     @staticmethod
     def _tool_drop_payload(msg):

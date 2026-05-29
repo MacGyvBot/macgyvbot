@@ -341,16 +341,14 @@ class OperatorUiNode(Node):
 
     @staticmethod
     def _tool_command_payload(msg):
-        payload = json.loads(msg.payload_json) if msg.payload_json else {}
-        payload.update({
+        return {
             'action': msg.action,
             'tool_name': msg.tool_name,
             'target_mode': msg.target_mode,
             'raw_text': msg.raw_text,
             'match_method': msg.match_method,
             'confidence': msg.confidence,
-        })
-        return payload
+        }
 
     @staticmethod
     def _feedback_payload(msg):

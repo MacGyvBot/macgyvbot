@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import sys
 import threading
-import time
 
 import rclpy
 from moveit.planning import MoveItPy, PlanRequestParameters
@@ -23,6 +22,7 @@ from macgyvbot_config.topics import DRAWER_COMMAND_TOPIC
 from macgyvbot_manipulation.drawer_motion import DrawerMotionFlow
 from macgyvbot_manipulation.moveit_controller import MoveItController
 from macgyvbot_manipulation.onrobot_gripper import RG
+from macgyvbot_manipulation.timing import cooperative_wait
 
 
 DEFAULT_GRIPPER_IP = "192.168.1.1"
@@ -60,7 +60,7 @@ class DrawerMotionTestNode(Node):
             self.robot,
             self.motion,
             self.gripper,
-            self._cooperative_wait,
+            cooperative_wait,
             dry_run=self.dry_run,
         )
         self._busy_lock = threading.Lock()
@@ -141,13 +141,6 @@ class DrawerMotionTestNode(Node):
 
         log.info("drawer motion test 완료")
         return True
-
-    @staticmethod
-    def _cooperative_wait(duration_sec):
-        end_time = time.monotonic() + max(0.0, float(duration_sec))
-        while rclpy.ok() and time.monotonic() < end_time:
-            remaining = end_time - time.monotonic()
-            time.sleep(min(0.02, max(0.0, remaining)))
 
     def _create_gripper(self):
         if self.dry_run:
