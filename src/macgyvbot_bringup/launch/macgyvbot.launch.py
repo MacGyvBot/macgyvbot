@@ -1,6 +1,8 @@
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, EmitEvent, RegisterEventHandler
 from launch.conditions import IfCondition
+from launch.event_handlers import OnProcessExit
+from launch.events import Shutdown
 from launch.substitutions import LaunchConfiguration
 from launch.substitutions import PathJoinSubstitution
 from launch_ros.actions import Node
@@ -69,6 +71,46 @@ def generate_launch_description():
 
     moveit_py_params = PathJoinSubstitution(
         [bringup_share, "config", "moveit_py.yaml"]
+    )
+
+    command_input_node = Node(
+        package="macgyvbot_command",
+        executable="command_input_node",
+        name="command_input_node",
+        output="screen",
+        parameters=[
+            {
+                "enable_microphone": use_stt,
+                "enable_tts": use_tts,
+                "tts_engine": tts_engine,
+                "tts_voice": tts_voice,
+                "tts_edge_rate": tts_edge_rate,
+                "tts_pitch": tts_pitch,
+                "tts_timeout_sec": tts_timeout_sec,
+                "model": llm_model,
+                "use_local_parser": True,
+                "use_llm_fallback": True,
+                "parser_mode": parser_mode,
+                "timeout_sec": llm_timeout_sec,
+                "min_confidence": 0.55,
+            },
+        ],
+        condition=IfCondition(use_voice_command),
+    )
+
+    operator_ui_node = Node(
+        package="macgyvbot_ui",
+        executable="operator_ui_node",
+        name="operator_ui_node",
+        output="screen",
+        parameters=[
+            {
+                "camera_status_topic": CAMERA_COLOR_TOPIC,
+                "detector_image_topic": detector_image_topic,
+                "robot_status_topic": ROBOT_STATUS_TOPIC,
+            },
+        ],
+        condition=IfCondition(use_voice_command),
     )
 
     return LaunchDescription(
@@ -219,43 +261,19 @@ def generate_launch_description():
                     },
                 ],
             ),
-            Node(
-                package="macgyvbot_command",
-                executable="command_input_node",
-                name="command_input_node",
-                output="screen",
-                parameters=[
-                    {
-                        "enable_microphone": use_stt,
-                        "enable_tts": use_tts,
-                        "tts_engine": tts_engine,
-                        "tts_voice": tts_voice,
-                        "tts_edge_rate": tts_edge_rate,
-                        "tts_pitch": tts_pitch,
-                        "tts_timeout_sec": tts_timeout_sec,
-                        "model": llm_model,
-                        "use_local_parser": True,
-                        "use_llm_fallback": True,
-                        "parser_mode": parser_mode,
-                        "timeout_sec": llm_timeout_sec,
-                        "min_confidence": 0.55,
-                    },
-                ],
-                condition=IfCondition(use_voice_command),
-            ),
-            Node(
-                package="macgyvbot_ui",
-                executable="operator_ui_node",
-                name="operator_ui_node",
-                output="screen",
-                parameters=[
-                    {
-                        "camera_status_topic": CAMERA_COLOR_TOPIC,
-                        "detector_image_topic": detector_image_topic,
-                        "robot_status_topic": ROBOT_STATUS_TOPIC,
-                    },
-                ],
-                condition=IfCondition(use_voice_command),
+            command_input_node,
+            operator_ui_node,
+            RegisterEventHandler(
+                OnProcessExit(
+                    target_action=operator_ui_node,
+                    on_exit=[
+                        EmitEvent(
+                            event=Shutdown(
+                                reason="operator_ui_node exited",
+                            )
+                        )
+                    ],
+                )
             ),
         ]
     )

@@ -700,8 +700,6 @@ class OperatorUiNode(Node):
             'done',
             'completed',
             'success',
-            'failed',
-            'error',
             'busy',
             'paused',
             'resumed',
