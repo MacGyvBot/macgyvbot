@@ -265,7 +265,7 @@ class CommandInputNode(Node):
         msg.source = 'command_input'
         self._task_control_pub.publish(msg)
         self.get_logger().info(
-            f'/robot_task_control 발행: action={action}, reason={reason}'
+            f'{ROBOT_TASK_CONTROL_TOPIC} 발행: action={action}, reason={reason}'
         )
 
     def _shutdown_cb(self, msg):

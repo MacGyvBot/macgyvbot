@@ -196,6 +196,11 @@ def generate_launch_description():
                 package="macgyvbot_task",
                 executable="macgyvbot",
                 output="screen",
+            ),
+            Node(
+                package="macgyvbot_task",
+                executable="task_coordinator_node",
+                output="screen",
                 parameters=[
                     moveit_config.to_dict(),
                     moveit_py_params,

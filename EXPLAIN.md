@@ -15,14 +15,17 @@ ROS 패키지가 아니라 colcon workspace root이며, 실행 entrypoint는
   - `moveit_py.yaml` 같은 launch/runtime YAML을 설치합니다.
 
 - `src/macgyvbot_task`
-  - `macgyvbot_main_node.py`와 pick/return application workflow를 소유합니다.
-  - `/tool_command`, `/robot_task_control`, 카메라 입력, hand grasp 결과를 받아
+  - `macgyvbot_main_node.py`는 `/tool_command`를 `/task_request`로 넘기는
+    경량 command router를 소유합니다.
+  - `task_coordinator_node.py`는 pick/return application workflow, MoveIt/RG2
+    실행 리소스, task queue, `/task_control` 처리를 소유합니다.
+  - `/task_request`, `/task_control`, 카메라 입력, hand grasp 결과를 받아
     task queue 기반 로봇 작업 시퀀스를 실행합니다.
   - `/robot_task_status`와 `/tool_drop_detected`를 발행합니다.
 
 - `src/macgyvbot_command`
   - headless command input node, command parser, STT/TTS helper를 소유합니다.
-  - `/stt_text`를 입력으로 받아 `/tool_command`, `/robot_task_control`,
+  - `/stt_text`를 입력으로 받아 `/tool_command`, `/task_control`,
     `/command_feedback`를 발행합니다.
 
 - `src/macgyvbot_perception`
@@ -53,8 +56,8 @@ ROS 패키지가 아니라 colcon workspace root이며, 실행 entrypoint는
   - 패키지 내부 `calibration/`, `weights/`, `weights/vlm/` asset 설치를 소유합니다.
 
 - `src/macgyvbot_interfaces`
-  - package 경계를 넘는 typed ROS message 계약을 소유합니다.
-  - command/status/control/perception 구조화 topic은 이 message 타입을 사용합니다.
+  - typed ROS message migration target을 소유합니다.
+  - 현재 runtime은 호환성을 위해 JSON over `std_msgs/String`을 유지합니다.
 
 - `src/macgyvbot_ui`
   - operator-facing GUI boundary를 소유합니다.
@@ -68,8 +71,8 @@ macgyvbot_command.command_input_node
   -> /stt_text 또는 마이크 STT 입력 수집
   -> command parser로 자연어 명령 해석
   -> bring/return은 /tool_command로 발행
-  -> pause/resume/cancel은 /robot_task_control로 발행
-  -> 최신 exit 요청은 /robot_task_control의 exit action으로 발행
+  -> stop/pause/resume은 /task_control로 발행
+  -> 최신 exit 요청은 /task_control의 exit action으로 발행
   -> /command_feedback 발행
 
 macgyvbot_ui.operator_ui_node
@@ -78,12 +81,18 @@ macgyvbot_ui.operator_ui_node
   -> operator GUI에 채팅, 상태, detector view 표시
 
 macgyvbot_task.macgyvbot_main_node
-  -> /tool_command, /robot_task_control 또는 수동 /target_label 수신
+  -> /tool_command 또는 수동 /target_label 수신
+  -> bring/return/release/home 요청을 /task_request로 발행
+  -> /robot_task_status를 구독해 task busy 상태 추적
+
+macgyvbot_task.task_coordinator_node
+  -> /task_request와 /task_control 수신
   -> RealSense color/depth 기반 YOLO 탐지
   -> grasp point 선택
   -> depth pixel을 robot base 좌표로 투영
   -> PickSequenceRunner 또는 ReturnSequenceRunner가 TaskStep queue 구성
-  -> TaskControlCoordinator가 queue를 순차 실행
+  -> 내부 queue에서 TaskStep을 하나씩 꺼내 worker thread로 순차 실행
+  -> pause/resume/exit, MoveIt goal cancel, exit 후 Home 복귀 처리
   -> /robot_task_status 발행
 
 macgyvbot_perception.hand_grasp_detection_node
@@ -95,19 +104,19 @@ macgyvbot_perception.hand_grasp_detection_node
 ## Task Queue and Safety Control
 
 - `bring`과 `return` 명령은 즉시 긴 blocking flow를 직접 실행하지 않고,
-  `TaskStep` 목록으로 변환된 뒤 `TaskControlCoordinator`의 worker thread에서
-  순차 실행됩니다.
-- `/robot_task_control`은 실행 중인 queue에 `pause`, `resume`, `cancel`, `exit`을 적용합니다.
-- `cancel`은 현재 MoveIt trajectory goal을 cancel하고 대기 중인 step queue를 비운 뒤
-  Home 복귀와 GUI 종료 없이 다음 명령을 기다립니다.
-- 최신 구현에서는 `exit` action이 task queue를 종료하고 MoveIt goal을 cancel한 뒤
-  Home joint pose로 복귀하며, 복귀 성공 후 OnRobot RG2 그리퍼를 open합니다.
+  `/task_request`로 `task_coordinator_node.py`에 전달됩니다.
+- `task_coordinator_node.py`는 요청을 받아 `TaskStep` 목록을 구성하고, 내부 queue에
+  적재한 뒤 worker thread에서 한 step씩 순차 실행합니다.
+- `/task_control`은 실행 중인 queue에 `pause`, `resume`, `exit`을 적용합니다.
+- `exit` action은 task queue를 종료하고 MoveIt goal을 cancel한 뒤 Home joint pose로
+  복귀하며, 복귀 성공 후 OnRobot RG2 그리퍼를 open합니다.
 - `pause`는 현재 MoveIt trajectory goal을 cancel하지만 대기 중인 queue는 유지합니다.
   pause로 중단된 retry 가능 step은 queue 앞에 다시 들어가고, `resume` 이후 계속됩니다.
-- `/tool_drop_detected`의 `event=tool_dropped` payload는 자동 `stop`으로 해석합니다.
+- `/tool_drop_detected`의 `event=tool_dropped` payload는 자동 `exit`으로 해석합니다.
   이때 queue clear와 MoveIt goal cancel은 수행하되 `/robot_task_status`의
   `tool_dropped` 상태가 `cancelled`로 덮이지 않도록 처리합니다.
-- 최신 구현에서는 `tool_dropped`도 내부적으로 `exit` 제어 흐름을 사용합니다.
+- pick flow의 `build_steps()`는 queue에 넣을 step 목록만 구성합니다. target planning,
+  VLM refine, MoveIt motion, gripper 동작은 각 `TaskStep` 실행 시점에 수행됩니다.
 
 ## Assets
 
