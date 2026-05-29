@@ -1,12 +1,9 @@
 # Robot task progress and UI status.
-# task is optional and should be empty when the JSON payload does not publish it.
-# command_json preserves the originating command payload during migration.
-# payload_json preserves the complete existing JSON status shape during migration.
+# task is optional and should be empty when the status is not tied to a task.
 string status
 string task
 string tool_name
 string action
 string message
 string reason
-string command_json
-string payload_json
+macgyvbot_interfaces/ToolCommand command

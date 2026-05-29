@@ -4,7 +4,6 @@ This node owns PyQt widgets and presentation logic only.  It communicates with
 the command, task, and perception packages through ROS topics.
 """
 
-import json
 import signal
 import sys
 import threading
@@ -12,18 +11,20 @@ import threading
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
-from std_msgs.msg import String
 
 from macgyvbot_config.topics import (
     CAMERA_COLOR_TOPIC,
+    COMMAND_FEEDBACK_TOPIC,
     COMMAND_SHUTDOWN_TOPIC,
     HAND_GRASP_IMAGE_TOPIC,
     ROBOT_STATUS_TOPIC,
+    STT_TEXT_TOPIC,
     TOOL_COMMAND_TOPIC,
 )
 from macgyvbot_interfaces.msg import (
     CommandFeedback,
     CommandShutdown,
+    CommandText,
     RobotTaskStatus,
     ToolCommand,
 )
@@ -38,9 +39,9 @@ class OperatorUiNode(Node):
     def __init__(self):
         super().__init__('operator_ui_node')
 
-        self.declare_parameter('stt_text_topic', '/stt_text')
+        self.declare_parameter('stt_text_topic', STT_TEXT_TOPIC)
         self.declare_parameter('tool_command_topic', TOOL_COMMAND_TOPIC)
-        self.declare_parameter('command_feedback_topic', '/command_feedback')
+        self.declare_parameter('command_feedback_topic', COMMAND_FEEDBACK_TOPIC)
         self.declare_parameter('robot_status_topic', ROBOT_STATUS_TOPIC)
         self.declare_parameter('camera_status_topic', CAMERA_COLOR_TOPIC)
         self.declare_parameter('detector_image_topic', HAND_GRASP_IMAGE_TOPIC)
@@ -77,6 +78,7 @@ class OperatorUiNode(Node):
         self._last_connection_text = ''
         self._last_robot_status_key = None
         self._last_robot_log_key = None
+        self._robot_status_topic = robot_status_topic
         self._self_published = {}
         self._self_pub_lock = threading.Lock()
         self._robot_node_names = {
@@ -91,13 +93,13 @@ class OperatorUiNode(Node):
             float(self.get_parameter('detector_timeout_sec').value) * 1_000_000_000
         )
 
-        self._stt_pub = self.create_publisher(String, stt_text_topic, 10)
+        self._stt_pub = self.create_publisher(CommandText, stt_text_topic, 10)
         self._command_shutdown_pub = self.create_publisher(
             CommandShutdown,
             COMMAND_SHUTDOWN_TOPIC,
             10,
         )
-        self.create_subscription(String, stt_text_topic, self._text_cb, 10)
+        self.create_subscription(CommandText, stt_text_topic, self._text_cb, 10)
         self.create_subscription(
             ToolCommand, tool_command_topic, self._tool_command_cb, 10
         )
@@ -141,8 +143,9 @@ class OperatorUiNode(Node):
             return
 
         self._mark_self_published(text)
-        msg = String()
-        msg.data = text
+        msg = CommandText()
+        msg.text = text
+        msg.source = 'operator_ui'
         self._stt_pub.publish(msg)
 
     def _mark_self_published(self, text):
@@ -161,7 +164,7 @@ class OperatorUiNode(Node):
             return True
 
     def _text_cb(self, msg):
-        text = (msg.data or '').strip()
+        text = (msg.text or '').strip()
         if not text:
             return
 
@@ -352,31 +355,25 @@ class OperatorUiNode(Node):
 
     @staticmethod
     def _feedback_payload(msg):
-        payload = json.loads(msg.payload_json) if msg.payload_json else {}
-        payload.update({
+        return {
             'status': msg.status,
             'reason': msg.reason,
             'message': msg.message,
             'raw_text': msg.raw_text,
-        })
-        if msg.command_json:
-            payload['command'] = json.loads(msg.command_json)
-        return payload
+            'command': OperatorUiNode._tool_command_payload(msg.command),
+        }
 
     @staticmethod
     def _robot_status_payload(msg):
-        payload = json.loads(msg.payload_json) if msg.payload_json else {}
-        payload.update({
+        return {
             'status': msg.status,
             'task': msg.task,
             'tool_name': msg.tool_name,
             'action': msg.action,
             'message': msg.message,
             'reason': msg.reason,
-        })
-        if msg.command_json:
-            payload['command'] = json.loads(msg.command_json)
-        return payload
+            'command': OperatorUiNode._tool_command_payload(msg.command),
+        }
 
     def _handle_exit_status(self, status, state):
         if not self._exit_pending:
@@ -434,7 +431,9 @@ class OperatorUiNode(Node):
     def _robot_connection_text(self):
         node_names = set(self.get_node_names())
         robot_node_alive = bool(node_names & self._robot_node_names)
-        status_publishers = self.get_publishers_info_by_topic('/robot_task_status')
+        status_publishers = self.get_publishers_info_by_topic(
+            self._robot_status_topic
+        )
 
         if robot_node_alive or status_publishers:
             return '실행 중'

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 from collections import deque
-import json
 import math
 from pathlib import Path
 import threading
@@ -25,6 +24,7 @@ from macgyvbot_interfaces.msg import (
     RobotTaskControl,
     RobotTaskStatus,
     TaskRequest,
+    ToolCommand,
     ToolDropEvent,
     ToolMaskLock,
 )
@@ -45,7 +45,7 @@ from macgyvbot_config.topics import (
     HAND_GRASP_MASK_LOCK_TOPIC,
     HAND_GRASP_TOPIC,
     ROBOT_STATUS_TOPIC,
-    ROBOT_TASK_CONTROL_TOPIC,
+    TASK_CONTROL_TOPIC,
     TASK_REQUEST_TOPIC,
     TOOL_DROP_TOPIC,
 )
@@ -424,7 +424,7 @@ class TaskCoordinatorNode(Node):
         )
         self.create_subscription(
             RobotTaskControl,
-            ROBOT_TASK_CONTROL_TOPIC,
+            TASK_CONTROL_TOPIC,
             self._task_control_cb,
             10,
         )
@@ -457,7 +457,7 @@ class TaskCoordinatorNode(Node):
     def _log_startup(self):
         self.get_logger().info("task coordinator node 초기화 완료")
         self.get_logger().info(f"task request 토픽: {TASK_REQUEST_TOPIC}")
-        self.get_logger().info(f"task control 토픽: {ROBOT_TASK_CONTROL_TOPIC}")
+        self.get_logger().info(f"task control 토픽: {TASK_CONTROL_TOPIC}")
         self.get_logger().info(f"robot status 토픽: {ROBOT_STATUS_TOPIC}")
         self.get_logger().info(f"YOLO model: {self.yolo_model}")
         self.get_logger().info(f"grasp point mode: {self.grasp_point_mode}")
@@ -1240,11 +1240,7 @@ class TaskCoordinatorNode(Node):
         msg.action = str(payload.get("action", "unknown"))
         msg.message = str(payload.get("message", ""))
         msg.reason = str(payload.get("reason", ""))
-        command = payload.get("command")
-        msg.command_json = (
-            json.dumps(command, ensure_ascii=False) if command is not None else ""
-        )
-        msg.payload_json = json.dumps(payload, ensure_ascii=False)
+        msg.command = self._tool_command_message(payload.get("command") or {})
         self.robot_status_pub.publish(msg)
 
     def _publish_tool_drop_payload(self, payload):
@@ -1256,17 +1252,20 @@ class TaskCoordinatorNode(Node):
         width_mm = payload.get("width_mm")
         msg.has_width_mm = width_mm is not None
         msg.width_mm = float(width_mm) if width_mm is not None else 0.0
-        status = payload.get("status")
-        msg.gripper_status_json = (
-            json.dumps(status, ensure_ascii=False) if status is not None else ""
-        )
         msg.error = str(payload.get("error", ""))
-        command = payload.get("command")
-        msg.command_json = (
-            json.dumps(command, ensure_ascii=False) if command is not None else ""
-        )
-        msg.payload_json = json.dumps(payload, ensure_ascii=False)
+        msg.command = self._tool_command_message(payload.get("command") or {})
         self.tool_drop_pub.publish(msg)
+
+    @staticmethod
+    def _tool_command_message(command):
+        msg = ToolCommand()
+        msg.action = str(command.get("action", "unknown"))
+        msg.tool_name = str(command.get("tool_name", "unknown"))
+        msg.target_mode = str(command.get("target_mode", "unknown"))
+        msg.raw_text = str(command.get("raw_text", ""))
+        msg.match_method = str(command.get("match_method", "unknown"))
+        msg.confidence = float(command.get("confidence", 0.0))
+        return msg
 
     @staticmethod
     def _task_request_command(msg):
@@ -1282,44 +1281,65 @@ class TaskCoordinatorNode(Node):
 
     @staticmethod
     def _tool_drop_payload(msg):
-        payload = json.loads(msg.payload_json) if msg.payload_json else {}
-        payload.update(
-            {
-                "event": msg.event,
-                "tool_name": msg.tool_name,
-                "action": msg.action,
-                "reason": msg.reason,
-            }
-        )
+        payload = {
+            "event": msg.event,
+            "tool_name": msg.tool_name,
+            "action": msg.action,
+            "reason": msg.reason,
+            "command": TaskCoordinatorNode._tool_command_payload(msg.command),
+        }
         if msg.has_width_mm:
             payload["width_mm"] = msg.width_mm
-        if msg.gripper_status_json:
-            payload["status"] = json.loads(msg.gripper_status_json)
         if msg.error:
             payload["error"] = msg.error
-        if msg.command_json:
-            payload["command"] = json.loads(msg.command_json)
         return payload
 
     @staticmethod
     def _human_grasp_payload(msg):
-        payload = json.loads(msg.payload_json) if msg.payload_json else {}
-        payload.update(
-            {
-                "state": msg.state,
-                "human_grasped_tool": msg.human_grasped_tool,
-                "grasp_counter": msg.grasp_counter,
-                "grasp_score": msg.grasp_score,
-                "ml_raw_state": msg.ml_raw_state,
-                "ml_stable_state": msg.ml_stable_state,
-                "ml_grasp_confirmed": msg.ml_grasp_confirmed,
-                "depth_grasp_confirmed": msg.depth_grasp_confirmed,
-                "mask_locked": msg.mask_locked,
-                "mask_source": msg.mask_source,
-            }
+        payload = {
+            "state": msg.state,
+            "hand_present": msg.hand_present,
+            "human_grasped_tool": msg.human_grasped_tool,
+            "grasp_counter": msg.grasp_counter,
+            "grasp_score": msg.grasp_score,
+            "ml_required": msg.ml_required,
+            "ml_grasp_confirmed": msg.ml_grasp_confirmed,
+            "ml_confidence_ok": msg.ml_confidence_ok,
+            "ml_raw_state": msg.ml_raw_state,
+            "ml_stable_state": msg.ml_stable_state,
+            "depth_required": msg.depth_required,
+            "depth_available": msg.depth_available,
+            "depth_grasp_ok": msg.depth_grasp_ok,
+            "depth_grasp_confirmed": msg.depth_grasp_confirmed,
+            "depth_contact_count": msg.depth_contact_count,
+            "mask_locked": msg.mask_locked,
+            "locked_mask_grasp_ok": msg.locked_mask_grasp_ok,
+            "mask_contact_confirmed": msg.mask_contact_confirmed,
+            "mask_proximity_ok": msg.mask_proximity_ok,
+            "mask_near_or_contact": msg.mask_near_or_contact,
+            "mask_source": msg.mask_source,
+            "mask_contact_count": msg.mask_contact_count,
+        }
+        payload["ml_confidence"] = (
+            msg.ml_confidence if msg.has_ml_confidence else None
+        )
+        payload["tool_depth_mm"] = (
+            msg.tool_depth_mm if msg.has_tool_depth_mm else None
+        )
+        payload["min_hand_tool_depth_diff_mm"] = (
+            msg.min_hand_tool_depth_diff_mm
+            if msg.has_min_hand_tool_depth_diff_mm
+            else None
+        )
+        payload["min_landmark_to_tool_distance"] = (
+            msg.min_landmark_to_tool_distance
+            if msg.has_min_landmark_to_tool_distance
+            else None
         )
         if msg.has_tool_label:
             payload["tool_label"] = msg.tool_label
+        if msg.has_tool_confidence:
+            payload["tool_confidence"] = msg.tool_confidence
         if msg.has_tool_roi:
             payload["tool_roi"] = list(msg.tool_roi)
         if msg.has_hand_pixel:
@@ -1328,21 +1348,33 @@ class TaskCoordinatorNode(Node):
                 "v": msg.hand_v,
                 "source": msg.hand_pixel_source,
             }
+        if msg.has_active_hand_index:
+            payload["active_hand_index"] = msg.active_hand_index
+        if msg.has_active_handedness:
+            payload["active_handedness"] = msg.active_handedness
         return payload
 
     @staticmethod
     def _tool_mask_payload(msg):
-        payload = json.loads(msg.payload_json) if msg.payload_json else {}
-        payload.update(
-            {
-                "locked": msg.locked,
-                "mask_source": msg.mask_source,
-                "tool_roi": list(msg.tool_roi) if msg.has_tool_roi else None,
-            }
-        )
+        payload = {
+            "locked": msg.locked,
+            "mask_source": msg.mask_source,
+            "tool_roi": list(msg.tool_roi) if msg.has_tool_roi else None,
+        }
         if msg.has_reason:
             payload["reason"] = msg.reason
         return payload
+
+    @staticmethod
+    def _tool_command_payload(msg):
+        return {
+            "action": msg.action,
+            "tool_name": msg.tool_name,
+            "target_mode": msg.target_mode,
+            "raw_text": msg.raw_text,
+            "match_method": msg.match_method,
+            "confidence": msg.confidence,
+        }
 
 
 def main():

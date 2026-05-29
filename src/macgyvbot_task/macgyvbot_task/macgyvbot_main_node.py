@@ -3,11 +3,8 @@
 
 from __future__ import annotations
 
-import json
-
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import String
 
 from macgyvbot_config.topics import (
     ROBOT_STATUS_TOPIC,
@@ -88,7 +85,6 @@ class MacGyvBotNode(Node):
             move_home=self._request_home,
         )
 
-        self.create_subscription(String, "/target_label", self._target_label_cb, 10)
         self.create_subscription(
             ToolCommand,
             TOOL_COMMAND_TOPIC,
@@ -106,12 +102,6 @@ class MacGyvBotNode(Node):
         self.get_logger().info(f"공구 명령 토픽: {TOOL_COMMAND_TOPIC}")
         self.get_logger().info(f"task request 토픽: {TASK_REQUEST_TOPIC}")
         self.get_logger().info(f"로봇 상태 토픽: {ROBOT_STATUS_TOPIC}")
-
-    def _target_label_cb(self, msg):
-        val = msg.data.strip()
-        if not val:
-            return
-        self.task_controller.handle_target_label(val, source="/target_label")
 
     def _tool_command_cb(self, msg):
         command = self._tool_command_payload(msg)
@@ -230,10 +220,7 @@ class MacGyvBotNode(Node):
         )
 
     def _robot_status_cb(self, msg):
-        try:
-            payload = self._robot_status_payload(msg)
-        except json.JSONDecodeError:
-            return
+        payload = self._robot_status_payload(msg)
 
         action = str(payload.get("action", "")).strip().lower()
         status = str(payload.get("status", payload.get("state", ""))).strip().lower()
@@ -282,11 +269,7 @@ class MacGyvBotNode(Node):
         msg.action = str(payload.get("action", "unknown"))
         msg.message = str(payload.get("message", ""))
         msg.reason = str(payload.get("reason", ""))
-        command = payload.get("command")
-        msg.command_json = (
-            json.dumps(command, ensure_ascii=False) if command is not None else ""
-        )
-        msg.payload_json = json.dumps(payload, ensure_ascii=False)
+        msg.command = self._tool_command_message(payload.get("command") or {})
         self.robot_status_pub.publish(msg)
 
     @staticmethod
@@ -313,20 +296,15 @@ class MacGyvBotNode(Node):
 
     @staticmethod
     def _robot_status_payload(msg):
-        payload = json.loads(msg.payload_json) if msg.payload_json else {}
-        payload.update(
-            {
-                "status": msg.status,
-                "task": msg.task,
-                "tool_name": msg.tool_name,
-                "action": msg.action,
-                "message": msg.message,
-                "reason": msg.reason,
-            }
-        )
-        if msg.command_json:
-            payload["command"] = json.loads(msg.command_json)
-        return payload
+        return {
+            "status": msg.status,
+            "task": msg.task,
+            "tool_name": msg.tool_name,
+            "action": msg.action,
+            "message": msg.message,
+            "reason": msg.reason,
+            "command": MacGyvBotNode._tool_command_payload(msg.command),
+        }
 
 
 def main():
