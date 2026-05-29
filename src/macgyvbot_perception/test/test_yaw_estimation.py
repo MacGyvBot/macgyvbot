@@ -61,7 +61,7 @@ def test_estimate_yaw_from_mask_horizontal_rectangle():
     yaw_deg, debug = estimate_yaw_from_mask(mask)
 
     assert debug["success"] is True
-    assert abs(yaw_deg) < 1.0
+    assert math.isclose(abs(yaw_deg), 90.0, abs_tol=1.0)
 
 
 def test_estimate_yaw_from_mask_vertical_rectangle():
@@ -71,7 +71,7 @@ def test_estimate_yaw_from_mask_vertical_rectangle():
     yaw_deg, debug = estimate_yaw_from_mask(mask)
 
     assert debug["success"] is True
-    assert math.isclose(abs(yaw_deg), 90.0, abs_tol=1.0)
+    assert abs(yaw_deg) < 1.0
 
 
 def test_estimate_yaw_from_mask_positive_diagonal():
@@ -80,7 +80,7 @@ def test_estimate_yaw_from_mask_positive_diagonal():
     yaw_deg, debug = estimate_yaw_from_mask(mask)
 
     assert debug["success"] is True
-    assert 35.0 <= yaw_deg <= 55.0
+    assert -55.0 <= yaw_deg <= -35.0
 
 
 def test_estimate_yaw_from_mask_negative_diagonal():
@@ -89,7 +89,7 @@ def test_estimate_yaw_from_mask_negative_diagonal():
     yaw_deg, debug = estimate_yaw_from_mask(mask)
 
     assert debug["success"] is True
-    assert -55.0 <= yaw_deg <= -35.0
+    assert 35.0 <= yaw_deg <= 55.0
 
 
 def test_estimate_yaw_from_mask_rejects_small_mask():
@@ -183,7 +183,7 @@ def test_apply_pca_yaw_to_grasp_result_overrides_yaw_with_multi_frame_pca():
     assert debug["multi_frame_debug"]["success"] is True
     assert result["confidence"] == 0.82
     assert result["reason"] == "sturdy visible handle"
-    assert 30.0 <= result["yaw_deg"] <= 50.0
+    assert -50.0 <= result["yaw_deg"] <= -30.0
 
 
 def test_apply_pca_yaw_to_grasp_result_single_frame_fallback():
@@ -209,7 +209,7 @@ def test_apply_pca_yaw_to_grasp_result_single_frame_fallback():
     )
 
     assert debug["fallback_source"] == "single_frame_pca"
-    assert -45.0 <= result["yaw_deg"] <= -25.0
+    assert 25.0 <= result["yaw_deg"] <= 45.0
 
 
 def test_apply_pca_yaw_to_grasp_result_falls_back_to_vlm_yaw():
@@ -252,7 +252,7 @@ def test_apply_pca_yaw_to_grasp_result_inverts_sign():
     )
 
     assert debug["invert_yaw_sign_applied"] is True
-    assert -40.0 <= result["yaw_deg"] <= -20.0
+    assert 20.0 <= result["yaw_deg"] <= 40.0
 
 
 def test_center_selector_returns_refined_orientation():

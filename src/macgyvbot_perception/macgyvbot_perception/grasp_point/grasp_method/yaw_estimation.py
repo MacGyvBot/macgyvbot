@@ -20,7 +20,7 @@ def default_pca_yaw_config() -> dict[str, Any]:
 
 
 def normalize_parallel_gripper_yaw(angle_deg: float) -> float:
-    """Normalize an angle to the closest parallel-gripper equivalent."""
+    """Normalize a relative yaw angle to the closest gripper-equivalent value."""
     angle = ((float(angle_deg) + 180.0) % 360.0) - 180.0
     normalized = ((angle + 90.0) % 180.0) - 90.0
     if math.isclose(normalized, -90.0, abs_tol=1e-6) and angle > 0.0:
@@ -61,7 +61,9 @@ def estimate_yaw_from_mask(mask: np.ndarray) -> tuple[float, dict[str, Any]]:
     covariance = np.cov(centered, rowvar=False)
     eigenvalues, eigenvectors = np.linalg.eigh(covariance)
     principal = eigenvectors[:, int(np.argmax(eigenvalues))]
-    raw_angle_deg = math.degrees(math.atan2(float(principal[1]), float(principal[0])))
+    raw_angle_deg = math.degrees(
+        math.atan2(-float(principal[0]), float(principal[1]))
+    )
     normalized_yaw_deg = normalize_parallel_gripper_yaw(raw_angle_deg)
 
     debug_info.update(
