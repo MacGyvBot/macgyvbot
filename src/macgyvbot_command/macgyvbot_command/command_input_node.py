@@ -74,6 +74,8 @@ class CommandInputNode(Node):
         robot_status_topic = self.get_parameter('robot_status_topic').value
 
         self._exit_pending = False
+        self._recent_bot_texts = {}
+        self._bot_echo_ignore_ns = 10_000_000_000
         self._stt_pub = self.create_publisher(String, stt_text_topic, 10)
         self._compat_pub = (
             self.create_publisher(String, compat_topic, 10)
@@ -178,6 +180,10 @@ class CommandInputNode(Node):
     def _text_cb(self, msg):
         text = (msg.data or '').strip()
         if not text:
+            return
+
+        if self._is_recent_bot_echo(text):
+            self.get_logger().info(f'TTS echo로 보이는 입력을 무시합니다: "{text}"')
             return
 
         self.get_logger().info(f'명령 해석 요청: "{text}"')
@@ -398,8 +404,37 @@ class CommandInputNode(Node):
         }.get(state, '')
 
     def _speak_bot(self, text):
+        self._remember_bot_text(text)
         if self._tts_service is not None:
             self._tts_service.speak(text)
+
+    def _remember_bot_text(self, text):
+        normalized = self._normalize_echo_text(text)
+        if not normalized:
+            return
+
+        now = self.get_clock().now().nanoseconds
+        self._recent_bot_texts[normalized] = now
+        stale_before = now - self._bot_echo_ignore_ns
+        self._recent_bot_texts = {
+            key: stamp
+            for key, stamp in self._recent_bot_texts.items()
+            if stamp >= stale_before
+        }
+
+    def _is_recent_bot_echo(self, text):
+        normalized = self._normalize_echo_text(text)
+        if not normalized:
+            return False
+
+        stamp = self._recent_bot_texts.get(normalized)
+        if stamp is None:
+            return False
+        return self.get_clock().now().nanoseconds - stamp < self._bot_echo_ignore_ns
+
+    @staticmethod
+    def _normalize_echo_text(text):
+        return ''.join(str(text or '').split()).lower()
 
     def destroy_node(self):
         if self._stt_service is not None:
