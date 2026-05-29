@@ -59,6 +59,7 @@ class VLMGraspServiceNode(Node):
             service_name,
             self._handle_request,
         )
+        self._preload_default_mode()
         self.get_logger().info(
             "VLM grasp service ready: "
             f"service={service_name}, default_mode={self.grasp_point_mode}"
@@ -155,6 +156,10 @@ class VLMGraspServiceNode(Node):
     def _selector_for_mode(self, mode):
         if mode == GRASP_POINT_MODE_VLM:
             if self._vlm_selector is None:
+                self.get_logger().info(
+                    "Preloading VLM service selector: "
+                    f"mode={mode}, model=grid_vlm_default"
+                )
                 self._vlm_selector = VLMGraspPointSelector(
                     self.get_logger(),
                     **self.sam_kwargs,
@@ -165,10 +170,15 @@ class VLMGraspServiceNode(Node):
         if mode in VLM_ONLY_MODES:
             selector = self._vlm_only_selectors.get(mode)
             if selector is None:
+                model_id = VLM_ONLY_MODEL_BY_MODE[mode]
+                self.get_logger().info(
+                    "Preloading VLM service selector: "
+                    f"mode={mode}, model_id={model_id}"
+                )
                 selector = VLMOnlyGraspPointSelector(
                     self.get_logger(),
                     **self.sam_kwargs,
-                    model_id=VLM_ONLY_MODEL_BY_MODE[mode],
+                    model_id=model_id,
                     mode=mode,
                 )
                 selector.preload()
@@ -176,6 +186,26 @@ class VLMGraspServiceNode(Node):
             return selector
 
         return None
+
+    def _preload_default_mode(self):
+        mode = self.grasp_point_mode
+        if mode != GRASP_POINT_MODE_VLM and mode not in VLM_ONLY_MODES:
+            self.get_logger().info(
+                "VLM service preload skipped: "
+                f"default_mode={mode} does not use a local VLM selector"
+            )
+            return
+
+        preload_started = time.monotonic()
+        self.get_logger().info(
+            "VLM service preload started: "
+            f"mode={mode}, started_at={self._timestamp()}"
+        )
+        self._selector_for_mode(mode)
+        self.get_logger().info(
+            "VLM service preload completed: "
+            f"mode={mode}, elapsed_sec={time.monotonic() - preload_started:.3f}"
+        )
 
     @staticmethod
     def _extract_yaw(orientation_rpy_deg):
