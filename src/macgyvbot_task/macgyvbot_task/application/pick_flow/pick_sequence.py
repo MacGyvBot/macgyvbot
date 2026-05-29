@@ -62,51 +62,35 @@ class PickSequenceRunner:
         self.state.tool_mask_locked = False
         self.state.last_tool_mask_lock_result = None
 
-        log = self.state.logger()
-        drawer_id = self._drawer_id_for_current_target()
-        safe_z_min = self._safe_z_min_for_drawer(drawer_id)
-        plan = self.target_planner.plan(
-            bx,
-            by,
-            bz,
-            log,
-            safe_z_min=safe_z_min,
-        )
         context = {
+            "bx": bx,
+            "by": by,
+            "bz": bz,
             "ori": self.state.home_ori,
-            "drawer_id": drawer_id,
-            "safe_z_min": safe_z_min,
+            "drawer_id": None,
+            "safe_z_min": None,
             "vlm_yaw_deg": vlm_yaw_deg,
+            "plan": None,
         }
 
         def refine_target_and_apply_vlm_yaw_step():
-            nonlocal plan
-
-            updated_plan = self._refine_target_and_apply_vlm_yaw(context, plan)
+            updated_plan = self._refine_target_and_apply_vlm_yaw(context)
             if updated_plan is None:
                 return False
 
-            plan = updated_plan
+            context["plan"] = updated_plan
             return True
 
-        log.info(
-            f"시퀀스 시작: Target({plan.target_x:.3f}, {plan.target_y:.3f}), "
-            f"safe_z_min={safe_z_min:.3f}, raw_bz={bz:.3f}, "
-            f"corrected_bz={plan.corrected_bz:.3f}, "
-            f"travel_z={plan.travel_z:.3f}, "
-            f"approach_z={plan.approach_z:.3f}, "
-            f"grasp_z={plan.grasp_z:.3f}"
-        )
-
         steps = [
+            TaskStep("pick/plan_target", lambda: self._plan_target(context)),
             TaskStep("pick/open_gripper", self._open_gripper),
             TaskStep(
                 "pick/travel_z",
                 lambda: self._move_to_pose(
                     "1단계: 안전 이동 높이 확보",
-                    plan.current_x,
-                    plan.current_y,
-                    plan.travel_z,
+                    self._current_plan(context).current_x,
+                    self._current_plan(context).current_y,
+                    self._current_plan(context).travel_z,
                     context["ori"],
                     "안전 이동 높이 확보 실패. Pick 시퀀스 중단",
                     "안전 이동 높이 확보 실패",
@@ -117,9 +101,9 @@ class PickSequenceRunner:
                 "pick/xy_move",
                 lambda: self._move_to_pose(
                     "2단계: 안전 높이에서 XY 수평 이동",
-                    plan.target_x,
-                    plan.target_y,
-                    plan.travel_z,
+                    self._current_plan(context).target_x,
+                    self._current_plan(context).target_y,
+                    self._current_plan(context).travel_z,
                     context["ori"],
                     "XY 이동 실패. Pick 시퀀스 중단",
                     "XY 이동 실패",
@@ -134,9 +118,9 @@ class PickSequenceRunner:
                 "pick/approach",
                 lambda: self._move_to_pose(
                     "3단계: 타겟 상단 접근",
-                    plan.target_x,
-                    plan.target_y,
-                    plan.approach_z,
+                    self._current_plan(context).target_x,
+                    self._current_plan(context).target_y,
+                    self._current_plan(context).approach_z,
                     context["ori"],
                     "상단 접근 실패. Pick 시퀀스 중단",
                     "상단 접근 실패",
@@ -145,7 +129,10 @@ class PickSequenceRunner:
             ),
             TaskStep(
                 "pick/grasp_descent",
-                lambda: self._descend_to_grasp(plan, context["ori"]),
+                lambda: self._descend_to_grasp(
+                    self._current_plan(context),
+                    context["ori"],
+                ),
             ),
             TaskStep("pick/grasp_tool", self._grasp_tool),
             TaskStep("pick/wait_tool_mask_lock", self._wait_tool_mask_lock),
@@ -153,9 +140,9 @@ class PickSequenceRunner:
                 "pick/lift",
                 lambda: self._move_to_pose(
                     "7단계: 안전 높이 복귀",
-                    plan.target_x,
-                    plan.target_y,
-                    plan.travel_z,
+                    self._current_plan(context).target_x,
+                    self._current_plan(context).target_y,
+                    self._current_plan(context).travel_z,
                     context["ori"],
                     "안전 높이 복귀 실패",
                     "안전 높이 복귀 실패",
@@ -164,11 +151,11 @@ class PickSequenceRunner:
             ),
             TaskStep(
                 "pick/move_to_handoff",
-                lambda: self._move_to_handoff(plan, context),
+                lambda: self._move_to_handoff(self._current_plan(context), context),
             ),
             TaskStep(
                 "pick/wait_human_grasp",
-                lambda: self._wait_human_grasp(plan, context),
+                lambda: self._wait_human_grasp(self._current_plan(context), context),
             ),
             TaskStep("pick/release_to_human", self._release_to_human),
             TaskStep(
@@ -179,6 +166,37 @@ class PickSequenceRunner:
             TaskStep("pick/done", self._publish_done, retry_on_pause=False),
         ]
         return steps
+
+    def _plan_target(self, context):
+        log = self.state.logger()
+        drawer_id = self._drawer_id_for_current_target()
+        safe_z_min = self._safe_z_min_for_drawer(drawer_id)
+        plan = self.target_planner.plan(
+            context["bx"],
+            context["by"],
+            context["bz"],
+            log,
+            safe_z_min=safe_z_min,
+        )
+        context["drawer_id"] = drawer_id
+        context["safe_z_min"] = safe_z_min
+        context["plan"] = plan
+        log.info(
+            f"시퀀스 시작: Target({plan.target_x:.3f}, {plan.target_y:.3f}), "
+            f"safe_z_min={safe_z_min:.3f}, raw_bz={context['bz']:.3f}, "
+            f"corrected_bz={plan.corrected_bz:.3f}, "
+            f"travel_z={plan.travel_z:.3f}, "
+            f"approach_z={plan.approach_z:.3f}, "
+            f"grasp_z={plan.grasp_z:.3f}"
+        )
+        return True
+
+    @staticmethod
+    def _current_plan(context):
+        plan = context.get("plan")
+        if plan is None:
+            raise RuntimeError("pick target plan has not been built yet")
+        return plan
 
     def _open_gripper(self):
         self.gripper.open_gripper()
@@ -217,8 +235,9 @@ class PickSequenceRunner:
         )
         return False
 
-    def _refine_target_and_apply_vlm_yaw(self, context, plan):
+    def _refine_target_and_apply_vlm_yaw(self, context):
         log = self.state.logger()
+        plan = self._current_plan(context)
         refined_target = self._refine_target_after_xy_move(log)
         if refined_target is not None:
             bx, by, bz = refined_target.base_xyz

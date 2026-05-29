@@ -13,6 +13,7 @@
   <exec_depend>macgyvbot_task</exec_depend>
   <exec_depend>macgyvbot_perception</exec_depend>
   <exec_depend>macgyvbot_command</exec_depend>
+  <exec_depend>macgyvbot_ui</exec_depend>
   <exec_depend>macgyvbot_config</exec_depend>
   <exec_depend>macgyvbot_domain</exec_depend>
   <exec_depend>macgyvbot_resources</exec_depend>

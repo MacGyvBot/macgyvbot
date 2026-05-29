@@ -20,6 +20,7 @@ setup(
     entry_points={
         "console_scripts": [
             "macgyvbot = macgyvbot_task.macgyvbot_main_node:main",
+            "task_coordinator_node = macgyvbot_task.task_coordinator_node:main",
         ],
     },
 )
