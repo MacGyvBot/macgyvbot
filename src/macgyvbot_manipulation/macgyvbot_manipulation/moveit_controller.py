@@ -297,12 +297,75 @@ class MoveItController:
 
     def move_to_home_joints(self, logger):
         """Move to the configured Home joint pose."""
+        if self._is_at_joint_goal(HOME_JOINTS, logger):
+            logger.info("현재 joint pose가 이미 Home 허용 오차 안에 있어 이동을 생략합니다.")
+            return True
+
         state_goal = RobotState(self.robot.get_robot_model())
         state_goal.joint_positions = HOME_JOINTS
         state_goal.update()
 
         logger.info("Home joint pose로 복귀합니다.")
-        return self.plan_and_execute(logger, state_goal=state_goal)
+        ok = self.plan_and_execute(logger, state_goal=state_goal)
+        if ok:
+            return True
+
+        if self._wait_until_at_joint_goal(HOME_JOINTS, logger):
+            logger.warn(
+                "Home trajectory 결과는 실패로 보고되었지만 현재 joint pose가 "
+                "Home 허용 오차 안에 있어 Home 복귀 성공으로 처리합니다."
+            )
+            return True
+
+        return False
+
+    def _wait_until_at_joint_goal(
+        self,
+        goal_joints,
+        logger,
+        timeout_sec=0.5,
+        tolerance_rad=0.02,
+    ):
+        deadline = time.monotonic() + timeout_sec
+        while time.monotonic() <= deadline:
+            if self._is_at_joint_goal(
+                goal_joints,
+                logger,
+                tolerance_rad=tolerance_rad,
+            ):
+                return True
+            time.sleep(self.poll_interval_sec)
+
+        return False
+
+    def _is_at_joint_goal(self, goal_joints, logger, tolerance_rad=0.02):
+        try:
+            robot_model = self.robot.get_robot_model()
+            jmg = robot_model.get_joint_model_group(GROUP_NAME)
+            joint_names = list(jmg.active_joint_model_names)
+            psm = self.robot.get_planning_scene_monitor()
+            with psm.read_only() as scene:
+                current_positions = np.array(
+                    scene.current_state.get_joint_group_positions(GROUP_NAME),
+                    dtype=float,
+                )
+        except Exception as exc:
+            log_debug = getattr(logger, "debug", logger.info)
+            log_debug(f"현재 joint pose 확인 실패, Home 이동을 계속합니다: {exc}")
+            return False
+
+        if len(current_positions) < len(joint_names):
+            return False
+
+        for index, joint_name in enumerate(joint_names):
+            if joint_name not in goal_joints:
+                return False
+            diff = current_positions[index] - float(goal_joints[joint_name])
+            wrapped_diff = math.atan2(math.sin(diff), math.cos(diff))
+            if abs(wrapped_diff) > tolerance_rad:
+                return False
+
+        return True
 
     def rotate_wrist_by_yaw_deg(self, yaw_deg, logger):
         if yaw_deg is None:
