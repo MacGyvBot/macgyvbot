@@ -15,6 +15,10 @@ calibration assets. Printable ArUco marker PDFs are managed outside this
 package; runtime code only depends on the marker IDs configured in
 `macgyvbot_config.drawer`.
 
+Runtime packages should use `macgyvbot_resources.calibration` and
+`macgyvbot_resources.resources` helpers instead of duplicating package-share or
+source-tree fallback lookup logic.
+
 ## YOLO RealSense Smoke Test
 
 Place the YOLO weights at:
