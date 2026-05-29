@@ -47,7 +47,13 @@ from macgyvbot_config.topics import (
     TASK_REQUEST_TOPIC,
     TOOL_DROP_TOPIC,
 )
-from macgyvbot_config.vlm import DEFAULT_GRASP_POINT_MODE
+from macgyvbot_config.vlm import (
+    DEFAULT_GRASP_POINT_MODE,
+    GRASP_POINT_MODE_VLM,
+    VLM_GRASP_SERVICE_NAME,
+    VLM_ONLY_MODES,
+)
+from macgyvbot_domain.target_models import PickTarget
 from macgyvbot_manipulation.drawer_motion import DrawerMotionFlow
 from macgyvbot_manipulation.moveit_controller import MoveItController
 from macgyvbot_manipulation.onrobot_gripper import RG
@@ -69,6 +75,9 @@ from macgyvbot_task.application import (
 )
 from macgyvbot_task.application.adapters.hand_grasp_result_adapter import (
     HandGraspResultAdapter,
+)
+from macgyvbot_task.application.adapters.vlm_grasp_service_client import (
+    VLMGraspServiceClient,
 )
 from macgyvbot_task.application.display.debug_display import DebugDisplay
 from macgyvbot_task.application.pick_flow.pick_frame_processor import (
@@ -186,7 +195,13 @@ class TaskCoordinatorNode(Node):
             **self._read_grasp_point_api_config(),
             **self._read_vlm_sam_config(),
         )
-        self.grasp_point_selector.preload_vlm_if_needed()
+        self.vlm_service_client = VLMGraspServiceClient(
+            self,
+            self.bridge,
+            **self._read_vlm_service_config(),
+        )
+        if self.grasp_point_mode not in (GRASP_POINT_MODE_VLM, *VLM_ONLY_MODES):
+            self.grasp_point_selector.preload_vlm_if_needed()
 
         calib_file = self._resolve_calibration_file("T_gripper2camera.npy")
         self.gripper2cam = np.load(str(calib_file)).astype(float)
@@ -375,6 +390,20 @@ class TaskCoordinatorNode(Node):
             "sam_backend": str(self.get_parameter("sam_backend").value).strip(),
             "sam_model_type": str(self.get_parameter("sam_model_type").value).strip(),
             "sam_device": str(self.get_parameter("sam_device").value).strip(),
+        }
+
+    def _read_vlm_service_config(self):
+        self.declare_parameter("vlm_service_name", VLM_GRASP_SERVICE_NAME)
+        self.declare_parameter("vlm_service_wait_timeout_sec", 2.0)
+        self.declare_parameter("vlm_service_response_timeout_sec", 30.0)
+        return {
+            "service_name": str(self.get_parameter("vlm_service_name").value).strip(),
+            "wait_timeout_sec": float(
+                self.get_parameter("vlm_service_wait_timeout_sec").value
+            ),
+            "response_timeout_sec": float(
+                self.get_parameter("vlm_service_response_timeout_sec").value
+            ),
         }
 
     def _read_force_torque_topic(self):
@@ -1081,10 +1110,63 @@ class TaskCoordinatorNode(Node):
         depth_image = self.state.depth_image.copy()
         intrinsics = dict(self.state.intrinsics)
         results = self.detector.detect(color_image)
-        return self.pick_target_resolver.target_from_boxes(
+        if self.grasp_point_mode not in (GRASP_POINT_MODE_VLM, *VLM_ONLY_MODES):
+            return self.pick_target_resolver.target_from_boxes(
+                results[0].boxes,
+                target_label,
+                color_image,
+                depth_image,
+                intrinsics,
+            )
+
+        matched_box = self.pick_target_resolver.matching_box(
             results[0].boxes,
             target_label,
-            color_image,
+        )
+        if matched_box is None:
+            return PickTarget(
+                found=False,
+                label=target_label,
+                pixel=None,
+                base_xyz=None,
+                depth_m=None,
+                yaw_deg=None,
+                reason="target_not_found",
+            )
+
+        box, label = matched_box
+        bbox_xyxy = box.xyxy[0].cpu().numpy().tolist()
+        response = self.vlm_service_client.infer_grasp(
+            color_image=color_image,
+            bbox_xyxy=bbox_xyxy,
+            label=label,
+            target_label=target_label,
+            mode=self.grasp_point_mode,
+            interrupted=self._motion_interrupted,
+        )
+        if response is None:
+            self.get_logger().warn(
+                "Top-view VLM service refine failed. Keeping existing pick plan."
+            )
+            return PickTarget(
+                found=False,
+                label=target_label,
+                pixel=None,
+                base_xyz=None,
+                depth_m=None,
+                yaw_deg=None,
+                reason="vlm_service_failed",
+            )
+
+        return self.pick_target_resolver.target_from_selected_grasp(
+            label,
+            target_label,
+            (
+                int(response.pixel_u),
+                int(response.pixel_v),
+                str(response.source or self.grasp_point_mode),
+                list(response.orientation_rpy_deg) or None,
+            ),
             depth_image,
             intrinsics,
         )

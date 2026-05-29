@@ -24,6 +24,9 @@ _PASSTHROUGH_ARGS = [
     ("grasp_point_api_env_file", ""),
     ("grasp_point_api_base_url", ""),
     ("grasp_point_api_timeout_sec", "30.0"),
+    ("vlm_service_name", "/vlm_grasp"),
+    ("vlm_service_wait_timeout_sec", "2.0"),
+    ("vlm_service_response_timeout_sec", "30.0"),
     ("force_torque_topic", "/force_torque_sensor_broadcaster/wrench"),
     ("sam_enabled", "true"),
 ]
