@@ -61,7 +61,8 @@ class APIGraspPointSelector:
 
         crop_bgr = color_image[y1:y2, x1:x2]
         crop_rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
-        crop_image = Image.fromarray(crop_rgb)
+        crop_image = Image.fromarray(crop_rgb).copy()
+        frame_image = Image.fromarray(cv2.cvtColor(color_image, cv2.COLOR_BGR2RGB)).copy()
 
         try:
             result = self.client.select_grasp_pose(
@@ -73,6 +74,7 @@ class APIGraspPointSelector:
         except Exception as exc:
             self.history.record(
                 image=crop_image,
+                frame_image=frame_image,
                 mode=GRASP_POINT_MODE_API,
                 model_id=self.client.model_id,
                 target_label=target_label,
@@ -88,6 +90,7 @@ class APIGraspPointSelector:
         v = y1 + int(round(result.point[1]))
         self.history.record(
             image=crop_image,
+            frame_image=frame_image,
             mode=GRASP_POINT_MODE_API,
             model_id=self.client.model_id,
             target_label=target_label,

@@ -16,7 +16,7 @@ class InferenceHistoryConfig:
     """Configuration for optional inference history recording."""
 
     enabled: bool = True
-    root_dir: str = "src/macgyvbot_perception/data/vlm_traces"
+    root_dir: str = "src/macgyvbot_perception/data/inference_history"
     csv_name: str = "inference_history.csv"
 
 
@@ -31,6 +31,7 @@ class InferenceHistoryRecode:
         "detected_label",
         "bbox_xyxy",
         "image_path",
+        "frame_image_path",
         "raw_response",
         "parsed_point",
         "yaw_deg",
@@ -58,6 +59,7 @@ class InferenceHistoryRecode:
         orientation_rpy_deg=None,
         success: bool = True,
         error: str = "",
+        frame_image: Image.Image | None = None,
     ):
         """Save one input image and one CSV row when recording is enabled."""
         if not self.config.enabled:
@@ -65,15 +67,28 @@ class InferenceHistoryRecode:
 
         try:
             root = Path(self.config.root_dir)
-            images_dir = root / "images"
-            images_dir.mkdir(parents=True, exist_ok=True)
+            crop_image_dir = root / "crop_image"
+            frame_image_dir = root / "frame_image"
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             image_path = ""
+            frame_image_path = ""
 
             if image is not None:
+                crop_image_dir.mkdir(parents=True, exist_ok=True)
                 safe_mode = self._safe_name(mode)
-                image_path = str(images_dir / f"{timestamp}_{safe_mode}.jpg")
+                image_path = str(crop_image_dir / f"{timestamp}_{safe_mode}.jpg")
                 image.convert("RGB").save(image_path, format="JPEG", quality=90)
+            if frame_image is not None:
+                frame_image_dir.mkdir(parents=True, exist_ok=True)
+                safe_mode = self._safe_name(mode)
+                frame_image_path = str(
+                    frame_image_dir / f"{timestamp}_{safe_mode}_frame.jpg"
+                )
+                frame_image.convert("RGB").save(
+                    frame_image_path,
+                    format="JPEG",
+                    quality=90,
+                )
 
             csv_path = root / self.config.csv_name
             is_new = not csv_path.exists()
@@ -90,6 +105,7 @@ class InferenceHistoryRecode:
                         "detected_label": detected_label,
                         "bbox_xyxy": self._stringify(bbox_xyxy),
                         "image_path": image_path,
+                        "frame_image_path": frame_image_path,
                         "raw_response": raw_response,
                         "parsed_point": self._stringify(parsed_point),
                         "yaw_deg": self._stringify(yaw_deg),

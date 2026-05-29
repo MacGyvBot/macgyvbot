@@ -41,3 +41,4 @@ src/macgyvbot_resources/weights/vlm/*
 
 # Local collected VLM grasp datasets
 src/macgyvbot_perception/data/grasp_dataset/
+src/macgyvbot_perception/data/inference_history/

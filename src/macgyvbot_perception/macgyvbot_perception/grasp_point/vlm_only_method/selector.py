@@ -69,7 +69,8 @@ class VLMOnlyGraspPointSelector:
 
         crop_bgr = color_image[y1:y2, x1:x2]
         crop_rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
-        crop_image = Image.fromarray(crop_rgb)
+        crop_image = Image.fromarray(crop_rgb).copy()
+        frame_image = Image.fromarray(cv2.cvtColor(color_image, cv2.COLOR_BGR2RGB)).copy()
 
         result = None
         try:
@@ -88,6 +89,7 @@ class VLMOnlyGraspPointSelector:
         except Exception as exc:
             self.history.record(
                 image=crop_image,
+                frame_image=frame_image,
                 mode=self.mode,
                 model_id=self.model_id,
                 target_label=target_label,
@@ -104,6 +106,7 @@ class VLMOnlyGraspPointSelector:
             raw_text = result.text if result is not None else ""
             self.history.record(
                 image=crop_image,
+                frame_image=frame_image,
                 mode=self.mode,
                 model_id=self.model_id,
                 target_label=target_label,
@@ -125,6 +128,7 @@ class VLMOnlyGraspPointSelector:
         orientation = (0.0, 0.0, yaw)
         self.history.record(
             image=crop_image,
+            frame_image=frame_image,
             mode=self.mode,
             model_id=self.model_id,
             target_label=target_label,

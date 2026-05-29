@@ -9,7 +9,7 @@ GRASP_POINT_MODE_API = "api"
 DEFAULT_GRASP_POINT_MODE = GRASP_POINT_MODE_VLM_ONLY_QWEN3B
 
 VLM_INFERENCE_HISTORY_ENABLED = True
-VLM_INFERENCE_HISTORY_DIR = "src/macgyvbot_perception/data/vlm_traces"
+VLM_INFERENCE_HISTORY_DIR = "src/macgyvbot_perception/data/inference_history"
 
 VLM_GRASP_GRID_SIZES = ((3, 3), (4, 4))
 

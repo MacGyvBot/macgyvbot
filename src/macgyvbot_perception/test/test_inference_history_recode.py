@@ -46,7 +46,8 @@ def test_history_enabled_writes_image_and_csv(tmp_path):
 
     csv_path = tmp_path / "inference_history.csv"
     assert csv_path.exists()
-    assert len(list((tmp_path / "images").glob("*.jpg"))) == 1
+    assert len(list((tmp_path / "crop_image").glob("*.jpg"))) == 1
+    assert not (tmp_path / "frame_image").exists()
     with csv_path.open(encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
     assert rows[0]["mode"] == "vlm_only_qwen3b"
