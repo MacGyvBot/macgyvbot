@@ -491,7 +491,8 @@ else:
 
         def _send_control_text(self, text):
             self.append_user(text)
-            self._node.publish_user_text(text)
+            if self._on_user_text is not None:
+                self._on_user_text(text)
 
         def _add_chat_widget(self, widget):
             self._chat_layout.insertWidget(self._chat_layout.count() - 1, widget)
