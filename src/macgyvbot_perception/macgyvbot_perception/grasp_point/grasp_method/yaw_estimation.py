@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 import logging
 import math
 from copy import deepcopy
+from pathlib import Path
 from typing import Any
 
 import cv2
@@ -348,6 +350,9 @@ def estimate_yaw_from_multi_frame_sam(
         debug_info["reason"] = aggregation_debug.get("reason", "aggregation_failed")
         return 0.0, debug_info
 
+    saved_mask_path = _save_pca_input_mask_image(aggregated_mask, cfg)
+    if saved_mask_path:
+        debug_info["pca_input_mask_path"] = saved_mask_path
     yaw_deg, pca_debug = estimate_yaw_from_mask(aggregated_mask)
     debug_info["pca_debug"] = pca_debug
     _log(
@@ -707,6 +712,26 @@ def _safe_float(value) -> float | None:
     if not math.isfinite(result):
         return None
     return result
+
+
+def _save_pca_input_mask_image(mask: np.ndarray, cfg: dict[str, Any]) -> str:
+    """Save the exact final mask image that is passed into PCA yaw estimation."""
+    if not bool(cfg.get("save_pca_input_mask_image", False)):
+        return ""
+    if mask is None or not isinstance(mask, np.ndarray) or mask.ndim != 2:
+        return ""
+
+    try:
+        output_dir = Path(str(cfg.get("pca_input_mask_dir", ""))).expanduser()
+        output_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        output_path = output_dir / f"{timestamp}_pca_input_mask.png"
+        cv2.imwrite(str(output_path), (mask > 0).astype(np.uint8) * 255)
+        _log(cfg, "info", f"Saved PCA input mask image: path={output_path}")
+        return str(output_path)
+    except Exception as exc:
+        _log(cfg, "warning", f"Failed to save PCA input mask image: {exc}")
+        return ""
 
 
 def _first_non_empty_reason(*values: Any) -> str:

@@ -41,4 +41,6 @@ PCA_YAW_SAM_DEFAULT_CONFIG = {
     "morph_open_iterations": 1,
     "morph_close_iterations": 1,
     "min_pca_pixels": 30,
+    "save_pca_input_mask_image": True,
+    "pca_input_mask_dir": "src/macgyvbot_perception/data/yaw_pca",
 }
