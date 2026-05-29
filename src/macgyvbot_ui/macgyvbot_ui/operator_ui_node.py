@@ -21,6 +21,12 @@ from macgyvbot_config.topics import (
     ROBOT_STATUS_TOPIC,
     TOOL_COMMAND_TOPIC,
 )
+from macgyvbot_interfaces.msg import (
+    CommandFeedback,
+    CommandShutdown,
+    RobotTaskStatus,
+    ToolCommand,
+)
 from macgyvbot_ui.voice_command_window import (
     QApplication,
     QTimer,
@@ -87,14 +93,20 @@ class OperatorUiNode(Node):
 
         self._stt_pub = self.create_publisher(String, stt_text_topic, 10)
         self._command_shutdown_pub = self.create_publisher(
-            String,
+            CommandShutdown,
             COMMAND_SHUTDOWN_TOPIC,
             10,
         )
         self.create_subscription(String, stt_text_topic, self._text_cb, 10)
-        self.create_subscription(String, tool_command_topic, self._tool_command_cb, 10)
-        self.create_subscription(String, command_feedback_topic, self._feedback_cb, 10)
-        self.create_subscription(String, robot_status_topic, self._robot_status_cb, 10)
+        self.create_subscription(
+            ToolCommand, tool_command_topic, self._tool_command_cb, 10
+        )
+        self.create_subscription(
+            CommandFeedback, command_feedback_topic, self._feedback_cb, 10
+        )
+        self.create_subscription(
+            RobotTaskStatus, robot_status_topic, self._robot_status_cb, 10
+        )
         self.create_subscription(Image, camera_status_topic, self._camera_status_cb, 10)
         self.create_subscription(Image, detector_image_topic, self._detector_image_cb, 10)
         self.create_timer(
@@ -117,11 +129,9 @@ class OperatorUiNode(Node):
             self._shutdown_callback()
 
     def publish_command_shutdown(self):
-        msg = String()
-        msg.data = json.dumps(
-            {'action': 'shutdown', 'source': 'operator_ui'},
-            ensure_ascii=False,
-        )
+        msg = CommandShutdown()
+        msg.action = 'shutdown'
+        msg.source = 'operator_ui'
         self._command_shutdown_pub.publish(msg)
         self.get_logger().info('/command_shutdown 발행: command_input_node 종료 요청')
 
@@ -163,11 +173,7 @@ class OperatorUiNode(Node):
         self._set_status('입력 수신')
 
     def _tool_command_cb(self, msg):
-        try:
-            command = json.loads(msg.data)
-        except json.JSONDecodeError:
-            self.get_logger().warn(f'/tool_command JSON 파싱 실패: {msg.data}')
-            return
+        command = self._tool_command_payload(msg)
 
         action = command.get('action', 'unknown')
         tool_name = command.get('tool_name', 'unknown')
@@ -181,11 +187,7 @@ class OperatorUiNode(Node):
         self._append_log('info', f'/tool_command 수신: action={action}, tool={tool_name}')
 
     def _feedback_cb(self, msg):
-        try:
-            feedback = json.loads(msg.data)
-        except json.JSONDecodeError:
-            self.get_logger().warn(f'/command_feedback JSON 파싱 실패: {msg.data}')
-            return
+        feedback = self._feedback_payload(msg)
 
         if self._is_duplicate_feedback(feedback):
             return
@@ -322,15 +324,7 @@ class OperatorUiNode(Node):
         return False
 
     def _robot_status_cb(self, msg):
-        status_text = msg.data.strip()
-        if not status_text:
-            return
-
-        try:
-            status = json.loads(status_text)
-        except json.JSONDecodeError:
-            self._append_system(f'robot: {status_text}')
-            return
+        status = self._robot_status_payload(msg)
 
         view = self._build_robot_status_view(status)
         self._last_target_label = view['target_label']
@@ -344,6 +338,47 @@ class OperatorUiNode(Node):
             self._append_bot(view['chat_message'])
 
         self._handle_exit_status(status, view['state'])
+
+    @staticmethod
+    def _tool_command_payload(msg):
+        payload = json.loads(msg.payload_json) if msg.payload_json else {}
+        payload.update({
+            'action': msg.action,
+            'tool_name': msg.tool_name,
+            'target_mode': msg.target_mode,
+            'raw_text': msg.raw_text,
+            'match_method': msg.match_method,
+            'confidence': msg.confidence,
+        })
+        return payload
+
+    @staticmethod
+    def _feedback_payload(msg):
+        payload = json.loads(msg.payload_json) if msg.payload_json else {}
+        payload.update({
+            'status': msg.status,
+            'reason': msg.reason,
+            'message': msg.message,
+            'raw_text': msg.raw_text,
+        })
+        if msg.command_json:
+            payload['command'] = json.loads(msg.command_json)
+        return payload
+
+    @staticmethod
+    def _robot_status_payload(msg):
+        payload = json.loads(msg.payload_json) if msg.payload_json else {}
+        payload.update({
+            'status': msg.status,
+            'task': msg.task,
+            'tool_name': msg.tool_name,
+            'action': msg.action,
+            'message': msg.message,
+            'reason': msg.reason,
+        })
+        if msg.command_json:
+            payload['command'] = json.loads(msg.command_json)
+        return payload
 
     def _handle_exit_status(self, status, state):
         if not self._exit_pending:
