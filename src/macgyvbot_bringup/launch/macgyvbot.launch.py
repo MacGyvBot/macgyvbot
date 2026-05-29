@@ -11,11 +11,13 @@ from macgyvbot_config.topics import (
     CAMERA_COLOR_TOPIC,
     CAMERA_DEPTH_TOPIC,
     CAMERA_INFO_TOPIC,
+    FORCE_TORQUE_TOPIC,
     HAND_GRASP_IMAGE_TOPIC,
     HAND_GRASP_MASK_LOCK_TOPIC,
     HAND_GRASP_TOPIC,
     ROBOT_STATUS_TOPIC,
 )
+from macgyvbot_config.vlm import VLM_GRASP_SERVICE_NAME
 from moveit_configs_utils import MoveItConfigsBuilder
 
 
@@ -170,7 +172,7 @@ def generate_launch_description():
                 default_value="vlm_only_qwen3b",
                 description=(
                     "Grasp point selection mode: center, vlm, vlm_only_smol, "
-                    "vlm_only_qwen3b, vlm_only_qwen7b, vlm_only, or api"
+                    "vlm_only_qwen3b, vlm_only_qwen7b, or api"
                 ),
             ),
             DeclareLaunchArgument(
@@ -185,7 +187,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "vlm_service_name",
-                default_value="/vlm_grasp",
+                default_value=VLM_GRASP_SERVICE_NAME,
             ),
             DeclareLaunchArgument(
                 "vlm_service_wait_timeout_sec",
@@ -197,7 +199,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "force_torque_topic",
-                default_value="/force_torque_sensor_broadcaster/wrench",
+                default_value=FORCE_TORQUE_TOPIC,
             ),
             DeclareLaunchArgument(
                 "grasp_model",

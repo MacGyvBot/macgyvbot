@@ -6,9 +6,11 @@ find_package(rosidl_default_generators REQUIRED)
 find_package(sensor_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/CommandText.msg"
   "msg/ToolCommand.msg"
   "msg/CommandFeedback.msg"
   "msg/RobotTaskStatus.msg"
+  "msg/TaskRequest.msg"
   "msg/RobotTaskControl.msg"
   "msg/CommandShutdown.msg"
   "msg/ToolDropEvent.msg"

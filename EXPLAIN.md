@@ -15,7 +15,7 @@ ROS 패키지가 아니라 colcon workspace root이며, 실행 entrypoint는
   - `moveit_py.yaml` 같은 launch/runtime YAML을 설치합니다.
 
 - `src/macgyvbot_task`
-  - `macgyvbot_main_node.py`는 `/tool_command`를 `/task_request`로 넘기는
+  - `macgyvbot_main_node.py`는 `/tool_command`를 typed `/task_request`로 넘기는
     경량 command router를 소유합니다.
   - `task_coordinator_node.py`는 pick/return application workflow, MoveIt/RG2
     실행 리소스, task queue, `/task_control` 처리를 소유합니다.
@@ -25,7 +25,7 @@ ROS 패키지가 아니라 colcon workspace root이며, 실행 entrypoint는
 
 - `src/macgyvbot_command`
   - headless command input node, command parser, STT/TTS helper를 소유합니다.
-  - `/stt_text`를 입력으로 받아 `/tool_command`, `/task_control`,
+  - typed `/stt_text`를 입력으로 받아 `/tool_command`, `/task_control`,
     `/command_feedback`를 발행합니다.
 
 - `src/macgyvbot_perception`
@@ -65,19 +65,20 @@ ROS 패키지가 아니라 colcon workspace root이며, 실행 entrypoint는
   - 패키지 내부 `calibration/`, `weights/`, `weights/vlm/` asset 설치를 소유합니다.
 
 - `src/macgyvbot_interfaces`
-  - typed ROS message migration target을 소유합니다.
-  - 현재 runtime은 호환성을 위해 JSON over `std_msgs/String`을 유지합니다.
+  - package-boundary typed ROS message contracts를 소유합니다.
+  - command, task request, task control, status, grasp, mask, drop event는
+    `macgyvbot_interfaces/msg/*` 타입으로 주고받습니다.
 
 - `src/macgyvbot_ui`
   - operator-facing GUI boundary를 소유합니다.
-  - 사용자 입력을 `/stt_text`로 발행하고 `/command_feedback`,
+  - 사용자 입력을 typed `/stt_text`로 발행하고 `/command_feedback`,
     `/robot_task_status`, detector image topic을 구독해 표시합니다.
 
 ## Main Flow
 
 ```text
 macgyvbot_command.command_input_node
-  -> /stt_text 또는 마이크 STT 입력 수집
+  -> typed /stt_text 또는 마이크 STT 입력 수집
   -> command parser로 자연어 명령 해석
   -> bring/return은 /tool_command로 발행
   -> stop/pause/resume은 /task_control로 발행
@@ -85,13 +86,13 @@ macgyvbot_command.command_input_node
   -> /command_feedback 발행
 
 macgyvbot_ui.operator_ui_node
-  -> 사용자 입력을 /stt_text로 발행
+  -> 사용자 입력을 typed /stt_text로 발행
   -> /command_feedback, /robot_task_status, detector image topic을 구독
   -> operator GUI에 채팅, 상태, detector view 표시
 
 macgyvbot_task.macgyvbot_main_node
-  -> /tool_command 또는 수동 /target_label 수신
-  -> bring/return/release/home 요청을 /task_request로 발행
+  -> /tool_command 수신
+  -> bring/return/release/home 요청을 typed /task_request로 발행
   -> /robot_task_status를 구독해 task busy 상태 추적
 
 macgyvbot_task.task_coordinator_node
@@ -113,7 +114,7 @@ macgyvbot_perception.hand_grasp_detection_node
 ## Task Queue and Safety Control
 
 - `bring`과 `return` 명령은 즉시 긴 blocking flow를 직접 실행하지 않고,
-  `/task_request`로 `task_coordinator_node.py`에 전달됩니다.
+  typed `/task_request`로 `task_coordinator_node.py`에 전달됩니다.
 - `task_coordinator_node.py`는 요청을 받아 `TaskStep` 목록을 구성하고, 내부 queue에
   적재한 뒤 worker thread에서 한 step씩 순차 실행합니다.
 - `/task_control`은 실행 중인 queue에 `pause`, `resume`, `exit`을 적용합니다.

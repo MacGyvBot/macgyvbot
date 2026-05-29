@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 from collections import deque
-import json
 import math
 from pathlib import Path
 import threading
@@ -13,19 +12,19 @@ import traceback
 
 import numpy as np
 import rclpy
-from ament_index_python.packages import get_package_share_directory
 from cv_bridge import CvBridge
 from geometry_msgs.msg import WrenchStamped
 from moveit.planning import MoveItPy, PlanRequestParameters
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from sensor_msgs.msg import CameraInfo, Image
-from std_msgs.msg import String
 
 from macgyvbot_interfaces.msg import (
     HumanGraspResult,
     RobotTaskControl,
     RobotTaskStatus,
+    TaskRequest,
+    ToolCommand,
     ToolDropEvent,
     ToolMaskLock,
 )
@@ -33,7 +32,10 @@ from macgyvbot_interfaces.msg import (
 from macgyvbot_config.drawer import DRAWER_OBSERVATION_J6_DEG
 from macgyvbot_config.models import YOLO_MODEL_NAME
 from macgyvbot_config.robot import GROUP_NAME, HOME_JOINTS, WRIST_JOINT_NAME
-from macgyvbot_config.timing import SEQUENCE_WAIT_POLL_SEC
+from macgyvbot_config.timing import (
+    CAMERA_LOOP_IDLE_SLEEP_SEC,
+    TASK_QUEUE_STOP_POLL_SEC,
+)
 from macgyvbot_config.topics import (
     CAMERA_COLOR_TOPIC,
     CAMERA_DEPTH_TOPIC,
@@ -43,7 +45,7 @@ from macgyvbot_config.topics import (
     HAND_GRASP_MASK_LOCK_TOPIC,
     HAND_GRASP_TOPIC,
     ROBOT_STATUS_TOPIC,
-    ROBOT_TASK_CONTROL_TOPIC,
+    TASK_CONTROL_TOPIC,
     TASK_REQUEST_TOPIC,
     TOOL_DROP_TOPIC,
 )
@@ -61,6 +63,7 @@ from macgyvbot_manipulation.robot_pose import (
     get_ee_matrix,
     orientation_from_joint_positions,
 )
+from macgyvbot_manipulation.timing import cooperative_wait
 from macgyvbot_perception.depth_projection import DepthProjector
 from macgyvbot_perception.grasp_point.grasp_point_selector import (
     GraspPointSelector,
@@ -68,6 +71,7 @@ from macgyvbot_perception.grasp_point.grasp_point_selector import (
 )
 from macgyvbot_perception.pick_target_resolver import PickTargetResolver
 from macgyvbot_perception.yolo_detector import YoloDetector
+from macgyvbot_resources.calibration import resolve_calibration_file
 from macgyvbot_task.application import (
     RobotStatusPublisher,
     TaskRuntimeState,
@@ -203,7 +207,7 @@ class TaskCoordinatorNode(Node):
         if self.grasp_point_mode not in (GRASP_POINT_MODE_VLM, *VLM_ONLY_MODES):
             self.grasp_point_selector.preload_vlm_if_needed()
 
-        calib_file = self._resolve_calibration_file("T_gripper2camera.npy")
+        calib_file = resolve_calibration_file("T_gripper2camera.npy")
         self.gripper2cam = np.load(str(calib_file)).astype(float)
         self.gripper2cam[:3, 3] /= 1000.0
 
@@ -239,7 +243,7 @@ class TaskCoordinatorNode(Node):
             self.robot,
             self.motion,
             self.gripper,
-            self._cooperative_wait,
+            cooperative_wait,
             observation_orientation_provider=self._drawer_observation_orientation,
         )
         self.home_initializer = RobotHomeInitializer(
@@ -322,21 +326,6 @@ class TaskCoordinatorNode(Node):
             DRAWER_OBSERVATION_J6_DEG
         )
         return orientation_from_joint_positions(self.robot, joint_positions)
-
-    @staticmethod
-    def _resolve_calibration_file(filename):
-        try:
-            package_share = Path(
-                get_package_share_directory("macgyvbot_resources")
-            )
-            candidate = package_share / "calibration" / filename
-            if candidate.exists():
-                return candidate
-        except Exception:
-            pass
-
-        workspace_src = Path(__file__).resolve().parents[2]
-        return workspace_src / "macgyvbot_resources" / "calibration" / filename
 
     def _read_grasp_point_mode(self):
         self.declare_parameter("grasp_point_mode", DEFAULT_GRASP_POINT_MODE)
@@ -427,10 +416,15 @@ class TaskCoordinatorNode(Node):
         self.create_subscription(CameraInfo, CAMERA_INFO_TOPIC, self._cam_info_cb, 10)
         self.create_subscription(Image, CAMERA_COLOR_TOPIC, self._color_cb, 10)
         self.create_subscription(Image, CAMERA_DEPTH_TOPIC, self._depth_cb, 10)
-        self.create_subscription(String, TASK_REQUEST_TOPIC, self._task_request_cb, 10)
+        self.create_subscription(
+            TaskRequest,
+            TASK_REQUEST_TOPIC,
+            self._task_request_cb,
+            10,
+        )
         self.create_subscription(
             RobotTaskControl,
-            ROBOT_TASK_CONTROL_TOPIC,
+            TASK_CONTROL_TOPIC,
             self._task_control_cb,
             10,
         )
@@ -463,38 +457,24 @@ class TaskCoordinatorNode(Node):
     def _log_startup(self):
         self.get_logger().info("task coordinator node 초기화 완료")
         self.get_logger().info(f"task request 토픽: {TASK_REQUEST_TOPIC}")
-        self.get_logger().info(f"task control 토픽: {ROBOT_TASK_CONTROL_TOPIC}")
+        self.get_logger().info(f"task control 토픽: {TASK_CONTROL_TOPIC}")
         self.get_logger().info(f"robot status 토픽: {ROBOT_STATUS_TOPIC}")
         self.get_logger().info(f"YOLO model: {self.yolo_model}")
         self.get_logger().info(f"grasp point mode: {self.grasp_point_mode}")
 
     def _task_request_cb(self, msg):
-        try:
-            payload = json.loads(msg.data)
-        except json.JSONDecodeError:
-            self.get_logger().warn(
-                f"{TASK_REQUEST_TOPIC} JSON 파싱 실패: {msg.data}"
-            )
-            self._publish_robot_status(
-                "rejected",
-                message="task request JSON을 해석하지 못했습니다.",
-                reason="invalid_task_request_json",
-            )
-            return
-
-        task = str(payload.get("task", "")).strip().lower()
+        task = str(msg.task or "").strip().lower()
         if task in ("bring", "pick"):
-            self._handle_bring_request(payload)
+            self._handle_bring_request(msg)
             return
         if task == "return":
-            command = payload.get("command") or {}
-            self.start_return_sequence(command)
+            self.start_return_sequence(self._task_request_command(msg))
             return
         if task == "release":
-            self._handle_release_request(payload)
+            self._handle_release_request(msg)
             return
         if task == "home":
-            self._handle_home_request(payload)
+            self._handle_home_request(msg)
             return
 
         self.get_logger().warn(f"지원하지 않는 task request: {task}")
@@ -502,13 +482,13 @@ class TaskCoordinatorNode(Node):
             "rejected",
             message="지원하지 않는 task request입니다.",
             reason="unsupported_task_request",
-            command=payload.get("command"),
+            command=self._task_request_command(msg),
         )
 
-    def _handle_bring_request(self, payload):
-        command = payload.get("command") or {}
+    def _handle_bring_request(self, request):
+        command = self._task_request_command(request)
         tool_name = (
-            payload.get("tool_name")
+            request.tool_name
             or command.get("tool_name")
             or "unknown"
         )
@@ -534,14 +514,14 @@ class TaskCoordinatorNode(Node):
             )
             return
 
-        if all(key in payload for key in ("bx", "by", "bz")):
+        if request.has_base_target:
             self.state.target_label = tool_name
             self.state.current_command = command
             self.start_pick_sequence(
-                float(payload["bx"]),
-                float(payload["by"]),
-                float(payload["bz"]),
-                payload.get("vlm_yaw_deg"),
+                request.bx,
+                request.by,
+                request.bz,
+                request.vlm_yaw_deg if request.has_vlm_yaw_deg else None,
             )
             return
 
@@ -566,9 +546,9 @@ class TaskCoordinatorNode(Node):
                 command=command,
             )
 
-    def _handle_release_request(self, payload):
-        command = payload.get("command") or {}
-        tool_name = command.get("tool_name", payload.get("tool_name", "unknown"))
+    def _handle_release_request(self, request):
+        command = self._task_request_command(request)
+        tool_name = command.get("tool_name", request.tool_name or "unknown")
         if self.is_running() or self.state.picking:
             self._publish_robot_status(
                 "busy",
@@ -590,9 +570,9 @@ class TaskCoordinatorNode(Node):
             command=command,
         )
 
-    def _handle_home_request(self, payload):
-        command = payload.get("command") or {}
-        tool_name = command.get("tool_name", payload.get("tool_name", "unknown"))
+    def _handle_home_request(self, request):
+        command = self._task_request_command(request)
+        tool_name = command.get("tool_name", request.tool_name or "unknown")
         if self.is_running() or self.state.picking:
             self._publish_robot_status(
                 "busy",
@@ -808,7 +788,7 @@ class TaskCoordinatorNode(Node):
     def _wait_for_task_queue_to_stop(self, logger, timeout_sec=3.0):
         deadline = time.monotonic() + timeout_sec
         while self.is_running() and time.monotonic() < deadline:
-            time.sleep(0.02)
+            time.sleep(TASK_QUEUE_STOP_POLL_SEC)
         if self.is_running():
             logger.warn("exit 요청 후 task queue 종료 대기 시간이 초과되었습니다.")
             return False
@@ -972,10 +952,6 @@ class TaskCoordinatorNode(Node):
         self._clear_task_state()
         self.exit_req.clear()
         self.resume_req.clear()
-
-    def clear_queue(self):
-        with self._queue_lock:
-            self._queue.clear()
 
     def is_running(self):
         with self._queue_lock:
@@ -1174,13 +1150,6 @@ class TaskCoordinatorNode(Node):
     def _motion_interrupted(self):
         return self.exit_req.is_set() or self.pause_req.is_set()
 
-    @staticmethod
-    def _cooperative_wait(duration_sec):
-        end_time = time.monotonic() + max(0.0, float(duration_sec))
-        while rclpy.ok() and time.monotonic() < end_time:
-            remaining = end_time - time.monotonic()
-            time.sleep(min(SEQUENCE_WAIT_POLL_SEC, max(0.0, remaining)))
-
     def _hand_grasp_cb(self, msg):
         result = self._human_grasp_payload(msg)
         result["_received_monotonic_sec"] = time.monotonic()
@@ -1227,7 +1196,7 @@ class TaskCoordinatorNode(Node):
 
         while rclpy.ok():
             if not self.frame_processor.has_camera_state():
-                time.sleep(0.01)
+                time.sleep(CAMERA_LOOP_IDLE_SLEEP_SEC)
                 continue
 
             if self.state.picking:
@@ -1271,11 +1240,7 @@ class TaskCoordinatorNode(Node):
         msg.action = str(payload.get("action", "unknown"))
         msg.message = str(payload.get("message", ""))
         msg.reason = str(payload.get("reason", ""))
-        command = payload.get("command")
-        msg.command_json = (
-            json.dumps(command, ensure_ascii=False) if command is not None else ""
-        )
-        msg.payload_json = json.dumps(payload, ensure_ascii=False)
+        msg.command = self._tool_command_message(payload.get("command") or {})
         self.robot_status_pub.publish(msg)
 
     def _publish_tool_drop_payload(self, payload):
@@ -1287,58 +1252,94 @@ class TaskCoordinatorNode(Node):
         width_mm = payload.get("width_mm")
         msg.has_width_mm = width_mm is not None
         msg.width_mm = float(width_mm) if width_mm is not None else 0.0
-        status = payload.get("status")
-        msg.gripper_status_json = (
-            json.dumps(status, ensure_ascii=False) if status is not None else ""
-        )
         msg.error = str(payload.get("error", ""))
-        command = payload.get("command")
-        msg.command_json = (
-            json.dumps(command, ensure_ascii=False) if command is not None else ""
-        )
-        msg.payload_json = json.dumps(payload, ensure_ascii=False)
+        msg.command = self._tool_command_message(payload.get("command") or {})
         self.tool_drop_pub.publish(msg)
 
     @staticmethod
+    def _tool_command_message(command):
+        msg = ToolCommand()
+        msg.action = str(command.get("action", "unknown"))
+        msg.tool_name = str(command.get("tool_name", "unknown"))
+        msg.target_mode = str(command.get("target_mode", "unknown"))
+        msg.raw_text = str(command.get("raw_text", ""))
+        msg.match_method = str(command.get("match_method", "unknown"))
+        msg.confidence = float(command.get("confidence", 0.0))
+        return msg
+
+    @staticmethod
+    def _task_request_command(msg):
+        command = msg.command
+        return {
+            "action": command.action,
+            "tool_name": command.tool_name,
+            "target_mode": command.target_mode,
+            "raw_text": command.raw_text,
+            "match_method": command.match_method,
+            "confidence": command.confidence,
+        }
+
+    @staticmethod
     def _tool_drop_payload(msg):
-        payload = json.loads(msg.payload_json) if msg.payload_json else {}
-        payload.update(
-            {
-                "event": msg.event,
-                "tool_name": msg.tool_name,
-                "action": msg.action,
-                "reason": msg.reason,
-            }
-        )
+        payload = {
+            "event": msg.event,
+            "tool_name": msg.tool_name,
+            "action": msg.action,
+            "reason": msg.reason,
+            "command": TaskCoordinatorNode._tool_command_payload(msg.command),
+        }
         if msg.has_width_mm:
             payload["width_mm"] = msg.width_mm
-        if msg.gripper_status_json:
-            payload["status"] = json.loads(msg.gripper_status_json)
         if msg.error:
             payload["error"] = msg.error
-        if msg.command_json:
-            payload["command"] = json.loads(msg.command_json)
         return payload
 
     @staticmethod
     def _human_grasp_payload(msg):
-        payload = json.loads(msg.payload_json) if msg.payload_json else {}
-        payload.update(
-            {
-                "state": msg.state,
-                "human_grasped_tool": msg.human_grasped_tool,
-                "grasp_counter": msg.grasp_counter,
-                "grasp_score": msg.grasp_score,
-                "ml_raw_state": msg.ml_raw_state,
-                "ml_stable_state": msg.ml_stable_state,
-                "ml_grasp_confirmed": msg.ml_grasp_confirmed,
-                "depth_grasp_confirmed": msg.depth_grasp_confirmed,
-                "mask_locked": msg.mask_locked,
-                "mask_source": msg.mask_source,
-            }
+        payload = {
+            "state": msg.state,
+            "hand_present": msg.hand_present,
+            "human_grasped_tool": msg.human_grasped_tool,
+            "grasp_counter": msg.grasp_counter,
+            "grasp_score": msg.grasp_score,
+            "ml_required": msg.ml_required,
+            "ml_grasp_confirmed": msg.ml_grasp_confirmed,
+            "ml_confidence_ok": msg.ml_confidence_ok,
+            "ml_raw_state": msg.ml_raw_state,
+            "ml_stable_state": msg.ml_stable_state,
+            "depth_required": msg.depth_required,
+            "depth_available": msg.depth_available,
+            "depth_grasp_ok": msg.depth_grasp_ok,
+            "depth_grasp_confirmed": msg.depth_grasp_confirmed,
+            "depth_contact_count": msg.depth_contact_count,
+            "mask_locked": msg.mask_locked,
+            "locked_mask_grasp_ok": msg.locked_mask_grasp_ok,
+            "mask_contact_confirmed": msg.mask_contact_confirmed,
+            "mask_proximity_ok": msg.mask_proximity_ok,
+            "mask_near_or_contact": msg.mask_near_or_contact,
+            "mask_source": msg.mask_source,
+            "mask_contact_count": msg.mask_contact_count,
+        }
+        payload["ml_confidence"] = (
+            msg.ml_confidence if msg.has_ml_confidence else None
+        )
+        payload["tool_depth_mm"] = (
+            msg.tool_depth_mm if msg.has_tool_depth_mm else None
+        )
+        payload["min_hand_tool_depth_diff_mm"] = (
+            msg.min_hand_tool_depth_diff_mm
+            if msg.has_min_hand_tool_depth_diff_mm
+            else None
+        )
+        payload["min_landmark_to_tool_distance"] = (
+            msg.min_landmark_to_tool_distance
+            if msg.has_min_landmark_to_tool_distance
+            else None
         )
         if msg.has_tool_label:
             payload["tool_label"] = msg.tool_label
+        if msg.has_tool_confidence:
+            payload["tool_confidence"] = msg.tool_confidence
         if msg.has_tool_roi:
             payload["tool_roi"] = list(msg.tool_roi)
         if msg.has_hand_pixel:
@@ -1347,21 +1348,33 @@ class TaskCoordinatorNode(Node):
                 "v": msg.hand_v,
                 "source": msg.hand_pixel_source,
             }
+        if msg.has_active_hand_index:
+            payload["active_hand_index"] = msg.active_hand_index
+        if msg.has_active_handedness:
+            payload["active_handedness"] = msg.active_handedness
         return payload
 
     @staticmethod
     def _tool_mask_payload(msg):
-        payload = json.loads(msg.payload_json) if msg.payload_json else {}
-        payload.update(
-            {
-                "locked": msg.locked,
-                "mask_source": msg.mask_source,
-                "tool_roi": list(msg.tool_roi) if msg.has_tool_roi else None,
-            }
-        )
+        payload = {
+            "locked": msg.locked,
+            "mask_source": msg.mask_source,
+            "tool_roi": list(msg.tool_roi) if msg.has_tool_roi else None,
+        }
         if msg.has_reason:
             payload["reason"] = msg.reason
         return payload
+
+    @staticmethod
+    def _tool_command_payload(msg):
+        return {
+            "action": msg.action,
+            "tool_name": msg.tool_name,
+            "target_mode": msg.target_mode,
+            "raw_text": msg.raw_text,
+            "match_method": msg.match_method,
+            "confidence": msg.confidence,
+        }
 
 
 def main():
