@@ -48,6 +48,10 @@ ROS 패키지가 아니라 colcon workspace root이며, 실행 entrypoint는
 - `src/macgyvbot_manipulation`
   - MoveIt controller, robot pose helper, safe workspace clamp, OnRobot gripper,
     grasp verification, force reaction detection, handoff targeting을 소유합니다.
+  - `moveit_controller.py`는 pose goal을 MoveIt에 바로 넘기기 전에 현재 joint
+    state 기준 IK seed sampling을 수행합니다. 후보 IK 해는 현재 joint와 가장
+    가까운 동치 각도로 보정하고, joint delta가 큰 후보는 planning 전에
+    거부합니다.
 
 - `src/macgyvbot_config`
   - ROS topic 이름, robot frame/link, model filename, pick/return/handoff/grasp
@@ -122,6 +126,10 @@ macgyvbot_perception.hand_grasp_detection_node
   `tool_dropped` 상태가 `cancelled`로 덮이지 않도록 처리합니다.
 - pick flow의 `build_steps()`는 queue에 넣을 step 목록만 구성합니다. target planning,
   VLM refine, MoveIt motion, gripper 동작은 각 `TaskStep` 실행 시점에 수행됩니다.
+- pose goal 기반 MoveIt 이동은 `moveit_controller.py`에서 현재 joint state를 읽고
+  여러 IK seed를 시도한 뒤, `q_curr` 기준 가장 가까운 joint goal을 선택합니다.
+  선택된 IK 후보의 joint별 `raw`/`short` delta를 로그로 남기며, 최대 joint delta가
+  안전 한계를 넘으면 기존 pose fallback으로 우회하지 않고 planning을 중단합니다.
 
 ## Assets
 
