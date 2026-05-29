@@ -60,6 +60,8 @@ sys.modules.setdefault("scipy.spatial.transform", scipy_transform_module)
 handover_targeting = import_module("macgyvbot_manipulation.handover_targeting")
 TargetCandidate = handover_targeting.TargetCandidate
 _observe_stable_candidate = handover_targeting._observe_stable_candidate
+build_offset_target = handover_targeting.build_offset_target
+candidate_from_grasp_result = handover_targeting.candidate_from_grasp_result
 move_to_candidate_with_offset = handover_targeting.move_to_candidate_with_offset
 
 
@@ -103,6 +105,71 @@ class FakeMotion:
 
 
 class TestHandoverTargeting(unittest.TestCase):
+    def test_candidate_from_grasp_result_uses_position_payload(self):
+        candidate = candidate_from_grasp_result(
+            {
+                "position": {
+                    "x": 0.3,
+                    "y": -0.1,
+                    "z": 0.4,
+                    "frame_id": "base_link",
+                },
+                "position_observed_monotonic_sec": 123.0,
+            },
+            source="test_source",
+            default_frame="world",
+        )
+
+        self.assertTrue(candidate.found)
+        self.assertEqual(candidate.source, "test_source")
+        self.assertEqual(candidate.frame_id, "base_link")
+        self.assertEqual(candidate.observed_at_sec, 123.0)
+        self.assertAlmostEqual(candidate.x, 0.3)
+        self.assertAlmostEqual(candidate.y, -0.1)
+        self.assertAlmostEqual(candidate.z, 0.4)
+
+    def test_candidate_from_grasp_result_uses_default_frame_and_received_time(self):
+        candidate = candidate_from_grasp_result(
+            {
+                "position": {
+                    "x": 0.3,
+                    "y": -0.1,
+                    "z": 0.4,
+                },
+                "_received_monotonic_sec": 456.0,
+            },
+            default_frame="base_link",
+        )
+
+        self.assertEqual(candidate.frame_id, "base_link")
+        self.assertEqual(candidate.observed_at_sec, 456.0)
+
+    def test_candidate_from_grasp_result_rejects_missing_position(self):
+        self.assertIsNone(candidate_from_grasp_result(None))
+        self.assertIsNone(candidate_from_grasp_result({}))
+        self.assertIsNone(candidate_from_grasp_result({"position": {"x": 1.0}}))
+
+    def test_build_offset_target_applies_offsets_and_minimum_z(self):
+        candidate = TargetCandidate(
+            found=True,
+            x=0.5,
+            y=0.2,
+            z=0.1,
+            frame_id="base_link",
+            source="test",
+        )
+
+        target = build_offset_target(
+            candidate,
+            x_offset_m=-0.05,
+            z_offset_m=0.02,
+            min_z=0.25,
+        )
+
+        self.assertAlmostEqual(target.x, 0.45)
+        self.assertAlmostEqual(target.y, 0.2)
+        self.assertAlmostEqual(target.z, 0.25)
+
     def test_stale_single_frame_does_not_become_stable(self):
         state = FakeState()
         state.last_grasp_result = {

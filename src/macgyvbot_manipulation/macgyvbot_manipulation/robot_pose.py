@@ -4,6 +4,7 @@ import math
 
 import numpy as np
 from geometry_msgs.msg import PoseStamped
+from moveit.core.robot_state import RobotState
 from scipy.spatial.transform import Rotation
 
 from macgyvbot_config.robot import BASE_FRAME, EE_LINK
@@ -41,6 +42,18 @@ def get_ee_matrix(moveit_robot):
 
 def current_ee_orientation(moveit_robot):
     transform = get_ee_matrix(moveit_robot)
+    return orientation_from_transform(transform)
+
+
+def orientation_from_joint_positions(moveit_robot, joint_positions):
+    state = RobotState(moveit_robot.get_robot_model())
+    state.joint_positions = joint_positions
+    state.update()
+    transform = state.get_global_link_transform(EE_LINK)
+    return orientation_from_transform(np.asarray(transform, dtype=float))
+
+
+def orientation_from_transform(transform):
     qx, qy, qz, qw = Rotation.from_matrix(transform[:3, :3]).as_quat()
     return {
         "x": float(qx),

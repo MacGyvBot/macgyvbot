@@ -12,15 +12,20 @@ from moveit.core.robot_state import RobotState
 from macgyvbot_config.handoff import (
     HAND_POSE_STABLE_TOLERANCE_M,
     HAND_POSE_WAIT_AFTER_DETECTION_SEC,
+    HANDOVER_OBSERVATION_LOG_INTERVAL_SEC,
+    HANDOVER_OBSERVATION_MAX_SLEEP_SEC,
+    HANDOVER_OBSERVATION_MIN_SLEEP_SEC,
     HANDOVER_REPLAN_MAX_ATTEMPTS,
     HANDOVER_REPLAN_X_STEP_M,
     HANDOVER_SEARCH_TIMEOUT_SEC,
+    HANDOVER_SEARCH_EXECUTOR_MAX_WORKERS,
     HANDOVER_TARGET_MIN_Z_CLEARANCE_M,
 )
 from macgyvbot_config.robot import (
     BASE_FRAME,
     EE_LINK,
     OBSERVATION_JOINTS,
+    WORLD_FRAME,
 )
 from macgyvbot_config.timing import SEQUENCE_WAIT_POLL_SEC
 from macgyvbot_manipulation.robot_pose import make_safe_pose
@@ -45,7 +50,16 @@ class TargetCandidate:
     observed_at_sec: float = 0.0
 
 
-_SEARCH_EXECUTOR = ThreadPoolExecutor(max_workers=2)
+@dataclass(frozen=True)
+class OffsetTarget:
+    x: float
+    y: float
+    z: float
+
+
+_SEARCH_EXECUTOR = ThreadPoolExecutor(
+    max_workers=HANDOVER_SEARCH_EXECUTOR_MAX_WORKERS
+)
 
 
 def move_to_observation_pose(
@@ -110,10 +124,18 @@ def observe_target_candidate(
     )
 
 
-def _candidate_from_grasp_result(result: dict) -> Optional[TargetCandidate]:
+def candidate_from_grasp_result(
+    result: dict,
+    source: str = "observation_position",
+    default_frame: str = WORLD_FRAME,
+) -> Optional[TargetCandidate]:
+    """Build a handoff target candidate from a grasp result payload."""
+    if not isinstance(result, dict):
+        return None
+
     position = result.get("position")
     if isinstance(position, dict) and all(k in position for k in ("x", "y", "z")):
-        frame_id = str(position.get("frame_id", "world"))
+        frame_id = str(position.get("frame_id", default_frame))
         observed_at_sec = float(
             result.get(
                 "position_observed_monotonic_sec",
@@ -126,7 +148,7 @@ def _candidate_from_grasp_result(result: dict) -> Optional[TargetCandidate]:
             y=float(position["y"]),
             z=float(position["z"]),
             frame_id=frame_id,
-            source="observation_position",
+            source=source,
             observed_at_sec=observed_at_sec,
         )
     return None
@@ -146,7 +168,10 @@ def _observe_stable_candidate(
     should_interrupt=None,
 ) -> TargetCandidate:
     deadline = time.monotonic() + max(0.0, float(timeout_sec))
-    sleep_step = min(max(0.01, float(poll_sec)), 0.1)
+    sleep_step = min(
+        max(HANDOVER_OBSERVATION_MIN_SLEEP_SEC, float(poll_sec)),
+        HANDOVER_OBSERVATION_MAX_SLEEP_SEC,
+    )
     stable_anchor = None
     stable_since_observed_at = None
     last_observed_at = None
@@ -154,19 +179,22 @@ def _observe_stable_candidate(
 
     while time.monotonic() < deadline:
         if should_interrupt is not None and should_interrupt():
-            logger.info("관측 기반 목표 탐색을 stop/pause 요청으로 중단합니다.")
+            logger.info(
+                "관측 기반 목표 탐색을 "
+                "stop/pause 요청으로 중단합니다."
+            )
             return TargetCandidate(
                 found=False,
                 x=0.0,
                 y=0.0,
                 z=0.0,
-                frame_id="world",
+                frame_id=WORLD_FRAME,
                 source="observation_interrupted",
                 observed_at_sec=time.monotonic(),
             )
 
         result = getattr(state, "last_grasp_result", None) or {}
-        candidate = _candidate_from_grasp_result(result)
+        candidate = candidate_from_grasp_result(result)
         if candidate is None:
             stable_anchor = None
             stable_since_observed_at = None
@@ -204,7 +232,7 @@ def _observe_stable_candidate(
             return candidate
 
         now = time.monotonic()
-        if now - last_log_time >= 0.7:
+        if now - last_log_time >= HANDOVER_OBSERVATION_LOG_INTERVAL_SEC:
             logger.info(
                 "사용자 손 위치 안정화 대기: "
                 f"{stable_elapsed:.2f}/{stable_duration_sec:.2f}s"
@@ -221,7 +249,7 @@ def _observe_stable_candidate(
         x=0.0,
         y=0.0,
         z=0.0,
-        frame_id="world",
+        frame_id=WORLD_FRAME,
         source="observation_timeout",
         observed_at_sec=time.monotonic(),
     )
@@ -247,18 +275,15 @@ def move_to_candidate_with_offset(
             "target_not_found",
         )
 
-    if candidate.frame_id not in ("world", BASE_FRAME):
+    if candidate.frame_id not in (WORLD_FRAME, BASE_FRAME):
         return (
             False,
             SearchStartPose(candidate.x, candidate.y, candidate.z),
             "unsupported_frame",
         )
 
-    target_x = candidate.x + float(x_offset_m)
-    target_y = candidate.y
-    min_target_z = SAFE_Z_MIN + HANDOVER_TARGET_MIN_Z_CLEARANCE_M
-    target_z = max(min_target_z, candidate.z + float(z_offset_m))
-    attempts = build_replan_attempts(target_x, target_y, target_z)
+    target = build_offset_target(candidate, x_offset_m, z_offset_m)
+    attempts = build_replan_attempts(target.x, target.y, target.z)
 
     last_pose = SearchStartPose(*attempts[0])
     total_attempts = len(attempts)
@@ -267,7 +292,10 @@ def move_to_candidate_with_offset(
         start=1,
     ):
         if should_interrupt is not None and should_interrupt():
-            logger.info("stop/pause 요청으로 사용자 손 위치 이동을 중단합니다.")
+            logger.info(
+                "stop/pause 요청으로 "
+                "사용자 손 위치 이동을 중단합니다."
+            )
             return False, last_pose, "interrupted"
 
         logger.info(
@@ -289,7 +317,10 @@ def move_to_candidate_with_offset(
             return True, last_pose, ""
 
         if should_interrupt is not None and should_interrupt():
-            logger.info("사용자 손 위치 이동 중 stop/pause 요청을 확인했습니다.")
+            logger.info(
+                "사용자 손 위치 이동 중 "
+                "stop/pause 요청을 확인했습니다."
+            )
             return False, last_pose, "interrupted"
 
         if attempt_index < total_attempts:
@@ -299,6 +330,20 @@ def move_to_candidate_with_offset(
             )
 
     return False, last_pose, "target_move_failed"
+
+
+def build_offset_target(
+    candidate: TargetCandidate,
+    x_offset_m: float,
+    z_offset_m: float,
+    min_z: float = SAFE_Z_MIN + HANDOVER_TARGET_MIN_Z_CLEARANCE_M,
+) -> OffsetTarget:
+    """Apply handoff offsets and minimum z clearance to a candidate."""
+    return OffsetTarget(
+        x=candidate.x + float(x_offset_m),
+        y=candidate.y,
+        z=max(float(min_z), candidate.z + float(z_offset_m)),
+    )
 
 
 def build_replan_attempts(

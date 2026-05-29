@@ -39,14 +39,13 @@ class TaskControlCoordinator:
         self._lock = threading.Lock()
         self._thread = None
 
-    def start_pick(self, bx, by, bz, z_m, vlm_yaw_deg=None):
+    def start_pick(self, bx, by, bz, vlm_yaw_deg=None):
         return self._start(
             task_name="pick",
             step_builder=lambda: self.pick_sequence.build_steps(
                 bx,
                 by,
                 bz,
-                z_m,
                 vlm_yaw_deg,
             ),
         )
@@ -195,6 +194,8 @@ class TaskControlCoordinator:
         self.state.target_label = None
         self.state.human_grasped_tool = False
         self.state.current_command = None
+        self.state.drawer_prepared_tool = None
+        self.state.drawer_preparing_tool = None
 
     def _run_cleanup_callbacks(self, log):
         for cleanup in self.cleanup_callbacks:

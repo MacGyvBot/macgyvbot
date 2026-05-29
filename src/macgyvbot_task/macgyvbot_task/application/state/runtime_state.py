@@ -30,6 +30,8 @@ class TaskRuntimeState:
     home_xyz: tuple | None = None
     home_ori: dict | None = None
     current_command: dict | None = None
+    drawer_prepared_tool: str | None = None
+    drawer_preparing_tool: str | None = None
     _last_search_status_target: str | None = field(default=None, repr=False)
 
     def logger(self):
