@@ -53,8 +53,8 @@ ROS 패키지가 아니라 colcon workspace root이며, 실행 entrypoint는
   - 패키지 내부 `calibration/`, `weights/`, `weights/vlm/` asset 설치를 소유합니다.
 
 - `src/macgyvbot_interfaces`
-  - typed ROS message migration target을 소유합니다.
-  - 현재 runtime은 호환성을 위해 JSON over `std_msgs/String`을 유지합니다.
+  - package 경계를 넘는 typed ROS message 계약을 소유합니다.
+  - command/status/control/perception 구조화 topic은 이 message 타입을 사용합니다.
 
 - `src/macgyvbot_ui`
   - operator-facing GUI boundary를 소유합니다.
@@ -68,7 +68,7 @@ macgyvbot_command.command_input_node
   -> /stt_text 또는 마이크 STT 입력 수집
   -> command parser로 자연어 명령 해석
   -> bring/return은 /tool_command로 발행
-  -> stop/pause/resume은 /robot_task_control로 발행
+  -> pause/resume/cancel은 /robot_task_control로 발행
   -> 최신 exit 요청은 /robot_task_control의 exit action으로 발행
   -> /command_feedback 발행
 
@@ -97,8 +97,9 @@ macgyvbot_perception.hand_grasp_detection_node
 - `bring`과 `return` 명령은 즉시 긴 blocking flow를 직접 실행하지 않고,
   `TaskStep` 목록으로 변환된 뒤 `TaskControlCoordinator`의 worker thread에서
   순차 실행됩니다.
-- `/robot_task_control`은 실행 중인 queue에 `stop`, `pause`, `resume`을 적용합니다.
-  `stop`은 현재 MoveIt trajectory goal을 cancel하고 대기 중인 step queue를 비웁니다.
+- `/robot_task_control`은 실행 중인 queue에 `pause`, `resume`, `cancel`, `exit`을 적용합니다.
+- `cancel`은 현재 MoveIt trajectory goal을 cancel하고 대기 중인 step queue를 비운 뒤
+  Home 복귀와 GUI 종료 없이 다음 명령을 기다립니다.
 - 최신 구현에서는 `exit` action이 task queue를 종료하고 MoveIt goal을 cancel한 뒤
   Home joint pose로 복귀하며, 복귀 성공 후 OnRobot RG2 그리퍼를 open합니다.
 - `pause`는 현재 MoveIt trajectory goal을 cancel하지만 대기 중인 queue는 유지합니다.
