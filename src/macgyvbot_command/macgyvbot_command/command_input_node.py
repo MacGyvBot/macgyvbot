@@ -14,6 +14,13 @@ from rclpy.node import Node
 from std_msgs.msg import String
 
 from macgyvbot_config.topics import COMMAND_SHUTDOWN_TOPIC, ROBOT_TASK_CONTROL_TOPIC
+from macgyvbot_interfaces.msg import (
+    CommandFeedback,
+    CommandShutdown,
+    RobotTaskControl,
+    RobotTaskStatus,
+    ToolCommand,
+)
 from macgyvbot_command.input_mapping.command_llm_parser import CommandLlmParser
 from macgyvbot_command.stt.speech_to_text import SpeechToTextService
 from macgyvbot_command.tts import TtsService
@@ -82,18 +89,26 @@ class CommandInputNode(Node):
             if self._publish_compat
             else None
         )
-        self._tool_command_pub = self.create_publisher(String, tool_command_topic, 10)
-        self._feedback_pub = self.create_publisher(String, command_feedback_topic, 10)
+        self._tool_command_pub = self.create_publisher(ToolCommand, tool_command_topic, 10)
+        self._feedback_pub = self.create_publisher(
+            CommandFeedback, command_feedback_topic, 10
+        )
         self._task_control_pub = self.create_publisher(
-            String,
+            RobotTaskControl,
             ROBOT_TASK_CONTROL_TOPIC,
             10,
         )
 
         self.create_subscription(String, stt_text_topic, self._text_cb, 10)
-        self.create_subscription(String, command_feedback_topic, self._feedback_cb, 10)
-        self.create_subscription(String, robot_status_topic, self._robot_status_cb, 10)
-        self.create_subscription(String, COMMAND_SHUTDOWN_TOPIC, self._shutdown_cb, 10)
+        self.create_subscription(
+            CommandFeedback, command_feedback_topic, self._feedback_cb, 10
+        )
+        self.create_subscription(
+            RobotTaskStatus, robot_status_topic, self._robot_status_cb, 10
+        )
+        self.create_subscription(
+            CommandShutdown, COMMAND_SHUTDOWN_TOPIC, self._shutdown_cb, 10
+        )
 
         self._parser = CommandLlmParser(
             ollama_url=self.get_parameter('ollama_url').value,
@@ -195,7 +210,7 @@ class CommandInputNode(Node):
         command = result.get('command')
         if command is not None:
             action = command.get('action')
-            if action in ('pause', 'resume'):
+            if action in ('pause', 'resume', 'cancel'):
                 self.get_logger().info(
                     f'작업 제어 명령 해석: action={action}, raw_text="{text}"'
                 )
@@ -222,8 +237,7 @@ class CommandInputNode(Node):
             self._publish_feedback_payload(payload)
 
     def _publish_command(self, command):
-        command_msg = String()
-        command_msg.data = json.dumps(command, ensure_ascii=False)
+        command_msg = self._tool_command_message(command)
         self._tool_command_pub.publish(command_msg)
         self.get_logger().info(
             '/tool_command 발행: '
@@ -232,32 +246,30 @@ class CommandInputNode(Node):
         )
 
     def _publish_feedback_payload(self, payload):
-        msg = String()
-        msg.data = json.dumps(payload, ensure_ascii=False)
+        msg = CommandFeedback()
+        msg.status = str(payload.get('status', 'unknown'))
+        msg.reason = str(payload.get('reason', ''))
+        msg.message = str(payload.get('message', ''))
+        msg.raw_text = str(payload.get('raw_text', ''))
+        command = payload.get('command')
+        msg.command_json = (
+            json.dumps(command, ensure_ascii=False) if command is not None else ''
+        )
+        msg.payload_json = json.dumps(payload, ensure_ascii=False)
         self._feedback_pub.publish(msg)
 
     def _send_task_control_request(self, action, reason):
-        msg = String()
-        msg.data = json.dumps(
-            {
-                'action': action,
-                'reason': reason,
-                'source': 'command_input',
-            },
-            ensure_ascii=False,
-        )
+        msg = RobotTaskControl()
+        msg.action = action
+        msg.reason = reason
+        msg.source = 'command_input'
         self._task_control_pub.publish(msg)
         self.get_logger().info(
             f'/robot_task_control 발행: action={action}, reason={reason}'
         )
 
     def _shutdown_cb(self, msg):
-        try:
-            payload = json.loads(msg.data)
-        except json.JSONDecodeError:
-            payload = {}
-
-        if payload.get('action') != 'shutdown':
+        if msg.action != 'shutdown':
             return
 
         self.get_logger().info('operator UI 종료 신호 수신: command_input_node를 종료합니다.')
@@ -265,26 +277,13 @@ class CommandInputNode(Node):
             rclpy.shutdown()
 
     def _feedback_cb(self, msg):
-        try:
-            feedback = json.loads(msg.data)
-        except json.JSONDecodeError:
-            self.get_logger().warn(f'/command_feedback JSON 파싱 실패: {msg.data}')
-            return
-
+        feedback = self._feedback_payload(msg)
         speech = self._feedback_speech_message(feedback)
         if speech:
             self._speak_bot(speech)
 
     def _robot_status_cb(self, msg):
-        status_text = msg.data.strip()
-        if not status_text:
-            return
-
-        try:
-            status = json.loads(status_text)
-        except json.JSONDecodeError:
-            self.get_logger().warn(f'/robot_task_status JSON 파싱 실패: {status_text}')
-            return
+        status = self._robot_status_payload(msg)
 
         if hasattr(self._parser, 'update_robot_status'):
             self._parser.update_robot_status(status)
@@ -310,6 +309,46 @@ class CommandInputNode(Node):
                     '종료 처리가 실패하여 command_input_node를 유지합니다.'
                 )
 
+    @staticmethod
+    def _tool_command_message(command):
+        msg = ToolCommand()
+        msg.action = str(command.get('action', 'unknown'))
+        msg.tool_name = str(command.get('tool_name', 'unknown'))
+        msg.target_mode = str(command.get('target_mode', 'unknown'))
+        msg.raw_text = str(command.get('raw_text', ''))
+        msg.match_method = str(command.get('match_method', 'unknown'))
+        msg.confidence = float(command.get('confidence', 0.0))
+        msg.payload_json = json.dumps(command, ensure_ascii=False)
+        return msg
+
+    @staticmethod
+    def _feedback_payload(msg):
+        payload = json.loads(msg.payload_json) if msg.payload_json else {}
+        payload.update({
+            'status': msg.status,
+            'reason': msg.reason,
+            'message': msg.message,
+            'raw_text': msg.raw_text,
+        })
+        if msg.command_json:
+            payload['command'] = json.loads(msg.command_json)
+        return payload
+
+    @staticmethod
+    def _robot_status_payload(msg):
+        payload = json.loads(msg.payload_json) if msg.payload_json else {}
+        payload.update({
+            'status': msg.status,
+            'task': msg.task,
+            'tool_name': msg.tool_name,
+            'action': msg.action,
+            'message': msg.message,
+            'reason': msg.reason,
+        })
+        if msg.command_json:
+            payload['command'] = json.loads(msg.command_json)
+        return payload
+
     def _feedback_speech_message(self, feedback):
         status = feedback.get('status', 'unknown')
         message = str(feedback.get('message') or '').strip()
@@ -319,9 +358,11 @@ class CommandInputNode(Node):
 
         if status == 'accepted':
             if action == 'pause':
-                return '정지 요청을 로봇에 전달했습니다. 작업을 재개할까요, 아니면 종료할까요?'
+                return '정지 요청을 로봇에 전달했습니다. 작업을 재개할까요, 아니면 이번 작업을 취소할까요?'
             if action == 'resume':
                 return message or '재개 요청을 이해했습니다.'
+            if action == 'cancel':
+                return message or '현재 작업 취소 요청을 이해했습니다.'
             if action == 'exit':
                 return message or '종료 요청을 이해했습니다.'
             return message or '명령을 이해했습니다.'

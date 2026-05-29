@@ -12,6 +12,7 @@ from difflib import SequenceMatcher
 
 from macgyvbot_command.input_mapping.command_vocabulary import (
     BRING_KEYWORDS,
+    CANCEL_KEYWORDS,
     EXIT_KEYWORDS,
     HOME_KEYWORDS,
     RELEASE_KEYWORDS,
@@ -101,6 +102,10 @@ def find_action(text):
     for keyword in RESUME_KEYWORDS:
         if normalize_text(keyword) in normalized:
             return 'resume'
+
+    for keyword in CANCEL_KEYWORDS:
+        if normalize_text(keyword) in normalized:
+            return 'cancel'
 
     for keyword in EXIT_KEYWORDS:
         if normalize_text(keyword) in normalized:
