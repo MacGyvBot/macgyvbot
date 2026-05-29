@@ -306,7 +306,37 @@ class MoveItController:
         state_goal.update()
 
         logger.info("Home joint pose로 복귀합니다.")
-        return self.plan_and_execute(logger, state_goal=state_goal)
+        ok = self.plan_and_execute(logger, state_goal=state_goal)
+        if ok:
+            return True
+
+        if self._wait_until_at_joint_goal(HOME_JOINTS, logger):
+            logger.warn(
+                "Home trajectory 결과는 실패로 보고되었지만 현재 joint pose가 "
+                "Home 허용 오차 안에 있어 Home 복귀 성공으로 처리합니다."
+            )
+            return True
+
+        return False
+
+    def _wait_until_at_joint_goal(
+        self,
+        goal_joints,
+        logger,
+        timeout_sec=0.5,
+        tolerance_rad=0.02,
+    ):
+        deadline = time.monotonic() + timeout_sec
+        while time.monotonic() <= deadline:
+            if self._is_at_joint_goal(
+                goal_joints,
+                logger,
+                tolerance_rad=tolerance_rad,
+            ):
+                return True
+            time.sleep(self.poll_interval_sec)
+
+        return False
 
     def _is_at_joint_goal(self, goal_joints, logger, tolerance_rad=0.02):
         try:
