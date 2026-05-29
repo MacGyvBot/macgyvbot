@@ -323,7 +323,7 @@ class GraspPointSelector:
         mode = self._vlm_only_mode()
         return VLM_ONLY_MODEL_BY_MODE.get(
             mode,
-            VLM_ONLY_MODEL_BY_MODE[GRASP_POINT_MODE_VLM_ONLY_SMOL],
+            VLM_ONLY_MODEL_BY_MODE[GRASP_POINT_MODE_VLM_ONLY_QWEN3B],
         )
 
     def _vlm_only_mode(self):
@@ -373,9 +373,9 @@ def normalize_grasp_point_mode(mode, logger):
         logger.warn(
             "'vlm_only' is deprecated. Use 'vlm_only_smol', "
             "'vlm_only_qwen3b', or 'vlm_only_qwen7b'. "
-            "Falling back to 'vlm_only_smol'."
+            "Falling back to 'vlm_only_qwen3b'."
         )
-        return GRASP_POINT_MODE_VLM_ONLY_SMOL
+        return GRASP_POINT_MODE_VLM_ONLY_QWEN3B
     if mode == "vlm_only_qwen_3b":
         return GRASP_POINT_MODE_VLM_ONLY_QWEN3B
     if mode == "vlm_only_qwen_7b":

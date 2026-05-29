@@ -165,7 +165,7 @@ def parse_args():
             GRASP_POINT_MODE_VLM_ONLY_QWEN3B,
             GRASP_POINT_MODE_VLM_ONLY_QWEN7B,
         ),
-        default=GRASP_POINT_MODE_VLM_ONLY_SMOL,
+        default=GRASP_POINT_MODE_VLM_ONLY_QWEN3B,
         help="Named VLM-only model mode.",
     )
     parser.add_argument(

@@ -118,7 +118,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "grasp_point_mode",
-                default_value="vlm",
+                default_value="vlm_only_qwen3b",
                 description=(
                     "Grasp point selection mode: center, vlm, vlm_only_smol, "
                     "vlm_only_qwen3b, vlm_only_qwen7b, vlm_only, or api"

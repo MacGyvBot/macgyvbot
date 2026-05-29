@@ -7,10 +7,10 @@ import math
 from PIL import Image
 
 from macgyvbot_config.vlm import (
-    GRASP_POINT_MODE_VLM_ONLY_SMOL,
+    GRASP_POINT_MODE_VLM_ONLY_QWEN3B,
     VLM_INFERENCE_HISTORY_DIR,
     VLM_INFERENCE_HISTORY_ENABLED,
-    VLM_MODEL_SMOL,
+    VLM_MODEL_QWEN3B,
 )
 from macgyvbot_perception.grasp_point.vlm.inference_history_recode import (
     InferenceHistoryConfig,
@@ -32,8 +32,8 @@ class VLMOnlyGraspPointSelector:
         sam_backend="mobile_sam",
         sam_model_type="vit_t",
         sam_device="cuda",
-        model_id=VLM_MODEL_SMOL,
-        mode=GRASP_POINT_MODE_VLM_ONLY_SMOL,
+        model_id=VLM_MODEL_QWEN3B,
+        mode=GRASP_POINT_MODE_VLM_ONLY_QWEN3B,
         history_enabled=VLM_INFERENCE_HISTORY_ENABLED,
         history_dir=VLM_INFERENCE_HISTORY_DIR,
     ):
