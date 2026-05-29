@@ -215,13 +215,23 @@ class PickSequenceRunner:
         log = self.state.logger()
         target_label = self.state.target_label
         refined_target = None
+        refine_started = time.monotonic()
 
         if self.refine_pick_target is not None and target_label:
             self.cooperative_wait(0.2)
             try:
+                log.info(
+                    "pick/refine_target_and_apply_vlm_yaw started: "
+                    f"target={target_label}"
+                )
                 refined_target = self.refine_pick_target(target_label)
             except Exception as exc:
                 log.warn(f"상단 view VLM target 갱신 실패: {exc}")
+            finally:
+                log.info(
+                    "pick/refine_target_and_apply_vlm_yaw completed: "
+                    f"elapsed_sec={time.monotonic() - refine_started:.3f}"
+                )
 
         if refined_target is not None and refined_target.found:
             bx, by, bz = refined_target.base_xyz

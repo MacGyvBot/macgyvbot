@@ -140,6 +140,10 @@ ros2 run macgyvbot_monitor launch_monitor -- ros2 launch macgyvbot_bringup macgy
 `DISCORD_WEBHOOK` 미설정 시 전송만 생략되고 launch는 정상 동작한다.
 로그는 `~/macgyvbot_monitor/macgyvbot_log/`에 타임스탬프 파일로 저장된다.
 
+기본 bringup은 `task_coordinator_node`, `hand_grasp_detection_node`와 함께
+별도 `vlm_grasp_service_node`도 실행한다. `vlm` 또는 `vlm_only_*` grasp mode에서는
+top-view 보정 시 task node가 직접 VLM을 실행하지 않고 이 service node로 추론을 요청한다.
+
 ## Grasp Point Mode
 
 개발 중 일반적으로 바꿔 쓰는 launch argument는 `grasp_point_mode`입니다.
@@ -157,6 +161,10 @@ ros2 launch macgyvbot_bringup macgyvbot.launch.py grasp_point_mode:=api
 ```
 
 지원 mode는 `src/macgyvbot_config/macgyvbot_config/vlm.py`에서 관리합니다.
+
+VLM service 이름과 timeout은 launch argument
+`vlm_service_name`, `vlm_service_wait_timeout_sec`,
+`vlm_service_response_timeout_sec`로 조정할 수 있다.
 
 VLM inference history 저장 기능은 기본 비활성화되어 있습니다. 설정은
 `macgyvbot_config.vlm`의 `VLM_INFERENCE_HISTORY_ENABLED`와

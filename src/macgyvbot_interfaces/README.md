@@ -31,6 +31,8 @@ msg/
   ToolDropEvent.msg
   HumanGraspResult.msg
   ToolMaskLock.msg
+srv/
+  VLMGrasp.srv
 
 future msg/
   DetectedObject.msg

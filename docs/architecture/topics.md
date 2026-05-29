@@ -8,6 +8,9 @@ package-boundary contracts. Plain recognized text and manual target labels
 remain `std_msgs/String`; image and sensor streams keep their standard ROS
 types.
 
+`macgyvbot_interfaces/srv/*` services are used when package boundaries need a
+typed request/response contract instead of a streamed topic.
+
 ## Command And UI
 
 | Topic | Type | Publisher | Subscriber | Payload |
@@ -43,6 +46,12 @@ types.
 | `/camera/camera/color/camera_info` | `sensor_msgs/CameraInfo` | RealSense camera | `macgyvbot_task` | Camera intrinsics |
 | `/force_torque_sensor_broadcaster/wrench` | `geometry_msgs/WrenchStamped` | Force/torque sensor or controller | `macgyvbot_task` | Force/torque sample |
 
+## Services
+
+| Service | Type | Server | Client | Payload |
+| --- | --- | --- | --- | --- |
+| `/vlm_grasp` | `macgyvbot_interfaces/srv/VLMGrasp` | `macgyvbot_perception` `vlm_grasp_service_node` | `macgyvbot_task` | Top-view VLM grasp inference using color image, bbox, label, target label, and mode; response returns grasp pixel, source, orientation/yaw, and error status |
+
 ## Contract Rules
 
 - Topic names should be defined in `macgyvbot_config.topics` when used by more
@@ -57,3 +66,5 @@ types.
   it must not be treated as robot `exit` or trigger robot motion.
 - If a launch remap changes any topic above, update this document in the same
   PR.
+- If a launch remap changes any shared service above, update this document in
+  the same PR.

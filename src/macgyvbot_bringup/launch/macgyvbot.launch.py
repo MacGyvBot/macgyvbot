@@ -53,6 +53,13 @@ def generate_launch_description():
     grasp_point_api_timeout_sec = LaunchConfiguration(
         "grasp_point_api_timeout_sec"
     )
+    vlm_service_name = LaunchConfiguration("vlm_service_name")
+    vlm_service_wait_timeout_sec = LaunchConfiguration(
+        "vlm_service_wait_timeout_sec"
+    )
+    vlm_service_response_timeout_sec = LaunchConfiguration(
+        "vlm_service_response_timeout_sec"
+    )
 
     moveit_config = (
         MoveItConfigsBuilder(
@@ -177,6 +184,18 @@ def generate_launch_description():
                 default_value="30.0",
             ),
             DeclareLaunchArgument(
+                "vlm_service_name",
+                default_value="/vlm_grasp",
+            ),
+            DeclareLaunchArgument(
+                "vlm_service_wait_timeout_sec",
+                default_value="2.0",
+            ),
+            DeclareLaunchArgument(
+                "vlm_service_response_timeout_sec",
+                default_value="30.0",
+            ),
+            DeclareLaunchArgument(
                 "force_torque_topic",
                 default_value="/force_torque_sensor_broadcaster/wrench",
             ),
@@ -213,10 +232,32 @@ def generate_launch_description():
                         "grasp_point_api_env_file": grasp_point_api_env_file,
                         "grasp_point_api_base_url": grasp_point_api_base_url,
                         "grasp_point_api_timeout_sec": grasp_point_api_timeout_sec,
+                        "vlm_service_name": vlm_service_name,
+                        "vlm_service_wait_timeout_sec": vlm_service_wait_timeout_sec,
+                        "vlm_service_response_timeout_sec": (
+                            vlm_service_response_timeout_sec
+                        ),
                         "force_torque_topic": LaunchConfiguration(
                             "force_torque_topic"
                         ),
                         "display_debug_windows": display_debug_windows,
+                        "sam_enabled": sam_enabled,
+                        "sam_checkpoint": sam_checkpoint,
+                        "sam_backend": "mobile_sam",
+                        "sam_model_type": "vit_t",
+                        "sam_device": "cuda",
+                    },
+                ],
+            ),
+            Node(
+                package="macgyvbot_perception",
+                executable="vlm_grasp_service_node",
+                name="vlm_grasp_service_node",
+                output="screen",
+                parameters=[
+                    {
+                        "vlm_service_name": vlm_service_name,
+                        "grasp_point_mode": LaunchConfiguration("grasp_point_mode"),
                         "sam_enabled": sam_enabled,
                         "sam_checkpoint": sam_checkpoint,
                         "sam_backend": "mobile_sam",
