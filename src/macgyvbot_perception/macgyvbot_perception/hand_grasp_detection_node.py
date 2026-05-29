@@ -113,7 +113,7 @@ class HandGraspDetectionNode(Node):
                 "lock_on_status",
                 HAND_GRASP_LOCK_ON_STATUS,
             ).value
-        )
+        ).strip().lower()
         self.ml_min_confidence = float(
             self.declare_parameter(
                 "ml_min_confidence",
@@ -281,7 +281,9 @@ class HandGraspDetectionNode(Node):
         return segmenter
 
     def _robot_status_cb(self, msg: RobotTaskStatus) -> None:
-        if msg.status == self.lock_on_status:
+        status = str(msg.status or "").strip().lower()
+
+        if status == self.lock_on_status:
             self.lock_requested = True
             self.mask_tracking_active = False
             self.locked_tool = None
