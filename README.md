@@ -129,8 +129,16 @@ ros2 launch realsense2_camera rs_align_depth_launch.py \
 MacGyvBot 실행:
 
 ```bash
+# Discord 알림 없이
 ros2 launch macgyvbot_bringup macgyvbot.launch.py
+
+# Discord 알림 + 로그 저장
+export DISCORD_WEBHOOK="https://discord.com/api/webhooks/xxxx/yyyy"
+ros2 run macgyvbot_monitor launch_monitor -- ros2 launch macgyvbot_bringup macgyvbot.launch.py
 ```
+
+`DISCORD_WEBHOOK` 미설정 시 전송만 생략되고 launch는 정상 동작한다.
+로그는 `~/macgyvbot_monitor/macgyvbot_log/`에 타임스탬프 파일로 저장된다.
 
 ## Grasp Point Mode
 
