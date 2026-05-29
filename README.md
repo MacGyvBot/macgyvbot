@@ -134,7 +134,7 @@ ros2 launch macgyvbot_bringup macgyvbot.launch.py
 
 # Discord 알림 + 로그 저장
 export DISCORD_WEBHOOK="https://discord.com/api/webhooks/xxxx/yyyy"
-ros2 launch macgyvbot_bringup macgyvbot.launch.py 2>&1 | ros2 run macgyvbot_monitor launch_monitor
+ros2 run macgyvbot_monitor launch_monitor -- ros2 launch macgyvbot_bringup macgyvbot.launch.py
 ```
 
 `DISCORD_WEBHOOK` 미설정 시 전송만 생략되고 launch는 정상 동작한다.
