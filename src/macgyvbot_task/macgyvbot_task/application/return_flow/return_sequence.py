@@ -9,8 +9,11 @@ from macgyvbot_manipulation.handover_targeting import move_to_observation_pose
 from macgyvbot_task.application.return_flow.return_handoff_flow import (
     ReturnHandoffFlow,
 )
-from macgyvbot_task.application.return_flow.return_home_placement_flow import (
-    ReturnHomePlacementFlow,
+from macgyvbot_task.application.return_flow.return_drawer_placement_flow import (
+    ReturnDrawerPlacementFlow,
+)
+from macgyvbot_task.application.return_flow.return_staging_placement_flow import (
+    ReturnStagingPlacementFlow,
 )
 from macgyvbot_task.application.return_flow.return_target_resolver import (
     RETURN_SOURCE_HAND,
@@ -34,7 +37,9 @@ class ReturnSequenceRunner:
         tool_hold_monitor=None,
         control_events=None,
         drawer_flow=None,
-        detect_home_tool_label=None,
+        detect_store_tool_label=None,
+        resolve_store_tool_target=None,
+        resolve_drawer_marker_target=None,
     ):
         self.robot = robot
         self.motion = motion_controller
@@ -43,7 +48,13 @@ class ReturnSequenceRunner:
         self.tool_hold_monitor = tool_hold_monitor
         self.control_events = control_events or {}
         self.drawer_flow = drawer_flow
-        self.detect_home_tool_label = detect_home_tool_label or (lambda: None)
+        self.detect_store_tool_label = detect_store_tool_label or (lambda: None)
+        self.resolve_store_tool_target = resolve_store_tool_target or (
+            lambda _tool_name: None
+        )
+        self.resolve_drawer_marker_target = resolve_drawer_marker_target or (
+            lambda _drawer_id: None
+        )
         self.reporter = ReturnStatusReporter(state)
         self.target_resolver = ReturnTargetResolver(
             state,
@@ -59,7 +70,17 @@ class ReturnSequenceRunner:
             tool_hold_monitor,
             interrupted=self._interrupted,
         )
-        self.placement = ReturnHomePlacementFlow(
+        self.placement = ReturnStagingPlacementFlow(
+            robot,
+            motion_controller,
+            gripper,
+            state,
+            self.reporter,
+            self._cooperative_wait,
+            tool_hold_monitor,
+            interrupted=self._interrupted,
+        )
+        self.drawer_placement = ReturnDrawerPlacementFlow(
             robot,
             motion_controller,
             gripper,
@@ -77,24 +98,51 @@ class ReturnSequenceRunner:
             "tool_name": None,
             "observed_tool": None,
             "drawer_id": None,
-            "ori": self.state.home_ori,
+            "drawer_marker_target": None,
+            "store_tool_target": None,
         }
         return [
             TaskStep("return/prepare", lambda: self._prepare(context)),
             TaskStep("return/receive_tool", lambda: self._receive_tool(context)),
-            TaskStep("return/place_home", lambda: self._place_home(context)),
             TaskStep(
-                "return/resolve_home_observed_drawer",
-                lambda: self._resolve_home_observed_drawer(context),
+                "return/place_store_observe_point",
+                lambda: self._place_store_observe_point(context),
             ),
             TaskStep(
-                "return/open_home_observed_drawer",
-                lambda: self._open_home_observed_drawer(context),
+                "return/observe_store_tool_label",
+                lambda: self._resolve_store_observed_drawer(context),
             ),
-            # TODO: 서랍 안에 공구 넣는 동작 추가
             TaskStep(
-                "return/close_home_observed_drawer",
-                lambda: self._close_home_observed_drawer(context),
+                "return/open_observed_tool_drawer",
+                lambda: self._open_observed_tool_drawer(context),
+            ),
+            TaskStep(
+                "return/observe_open_drawer",
+                lambda: self._observe_open_drawer(context),
+            ),
+            TaskStep(
+                "return/resolve_drawer_marker",
+                lambda: self._resolve_drawer_marker(context),
+            ),
+            TaskStep(
+                "return/move_to_store_tool_observe_point",
+                lambda: self._move_to_store_tool_observe_point(context),
+            ),
+            TaskStep(
+                "return/resolve_store_tool_bbox",
+                lambda: self._resolve_store_tool_bbox(context),
+            ),
+            TaskStep(
+                "return/grasp_store_tool",
+                lambda: self._grasp_store_tool(context),
+            ),
+            TaskStep(
+                "return/place_tool_at_drawer_marker",
+                lambda: self._place_tool_at_drawer_marker(context),
+            ),
+            TaskStep(
+                "return/close_observed_tool_drawer",
+                lambda: self._close_observed_tool_drawer(context),
             ),
             TaskStep(
                 "return/home_after_drawer_close",
@@ -191,14 +239,13 @@ class ReturnSequenceRunner:
         context["tool_name"] = tool_name
         return True
 
-    def _place_home(self, context):
+    def _place_store_observe_point(self, context):
         tool_name = context["tool_name"]
         if tool_name is None:
             return False
 
-        return self.placement.place_at_robot_home(
+        return self.placement.place_at_store_observe_point(
             tool_name,
-            context["ori"],
             context["command"],
             self.state.logger(),
         )
@@ -208,21 +255,21 @@ class ReturnSequenceRunner:
         self.reporter.publish(
             "done",
             tool_name,
-            f"{tool_name} 반납 공구를 Home에 배치했습니다.",
+            f"{tool_name} 반납 공구를 서랍 내부에 배치했습니다.",
             context["command"],
         )
         return True
 
-    def _resolve_home_observed_drawer(self, context):
+    def _resolve_store_observed_drawer(self, context):
         if self.drawer_flow is None:
             return True
 
-        observed_tool = self.detect_home_tool_label()
+        observed_tool = self.detect_store_tool_label()
         if observed_tool is None:
             self.reporter.fail(
                 context["tool_name"] or context["requested_tool"],
-                "Home 위치 관찰에서 반납 공구 라벨을 찾지 못했습니다.",
-                "return_home_observed_tool_not_found",
+                "임시 관찰 위치에서 반납 공구 라벨을 찾지 못했습니다.",
+                "return_store_observed_tool_not_found",
                 context["command"],
                 self.state.logger(),
             )
@@ -233,7 +280,7 @@ class ReturnSequenceRunner:
             self.reporter.fail(
                 observed_tool,
                 f"{observed_tool}에 매핑된 서랍이 없습니다.",
-                "return_home_observed_tool_drawer_unmapped",
+                "return_store_observed_tool_drawer_unmapped",
                 context["command"],
                 self.state.logger(),
             )
@@ -242,12 +289,12 @@ class ReturnSequenceRunner:
         context["observed_tool"] = observed_tool
         context["drawer_id"] = drawer_id
         self.state.logger().info(
-            f"Home 관찰 라벨 기준 drawer 선택: tool={observed_tool}, "
+            f"임시 관찰 라벨 기준 drawer 선택: tool={observed_tool}, "
             f"drawer={drawer_id}"
         )
         return True
 
-    def _open_home_observed_drawer(self, context):
+    def _open_observed_tool_drawer(self, context):
         drawer_id = context.get("drawer_id")
         observed_tool = context.get("observed_tool")
         if self.drawer_flow is None or drawer_id is None:
@@ -261,7 +308,116 @@ class ReturnSequenceRunner:
         )
         return self.drawer_flow.open_drawer(drawer_id, self.state.logger())
 
-    def _close_home_observed_drawer(self, context):
+    def _observe_open_drawer(self, context):
+        drawer_id = context.get("drawer_id")
+        observed_tool = context.get("observed_tool")
+        if self.drawer_flow is None or drawer_id is None:
+            return True
+
+        self.reporter.publish(
+            "observing_drawer",
+            observed_tool,
+            f"{observed_tool} 보관 서랍 내부 marker를 관찰합니다.",
+            context["command"],
+        )
+        return self.drawer_flow.observe_drawer(drawer_id, self.state.logger())
+
+    def _resolve_drawer_marker(self, context):
+        drawer_id = context.get("drawer_id")
+        observed_tool = context.get("observed_tool")
+        if self.drawer_flow is None or drawer_id is None:
+            return True
+
+        target = self.resolve_drawer_marker_target(drawer_id)
+        if target is None or not target.found:
+            reason = getattr(target, "reason", "") or "return_drawer_marker_not_found"
+            message = "서랍 내부 ArUco marker 중심을 찾지 못했습니다."
+            if reason == "return_drawer_marker_projection_failed":
+                message = "서랍 내부 ArUco marker 중심 좌표 변환에 실패했습니다."
+            self.reporter.fail(
+                observed_tool,
+                message,
+                reason,
+                context["command"],
+                self.state.logger(),
+            )
+            return False
+
+        context["drawer_marker_target"] = target
+        self.state.logger().info(
+            "서랍 marker target 확정: "
+            f"tool={observed_tool}, drawer={drawer_id}, "
+            f"pixel={target.pixel}, base={target.base_xyz}"
+        )
+        return True
+
+    def _move_to_store_tool_observe_point(self, context):
+        observed_tool = context.get("observed_tool") or context["requested_tool"]
+        self.reporter.publish(
+            "moving_store_observe_point",
+            observed_tool,
+            "임시 관찰 위치로 이동해 공구 bbox를 다시 확인합니다.",
+            context["command"],
+        )
+        ok = self.placement.move_to_store_observe_point(self.state.logger())
+        if ok:
+            return True
+
+        if self._interrupted():
+            return False
+
+        self.reporter.fail(
+            observed_tool,
+            "임시 관찰 위치 이동에 실패했습니다.",
+            "return_store_observe_move_failed",
+            context["command"],
+            self.state.logger(),
+        )
+        return False
+
+    def _resolve_store_tool_bbox(self, context):
+        observed_tool = context.get("observed_tool")
+        if observed_tool is None:
+            return False
+
+        target = self.resolve_store_tool_target(observed_tool)
+        if target is None or not target.found:
+            self.reporter.fail(
+                observed_tool,
+                "임시 관찰 위치에서 공구 bbox 중심을 찾지 못했습니다.",
+                "return_store_tool_bbox_not_found",
+                context["command"],
+                self.state.logger(),
+            )
+            return False
+
+        context["store_tool_target"] = target
+        self.state.logger().info(
+            "임시 위치 공구 bbox target 확정: "
+            f"tool={observed_tool}, pixel={target.pixel}, base={target.base_xyz}"
+        )
+        return True
+
+    def _grasp_store_tool(self, context):
+        observed_tool = context.get("observed_tool") or context["requested_tool"]
+        return self.drawer_placement.grasp_staged_tool(
+            context.get("store_tool_target"),
+            observed_tool,
+            context["command"],
+            self.state.logger(),
+        )
+
+    def _place_tool_at_drawer_marker(self, context):
+        observed_tool = context.get("observed_tool") or context["requested_tool"]
+        return self.drawer_placement.place_tool_at_marker(
+            context.get("drawer_marker_target"),
+            observed_tool,
+            context["command"],
+            self.state.logger(),
+            drawer_id=context.get("drawer_id"),
+        )
+
+    def _close_observed_tool_drawer(self, context):
         drawer_id = context.get("drawer_id")
         observed_tool = context.get("observed_tool")
         if self.drawer_flow is None or drawer_id is None:

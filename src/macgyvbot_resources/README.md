@@ -11,7 +11,9 @@ Shared non-code assets for migrated MacGyvBot packages.
 This package owns source-tree calibration and model asset locations under the
 ROS workspace `src/` tree. Runtime packages should query
 `macgyvbot_resources`; the repository root no longer owns installed model or
-calibration assets.
+calibration assets. Printable ArUco marker PDFs are managed outside this
+package; runtime code only depends on the marker IDs configured in
+`macgyvbot_config.drawer`.
 
 ## YOLO RealSense Smoke Test
 

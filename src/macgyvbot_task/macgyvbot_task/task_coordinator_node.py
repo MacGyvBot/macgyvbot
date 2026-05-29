@@ -74,6 +74,9 @@ from macgyvbot_task.application.display.debug_display import DebugDisplay
 from macgyvbot_task.application.pick_flow.pick_frame_processor import (
     PickFrameProcessor,
 )
+from macgyvbot_task.application.return_flow.return_perception_adapter import (
+    ReturnPerceptionAdapter,
+)
 from macgyvbot_task.application.pick_flow.pick_sequence import PickSequenceRunner
 from macgyvbot_task.application.return_flow.return_sequence import ReturnSequenceRunner
 from macgyvbot_task.application.robot.robot_home_initializer import (
@@ -244,6 +247,25 @@ class TaskCoordinatorNode(Node):
             "pause": self.pause_req,
             "resume": self.resume_req,
         }
+        self.frame_processor = PickFrameProcessor(
+            self.state,
+            self.detector,
+            self.pick_target_resolver,
+            self.start_pick_sequence,
+            self._publish_robot_status,
+            self.get_logger(),
+            drawer_ready_for_target=self._drawer_ready_for_target,
+            prepare_drawer_for_target=self._prepare_drawer_for_target,
+        )
+        self.return_perception = ReturnPerceptionAdapter(
+            self.state,
+            self.detector,
+            self.drawer_flow,
+            self.frame_processor,
+            self.pick_target_resolver,
+            self.depth_projector,
+            self.get_logger(),
+        )
         self.pick_runner = PickSequenceRunner(
             self.robot,
             self.motion,
@@ -262,17 +284,15 @@ class TaskCoordinatorNode(Node):
             self.tool_hold_monitor,
             control_events=control_events,
             drawer_flow=self.drawer_flow,
-            detect_home_tool_label=self._detect_home_tool_label,
-        )
-        self.frame_processor = PickFrameProcessor(
-            self.state,
-            self.detector,
-            self.pick_target_resolver,
-            self.start_pick_sequence,
-            self._publish_robot_status,
-            self.get_logger(),
-            drawer_ready_for_target=self._drawer_ready_for_target,
-            prepare_drawer_for_target=self._prepare_drawer_for_target,
+            detect_store_tool_label=(
+                self.return_perception.detect_store_tool_label
+            ),
+            resolve_store_tool_target=(
+                self.return_perception.resolve_store_tool_target
+            ),
+            resolve_drawer_marker_target=(
+                self.return_perception.resolve_drawer_marker_target
+            ),
         )
 
         self._create_subscriptions()
@@ -1068,27 +1088,6 @@ class TaskCoordinatorNode(Node):
             depth_image,
             intrinsics,
         )
-
-    def _detect_home_tool_label(self):
-        if self.state.color_image is None:
-            return None
-        results = self.detector.detect(self.state.color_image)
-        boxes = results[0].boxes if results else None
-        if boxes is None:
-            return None
-        supported = self.drawer_flow.supported_tool_labels()
-        for box in boxes:
-            label = self._box_label(box)
-            if label in supported:
-                return label
-        return None
-
-    def _box_label(self, box):
-        try:
-            class_id = int(box.cls[0])
-        except (TypeError, IndexError):
-            class_id = int(box.cls)
-        return str(self.detector.names[class_id])
 
     def _motion_interrupted(self):
         return self.exit_req.is_set() or self.pause_req.is_set()
