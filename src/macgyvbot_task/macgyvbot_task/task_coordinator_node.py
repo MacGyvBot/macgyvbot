@@ -475,7 +475,6 @@ class TaskCoordinatorNode(Node):
             )
             return
 
-        self.state.target_label = tool_name
         self.state.current_command = command
         self.state.drawer_prepared_tool = None
         self.state.drawer_preparing_tool = None
@@ -487,7 +486,15 @@ class TaskCoordinatorNode(Node):
             message=f"{tool_name} 탐색 요청을 task coordinator가 수신했습니다.",
             command=command,
         )
-        self._prepare_drawer_for_target(tool_name)
+        if not self._prepare_drawer_for_target(tool_name):
+            self.state.target_label = tool_name
+            self._publish_robot_status(
+                "searching",
+                tool_name=tool_name,
+                action="bring",
+                message=f"{tool_name} 탐색을 시작합니다.",
+                command=command,
+            )
 
     def _handle_release_request(self, payload):
         command = payload.get("command") or {}
@@ -844,6 +851,7 @@ class TaskCoordinatorNode(Node):
         with self._queue_lock:
             self._current_step = None
             self._current_task_name = None
+            self._step_thread = None
 
             if ok and not self.pause_req.is_set():
                 self.get_logger().info(f"task step 완료: {step.name}")
@@ -871,12 +879,14 @@ class TaskCoordinatorNode(Node):
             self._queue.clear()
             self._current_step = None
             self._current_task_name = None
+            self._step_thread = None
         self.get_logger().info(f"{task_name} task queue 실패로 종료")
         self._run_cleanup_callbacks()
         self._clear_task_state()
 
     def _complete_queue_locked(self):
         self.get_logger().info("task queue 완료")
+        self._step_thread = None
         self._run_cleanup_callbacks()
         self._clear_task_state()
         self.exit_req.clear()
@@ -984,6 +994,7 @@ class TaskCoordinatorNode(Node):
                 ok = self.drawer_flow.observe_drawer(drawer_id, log)
 
             if ok:
+                self.state.target_label = target_label
                 self.state.drawer_prepared_tool = target_label
                 self._publish_robot_status(
                     "searching",
