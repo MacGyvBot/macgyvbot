@@ -71,7 +71,10 @@ from macgyvbot_config.topics import (
     HAND_GRASP_IMAGE_TOPIC,
     HAND_GRASP_MASK_LOCK_TOPIC,
     HAND_GRASP_TOPIC,
+    ROBOT_TASK_CONTROL_TOPIC,
     ROBOT_STATUS_TOPIC,
+    TASK_CONTROL_TOPIC,
+    TASK_REQUEST_TOPIC,
     TOOL_COMMAND_TOPIC,
 )
 from macgyvbot_config.ui import (

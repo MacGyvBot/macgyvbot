@@ -62,22 +62,13 @@ class PickSequenceRunner:
         self.state.tool_mask_locked = False
         self.state.last_tool_mask_lock_result = None
 
-        log = self.state.logger()
-        drawer_id = self._drawer_id_for_current_target()
-        safe_z_min = self._safe_z_min_for_drawer(drawer_id)
-        plan = self.target_planner.plan(
-            bx,
-            by,
-            bz,
-            log,
-            safe_z_min=safe_z_min,
-        )
         context = {
             "plan": plan,
             "ori": self.state.home_ori,
-            "drawer_id": drawer_id,
-            "safe_z_min": safe_z_min,
+            "drawer_id": None,
+            "safe_z_min": None,
             "vlm_yaw_deg": vlm_yaw_deg,
+            "plan": None,
         }
 
         log.info(
@@ -90,6 +81,7 @@ class PickSequenceRunner:
         )
 
         steps = [
+            TaskStep("pick/plan_target", lambda: self._plan_target(context)),
             TaskStep("pick/open_gripper", self._open_gripper),
             TaskStep(
                 "pick/travel_z",
@@ -173,6 +165,37 @@ class PickSequenceRunner:
             TaskStep("pick/done", self._publish_done, retry_on_pause=False),
         ]
         return steps
+
+    def _plan_target(self, context):
+        log = self.state.logger()
+        drawer_id = self._drawer_id_for_current_target()
+        safe_z_min = self._safe_z_min_for_drawer(drawer_id)
+        plan = self.target_planner.plan(
+            context["bx"],
+            context["by"],
+            context["bz"],
+            log,
+            safe_z_min=safe_z_min,
+        )
+        context["drawer_id"] = drawer_id
+        context["safe_z_min"] = safe_z_min
+        context["plan"] = plan
+        log.info(
+            f"시퀀스 시작: Target({plan.target_x:.3f}, {plan.target_y:.3f}), "
+            f"safe_z_min={safe_z_min:.3f}, raw_bz={context['bz']:.3f}, "
+            f"corrected_bz={plan.corrected_bz:.3f}, "
+            f"travel_z={plan.travel_z:.3f}, "
+            f"approach_z={plan.approach_z:.3f}, "
+            f"grasp_z={plan.grasp_z:.3f}"
+        )
+        return True
+
+    @staticmethod
+    def _current_plan(context):
+        plan = context.get("plan")
+        if plan is None:
+            raise RuntimeError("pick target plan has not been built yet")
+        return plan
 
     def _open_gripper(self):
         self.gripper.open_gripper()
