@@ -15,7 +15,7 @@ from PIL import Image
 class InferenceHistoryConfig:
     """Configuration for optional inference history recording."""
 
-    enabled: bool = False
+    enabled: bool = True
     root_dir: str = "src/macgyvbot_perception/data/vlm_traces"
     csv_name: str = "inference_history.csv"
 
