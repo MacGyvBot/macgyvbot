@@ -32,8 +32,13 @@ ROS 패키지가 아니라 colcon workspace root이며, 실행 entrypoint는
   - YOLO detection, depth projection, pick target resolution, grasp point selection,
     hand grasp detection node와 hand/tool grasp helper를 소유합니다.
   - model path lookup은 `macgyvbot_resources`를 기준으로 수행합니다.
-  - `grasp_point/`는 로봇이 잡을 image-space grasp point 선택과 depth
-    refinement를 담당합니다.
+  - `grasp_point/`는 로봇이 잡을 image-space grasp point 선택을 담당합니다.
+    기본 모드는 단일 호출 기반 `vlm_only_qwen3b`이며, 기존 grid 기반 `vlm`,
+    Gemini API 기반 `api`, bbox 중심 `center` 모드를 함께 지원합니다.
+  - `grasp_point/vlm/`은 local VLM 모델 호출, 응답 parsing, inference history
+    기록처럼 VLM 자체에 가까운 공통 기능을 소유합니다.
+  - `grasp_point/vlm_method/`, `grasp_point/vlm_only_method/`,
+    `grasp_point/api_method/`는 각각의 grasp point 선정 방식을 소유합니다.
   - `hand_tool_grasp/`는 사용자 손이 공구를 잡았는지 판단하는 hand landmark,
     tool ROI/mask contact, ML hand grasp classification을 담당합니다.
   - ROS-facing 이름인 `hand_grasp_detection_node`,
