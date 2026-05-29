@@ -1,5 +1,7 @@
 """Pick sequence step construction."""
 
+import time
+
 from macgyvbot_manipulation.robot_pose import (
     current_ee_orientation,
     make_safe_pose,
