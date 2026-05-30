@@ -347,6 +347,15 @@ def estimate_yaw_from_multi_frame_sam(
         f"reason={aggregation_debug.get('reason')}",
     )
     if aggregated_mask is None or not aggregation_debug.get("success"):
+        if not any(
+            bool(item.get("success"))
+            for item in debug_info.get("per_frame_sam_debug", [])
+        ):
+            _log(
+                cfg,
+                "warning",
+                "No SAM mask available for PCA yaw estimation or debug image.",
+            )
         debug_info["reason"] = aggregation_debug.get("reason", "aggregation_failed")
         return 0.0, debug_info
 
@@ -355,6 +364,13 @@ def estimate_yaw_from_multi_frame_sam(
         debug_info["pca_input_mask_path"] = saved_mask_path
     yaw_deg, pca_debug = estimate_yaw_from_mask(aggregated_mask)
     debug_info["pca_debug"] = pca_debug
+    saved_visualization_path = _save_pca_debug_visualization(
+        aggregated_mask,
+        pca_debug,
+        cfg,
+    )
+    if saved_visualization_path:
+        debug_info["pca_debug_visualization_path"] = saved_visualization_path
     _log(
         cfg,
         "info",
@@ -731,6 +747,59 @@ def _save_pca_input_mask_image(mask: np.ndarray, cfg: dict[str, Any]) -> str:
         return str(output_path)
     except Exception as exc:
         _log(cfg, "warning", f"Failed to save PCA input mask image: {exc}")
+        return ""
+
+
+def _save_pca_debug_visualization(
+    mask: np.ndarray,
+    pca_debug: dict[str, Any],
+    cfg: dict[str, Any],
+) -> str:
+    """Save a visualization of the final SAM mask with the PCA principal axis."""
+    if not bool(cfg.get("save_pca_input_mask_image", False)):
+        return ""
+    if mask is None or not isinstance(mask, np.ndarray) or mask.ndim != 2:
+        return ""
+    if not bool((pca_debug or {}).get("success")):
+        return ""
+
+    try:
+        output_dir = Path(str(cfg.get("pca_input_mask_dir", ""))).expanduser()
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        binary_mask = (mask > 0).astype(np.uint8)
+        canvas = np.repeat((binary_mask * 255)[:, :, None], 3, axis=2)
+        ys, xs = np.where(binary_mask > 0)
+        if xs.size == 0:
+            return ""
+
+        center = np.asarray([float(xs.mean()), float(ys.mean())], dtype=np.float32)
+        principal = np.asarray(
+            pca_debug.get("eigenvector") or [0.0, 0.0],
+            dtype=np.float32,
+        )
+        principal_norm = float(np.linalg.norm(principal))
+        if principal_norm <= 1e-6:
+            return ""
+        principal = principal / principal_norm
+
+        axis_length = max(10.0, float(max(canvas.shape[:2]) * 0.45))
+        start_point = center - (principal * axis_length)
+        end_point = center + (principal * axis_length)
+        start_xy = tuple(int(round(value)) for value in start_point)
+        end_xy = tuple(int(round(value)) for value in end_point)
+        center_xy = tuple(int(round(value)) for value in center)
+
+        cv2.line(canvas, start_xy, end_xy, (0, 0, 255), 2, lineType=cv2.LINE_AA)
+        cv2.circle(canvas, center_xy, 3, (0, 255, 0), -1, lineType=cv2.LINE_AA)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        output_path = output_dir / f"{timestamp}_pca_axis_overlay.png"
+        cv2.imwrite(str(output_path), canvas)
+        _log(cfg, "info", f"Saved PCA debug visualization: path={output_path}")
+        return str(output_path)
+    except Exception as exc:
+        _log(cfg, "warning", f"Failed to save PCA debug visualization: {exc}")
         return ""
 
 

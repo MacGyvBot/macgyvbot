@@ -1,4 +1,6 @@
 import math
+import tempfile
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -10,6 +12,7 @@ from macgyvbot_perception.grasp_point.grasp_method.yaw_estimation import (
     aggregate_masks_across_frames,
     apply_pca_yaw_to_grasp_result,
     estimate_sam_mask_for_crop,
+    estimate_yaw_from_multi_frame_sam,
     estimate_yaw_from_mask,
     normalize_parallel_gripper_yaw,
 )
@@ -29,10 +32,16 @@ class FakeSamPredictor:
 
 
 class FakeLogger:
+    def __init__(self):
+        self.infos = []
+        self.warnings = []
+
     def info(self, message):
+        self.infos.append(message)
         return None
 
     def warn(self, message):
+        self.warnings.append(message)
         return None
 
 
@@ -253,6 +262,45 @@ def test_apply_pca_yaw_to_grasp_result_inverts_sign():
 
     assert debug["invert_yaw_sign_applied"] is True
     assert 20.0 <= result["yaw_deg"] <= 40.0
+
+
+def test_estimate_yaw_from_multi_frame_sam_saves_mask_and_axis_visualization():
+    crop = np.zeros((100, 100, 3), dtype=np.uint8)
+    mask = _rotated_rect_mask((100, 100), (50, 50), (60, 18), 30.0)
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        yaw_deg, debug = estimate_yaw_from_multi_frame_sam(
+            [crop, crop],
+            sam_predictor=FakeSamPredictor([mask]),
+            config={
+                "pca_input_mask_dir": temp_dir,
+                "save_pca_input_mask_image": True,
+                "min_valid_masks": 2,
+            },
+        )
+
+        assert debug["success"] is True
+        assert yaw_deg != 0.0
+        assert Path(debug["pca_input_mask_path"]).exists()
+        assert Path(debug["pca_debug_visualization_path"]).exists()
+
+
+def test_estimate_yaw_from_multi_frame_sam_logs_when_no_sam_mask_available():
+    crop = np.zeros((80, 80, 3), dtype=np.uint8)
+    logger = FakeLogger()
+
+    yaw_deg, debug = estimate_yaw_from_multi_frame_sam(
+        [crop, crop],
+        sam_predictor=FakeSamPredictor([np.zeros((80, 80), dtype=np.uint8)]),
+        config={"logger": logger},
+    )
+
+    assert yaw_deg == 0.0
+    assert debug["success"] is False
+    assert any(
+        "No SAM mask available for PCA yaw estimation or debug image." in message
+        for message in logger.warnings
+    )
 
 
 def test_center_selector_returns_refined_orientation():
