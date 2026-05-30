@@ -1,6 +1,23 @@
 #!/usr/bin/env python3
 
+import sys
+
+from macgyvbot_domain.logging import LogEvent, format_log_event
 from pymodbus.client.sync import ModbusTcpClient as ModbusClient
+
+
+def _log(level, step, event, **fields):
+    text = format_log_event(
+        LogEvent(
+            svc="manipulation",
+            pipe="gripper",
+            step=step,
+            event=event,
+            fields=fields,
+        )
+    )
+    sys.stderr.write(f"{level.upper()} {text}\n")
+    sys.stderr.flush()
 
 
 class RG():
@@ -15,7 +32,7 @@ class RG():
             baudrate=115200,
             timeout=1)
         if gripper not in ['rg2', 'rg6']:
-            print("Please specify either rg2 or rg6.")
+            _log("error", "config", "invalid_gripper", gripper=gripper)
             return
         self.gripper = gripper  # RG2/6
         if self.gripper == 'rg2':
@@ -87,25 +104,25 @@ class RG():
         status = format(result.registers[0], '016b')
         status_list = [0] * 7
         if int(status[-1]):
-            print("A motion is ongoing so new commands are not accepted.")
+            _log("warn", "status", "busy")
             status_list[0] = 1
         if int(status[-2]):
-            print("An internal- or external grip is detected.")
+            _log("info", "status", "grip_detected")
             status_list[1] = 1
         if int(status[-3]):
-            print("Safety switch 1 is pushed.")
+            _log("warn", "status", "safety_switch_1_pushed")
             status_list[2] = 1
         if int(status[-4]):
-            print("Safety circuit 1 is activated so it will not move.")
+            _log("error", "status", "safety_circuit_1_active")
             status_list[3] = 1
         if int(status[-5]):
-            print("Safety switch 2 is pushed.")
+            _log("warn", "status", "safety_switch_2_pushed")
             status_list[4] = 1
         if int(status[-6]):
-            print("Safety circuit 2 is activated so it will not move.")
+            _log("error", "status", "safety_circuit_2_active")
             status_list[5] = 1
         if int(status[-7]):
-            print("Any of the safety switch is pushed.")
+            _log("error", "status", "safety_error")
             status_list[6] = 1
 
         return status_list
@@ -165,20 +182,20 @@ class RG():
     def close_gripper(self, force_val=400):
         """Closes gripper."""
         params = [force_val, 0, 16]
-        print("Start closing gripper.")
+        _log("info", "motion", "close_start", force=force_val)
         result = self.client.write_registers(
             address=0, values=params, unit=65)
 
     def open_gripper(self, force_val=400):
         """Opens gripper."""
         params = [force_val, self.max_width, 16]
-        print("Start opening gripper.")
+        _log("info", "motion", "open_start", force=force_val, width=self.max_width)
         result = self.client.write_registers(
             address=0, values=params, unit=65)
 
     def move_gripper(self, width_val, force_val=400):
         """Moves gripper to the specified width."""
         params = [force_val, width_val, 16]
-        print("Start moving gripper.")
+        _log("info", "motion", "move_start", force=force_val, width=width_val)
         result = self.client.write_registers(
             address=0, values=params, unit=65)

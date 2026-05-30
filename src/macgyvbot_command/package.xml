@@ -10,6 +10,7 @@
 
   <exec_depend>rclpy</exec_depend>
   <exec_depend>macgyvbot_config</exec_depend>
+  <exec_depend>macgyvbot_domain</exec_depend>
   <exec_depend>macgyvbot_interfaces</exec_depend>
   <exec_depend>python3-pyaudio</exec_depend>
   <exec_depend>espeak-ng</exec_depend>

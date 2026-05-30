@@ -1,27 +1,7 @@
 #!/usr/bin/env python3
-"""
-launch_monitor — ros2 launch 출력을 감시해 에러 줄을 Discord webhook으로 전송한다.
-전체 로그와 신호 로그(에러 + 수치값) 두 파일로 저장한다. 표준 라이브러리만 사용.
+"""Monitor ros2 launch output, persist logs, and send Discord alerts."""
 
-저장 파일 (<패키지루트>/log/):
-  launch_{stamp}.log         — 전체 로그 (블랙박스)
-  launch_{stamp}_signal.log  — 에러 줄 + 수치값 줄만 추려낸 압축 로그
-
-Discord 전송:
-  - 에러 감지 즉시: 에러 줄 + 앞 N줄 맥락 (텍스트)
-  - launch 종료 시: signal log 파일 첨부
-
-사용법 (둘 중 하나):
-
-  # 방법 A) 파이프 입력
-  ros2 launch macgyvbot_bringup macgyvbot.launch.py 2>&1 | ros2 run macgyvbot_monitor launch_monitor
-
-  # 방법 B) 스크립트가 직접 launch 실행
-  ros2 run macgyvbot_monitor launch_monitor -- ros2 launch macgyvbot_bringup macgyvbot.launch.py
-
-webhook URL 은 환경변수로 주입한다 (코드에 넣지 말 것):
-  export DISCORD_WEBHOOK="https://discord.com/api/webhooks/xxxx/yyyy"
-"""
+from __future__ import annotations
 
 import json
 import os
@@ -33,7 +13,9 @@ import uuid
 from datetime import datetime
 from urllib.error import HTTPError
 
-# ── 설정 (환경변수로 덮어쓸 수 있음) ─────────────────────────────────────────
+from macgyvbot_domain.logging import LogEvent, format_log_event
+
+
 WEBHOOK = os.environ.get("DISCORD_WEBHOOK", "").strip()
 LOG_DIR = os.environ.get(
     "MACGYVBOT_LOG_DIR",
@@ -45,33 +27,33 @@ COOLDOWN_SEC = float(os.environ.get("COOLDOWN_SEC", "10"))
 ERROR_PATTERN = re.compile(
     r"\b(ERROR|FATAL|CRITICAL|Traceback \(most recent call last\)|"
     r"\[ERROR\]|process has died|required process .* exited|"
-    r"No such file|ModuleNotFoundError|ImportError|"
-    r"Exception|RLException)\b",
+    r"No such file|ModuleNotFoundError|ImportError|Exception|RLException)\b",
     re.IGNORECASE,
 )
-IGNORE_PATTERN = re.compile(
-    r"(0 errors|error_code\s*=\s*0|errors:\s*0)",
-    re.IGNORECASE,
-)
-# 수치값이 의미 있을 가능성이 높은 줄 — 실제 코드베이스 로그 형식 기준
+IGNORE_PATTERN = re.compile(r"(0 errors|error_code\s*=\s*0|errors:\s*0)", re.IGNORECASE)
 METRIC_PATTERN = re.compile(
-    # gripper width/threshold(mm), VLM yaw/joint 각도(deg, rad)
-    r"\b\d+\.?\d*\s*(?:mm|deg|rad)\b|"
-    # pick 시퀀스 z축 계획값: depth=, travel_z=, approach_z=, grasp_z=, corrected_bz= 등
-    r"\b(?:depth|travel_z|approach_z|grasp_z|corrected_bz|raw_bz|safe_z_min)\s*=\s*-?\d|"
-    # pick Target 좌표 튜플: Target(x, y)
+    r"\b\d+\.?\d*\s*(?:mm|deg|rad|Hz|ms|fps|sec)\b|"
+    r"\b(?:depth|travel_z|approach_z|grasp_z|corrected_bz|raw_bz|safe_z_min)"
+    r"\s*=\s*-?\d|"
     r"\bTarget\s*\(-?\d|"
-    # 3D 좌표 출력: xyz=, base=, camera=, offset=, target=, pixel=
     r"\b(?:xyz|base|camera|offset|pixel)\s*[=:]\s*[\-\d(]|"
-    # grasp 시도 횟수: 시도 N/M
-    r"시도\s+\d+/\d+|"
-    # trajectory points 수
-    r"\bpoints\s*=\s*\d|"
-    # 일반 ROS 인프라 · 카메라 드라이버 등에서 나오는 단위
-    r"\b\d+\.?\d*\s*(?:Hz|ms|fps|sec)\b",
+    r"\bpoints\s*=\s*\d",
     re.IGNORECASE,
 )
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _log(level: str, step: str, event: str, **fields) -> None:
+    text = format_log_event(
+        LogEvent(
+            svc="monitor",
+            pipe="launch",
+            step=step,
+            event=event,
+            fields=fields,
+        )
+    )
+    sys.stderr.write(f"{level.upper()} {text}\n")
+    sys.stderr.flush()
 
 
 def _format_post_error(exc: Exception) -> str:
@@ -90,10 +72,10 @@ def _format_post_error(exc: Exception) -> str:
 
 
 def _post(content: str) -> None:
-    """Discord webhook 텍스트 전송. 미설정·실패해도 스크립트가 죽지 않는다."""
     if not WEBHOOK:
-        print("[launch_monitor] DISCORD_WEBHOOK 미설정 — 전송 생략", file=sys.stderr)
+        _log("warn", "webhook", "skip", reason="missing_webhook")
         return
+
     import urllib.request
 
     data = json.dumps({"content": content[:1900]}).encode("utf-8")
@@ -109,14 +91,14 @@ def _post(content: str) -> None:
     try:
         urllib.request.urlopen(req, timeout=10)
     except Exception as exc:
-        print(f"[launch_monitor] 전송 실패: {_format_post_error(exc)}", file=sys.stderr)
+        _log("error", "webhook", "post_failed", reason=_format_post_error(exc))
 
 
 def _post_files(content: str, *filepaths: str) -> None:
-    """Discord webhook 다중 파일 첨부 전송. 비어있는 파일은 건너뛰고, 실패하면 텍스트만 전송한다."""
     if not WEBHOOK:
-        print("[launch_monitor] DISCORD_WEBHOOK 미설정 — 전송 생략", file=sys.stderr)
+        _log("warn", "webhook", "skip", reason="missing_webhook")
         return
+
     import urllib.request
 
     loaded: list[tuple[str, bytes]] = []
@@ -127,7 +109,7 @@ def _post_files(content: str, *filepaths: str) -> None:
             if data.strip():
                 loaded.append((filepath, data))
         except Exception as exc:
-            print(f"[launch_monitor] 파일 읽기 실패 ({filepath}): {exc}", file=sys.stderr)
+            _log("error", "file", "read_failed", path=filepath, reason=exc)
 
     if not loaded:
         _post(content)
@@ -160,20 +142,16 @@ def _post_files(content: str, *filepaths: str) -> None:
     try:
         urllib.request.urlopen(req, timeout=30)
     except Exception as exc:
-        print(
-            f"[launch_monitor] 파일 전송 실패: {_format_post_error(exc)}",
-            file=sys.stderr,
-        )
+        _log("error", "webhook", "file_post_failed", reason=_format_post_error(exc))
         _post(content)
 
 
 def _make_source():
-    """'--' 뒤에 명령이 있으면 subprocess로 실행, 없으면 stdin을 반환한다."""
     if "--" in sys.argv:
         idx = sys.argv.index("--")
         cmd = sys.argv[idx + 1 :]
         if not cmd:
-            print("'--' 뒤에 실행할 명령이 없습니다.", file=sys.stderr)
+            _log("error", "source", "missing_command", reason="empty_command_after_separator")
             sys.exit(2)
         proc = subprocess.Popen(
             cmd,
@@ -197,14 +175,19 @@ def main() -> None:
     last_sent = 0.0
     error_count = 0
 
-    host = os.uname().nodename
-    _post("🚀 launch 시작")
+    _log("info", "launch", "started", full_log=log_path, signal_log=signal_path)
+    _post("MacGyvBot launch started")
 
-    with open(log_path, "w") as logf, open(signal_path, "w") as sigf:
+    with open(log_path, "w", encoding="utf-8") as logf, open(
+        signal_path,
+        "w",
+        encoding="utf-8",
+    ) as sigf:
         try:
             for raw in src:
                 line = raw.rstrip("\n")
-                print(line)
+                sys.stdout.write(line + "\n")
+                sys.stdout.flush()
                 logf.write(line + "\n")
                 logf.flush()
 
@@ -226,18 +209,24 @@ def main() -> None:
                     if now - last_sent >= COOLDOWN_SEC:
                         last_sent = now
                         ctx = "\n".join(recent)
-                        _post(f"❌ 에러 감지\n```\n{ctx}\n```")
+                        _post(f"MacGyvBot launch error detected\n```\n{ctx}\n```")
         except KeyboardInterrupt:
-            pass
+            _log("warn", "launch", "interrupted")
 
     rc = proc.wait() if proc is not None else 0
-    summary = "✅ 에러 없이 종료" if error_count == 0 else f"⚠️ 에러 {error_count}건"
-    print(
-        f"[launch_monitor] 종료: {summary} / full={log_path} / signal={signal_path}",
-        file=sys.stderr,
+    status = "ok" if error_count == 0 and rc == 0 else "error"
+    _log(
+        "info",
+        "launch",
+        "finished",
+        status=status,
+        return_code=rc,
+        error_count=error_count,
+        full_log=log_path,
+        signal_log=signal_path,
     )
-    _post_files("전체 로그", log_path)
-    _post_files("에러 로그", signal_path)
+    _post_files("MacGyvBot launch full log", log_path)
+    _post_files("MacGyvBot launch signal log", signal_path)
     sys.exit(rc)
 
 

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 from __future__ import annotations
 
 from pathlib import Path
@@ -26,6 +26,7 @@ from macgyvbot_config.topics import (
     HAND_GRASP_TOPIC,
     ROBOT_STATUS_TOPIC,
 )
+from macgyvbot_domain.logging import MacGyvbotLogger, exception_log_fields
 from macgyvbot_interfaces.msg import HumanGraspResult, RobotTaskStatus, ToolMaskLock
 from macgyvbot_perception.hand_tool_grasp.hand_detector import (
     HandDetector,
@@ -67,6 +68,11 @@ class HandGraspDetectionNode(Node):
 
     def __init__(self) -> None:
         super().__init__("hand_grasp_detection_node")
+        self.service_log = MacGyvbotLogger(
+            super().get_logger(),
+            svc="perception",
+            pipe="hand_grasp",
+        )
 
         self.bridge = CvBridge()
         self.latest_depth_mm = None
@@ -199,18 +205,44 @@ class HandGraspDetectionNode(Node):
 
         if self.use_depth:
             self.create_subscription(Image, self.depth_topic, self._depth_cb, 10)
-            self.get_logger().info(f"Depth recognition enabled: {self.depth_topic}")
+            self.service_log.info(
+                "depth",
+                "done",
+                topic=self.depth_topic,
+                msg="depth recognition enabled",
+            )
+            self.service_log.bind("legacy").info(f"Depth recognition enabled: {self.depth_topic}")
         else:
-            self.get_logger().warn("Depth recognition disabled by parameter.")
+            self.service_log.warn(
+                "depth",
+                "skip",
+                reason="disabled_by_parameter",
+                msg="depth recognition disabled",
+            )
+            self.service_log.bind("legacy").warn("Depth recognition disabled by parameter.")
 
         self.create_subscription(Image, self.color_topic, self._color_cb, 10)
         self.create_subscription(
             RobotTaskStatus, self.robot_status_topic, self._robot_status_cb, 10
         )
-        self.get_logger().info(f"Color image topic: {self.color_topic}")
-        self.get_logger().info(f"Result topic: {self.result_topic}")
-        self.get_logger().info(f"Robot status topic: {self.robot_status_topic}")
-        self.get_logger().info(f"Tool mask lock topic: {self.mask_lock_topic}")
+        self.service_log.bind("legacy").info(f"Color image topic: {self.color_topic}")
+        self.service_log.bind("legacy").info(f"Result topic: {self.result_topic}")
+        self.service_log.bind("legacy").info(f"Robot status topic: {self.robot_status_topic}")
+        self.service_log.bind("legacy").info(f"Tool mask lock topic: {self.mask_lock_topic}")
+        self.service_log.info("topic", "status", name="color", topic=self.color_topic)
+        self.service_log.info("topic", "status", name="result", topic=self.result_topic)
+        self.service_log.info(
+            "topic",
+            "status",
+            name="robot_status",
+            topic=self.robot_status_topic,
+        )
+        self.service_log.info(
+            "topic",
+            "status",
+            name="mask_lock",
+            topic=self.mask_lock_topic,
+        )
 
     @staticmethod
     def _as_bool(value) -> bool:
@@ -238,10 +270,24 @@ class HandGraspDetectionNode(Node):
                 image_size=image_size,
             )
         except Exception as exc:
-            self.get_logger().error(f"YOLO tool detector init failed: {exc}")
+            self.service_log.error(
+                "model_load",
+                "fail",
+                model=model_path,
+                msg="YOLO tool detector init failed",
+                **exception_log_fields(exc),
+            )
+            self.service_log.bind("legacy").error(f"YOLO tool detector init failed: {exc}")
             return None
 
-        self.get_logger().info(
+        self.service_log.info(
+            "model_load",
+            "done",
+            model=detector.model_path,
+            classes=target_classes or "ANY",
+            msg="YOLO tool detector enabled",
+        )
+        self.service_log.bind("legacy").info(
             f"YOLO tool detector enabled: model={detector.model_path}, "
             f"classes={target_classes or 'ANY'}"
         )
@@ -251,15 +297,35 @@ class HandGraspDetectionNode(Node):
         try:
             classifier = MLHandGraspClassifier(self.grasp_model_path)
         except Exception as exc:
-            self.get_logger().error(f"ML grasp classifier init failed: {exc}")
+            self.service_log.error(
+                "model_load",
+                "fail",
+                model=self.grasp_model_path,
+                msg="ML grasp classifier init failed",
+                **exception_log_fields(exc),
+            )
+            self.service_log.bind("legacy").error(f"ML grasp classifier init failed: {exc}")
             return None
 
-        self.get_logger().info(f"ML grasp classifier enabled: {classifier.path}")
+        self.service_log.info(
+            "model_load",
+            "done",
+            model=classifier.path,
+            msg="ML grasp classifier enabled",
+        )
+        self.service_log.bind("legacy").info(f"ML grasp classifier enabled: {classifier.path}")
         return classifier
 
     def _create_sam_segmenter(self) -> Optional[BBoxPromptSegmenter]:
         if not self.sam_enabled:
-            self.get_logger().info("SAM tool mask disabled. Using bbox lock fallback.")
+            self.service_log.info(
+                "model_load",
+                "skip",
+                model="sam",
+                reason="disabled_by_parameter",
+                msg="SAM tool mask disabled",
+            )
+            self.service_log.bind("legacy").info("SAM tool mask disabled. Using bbox lock fallback.")
             return None
 
         try:
@@ -270,10 +336,26 @@ class HandGraspDetectionNode(Node):
                 device=self.sam_device,
             )
         except Exception as exc:
-            self.get_logger().error(f"SAM tool mask init failed: {exc}")
+            self.service_log.error(
+                "model_load",
+                "fail",
+                model="sam",
+                backend=self.sam_backend,
+                msg="SAM tool mask init failed",
+                **exception_log_fields(exc),
+            )
+            self.service_log.bind("legacy").error(f"SAM tool mask init failed: {exc}")
             return None
 
-        self.get_logger().info(
+        self.service_log.info(
+            "model_load",
+            "done",
+            model="sam",
+            backend=self.sam_backend,
+            checkpoint=self.sam_checkpoint,
+            msg="SAM tool mask enabled",
+        )
+        self.service_log.bind("legacy").info(
             f"SAM tool mask enabled: backend={self.sam_backend}, "
             f"checkpoint={self.sam_checkpoint}"
         )
@@ -288,7 +370,7 @@ class HandGraspDetectionNode(Node):
             self.locked_tool = None
             if self.ml_classifier is not None:
                 self.ml_classifier.reset()
-            self.get_logger().info("Robot grasp success received. Tool mask lock requested.")
+            self.service_log.bind("legacy").info("Robot grasp success received. Tool mask lock requested.")
             return
 
         if status in {"accepted", "searching", "picking", "grasping"}:
@@ -313,7 +395,14 @@ class HandGraspDetectionNode(Node):
         try:
             depth_image = self.bridge.imgmsg_to_cv2(msg, "passthrough")
         except Exception as exc:
-            self.get_logger().warn(f"Depth image conversion failed: {exc}")
+            self.service_log.warn(
+                "image",
+                "fail",
+                source="depth",
+                msg="depth image conversion failed",
+                **exception_log_fields(exc),
+            )
+            self.service_log.bind("legacy").warn(f"Depth image conversion failed: {exc}")
             return
 
         self.latest_depth_mm = depth_to_mm(depth_image, msg.encoding)
@@ -323,7 +412,14 @@ class HandGraspDetectionNode(Node):
         try:
             frame = self.bridge.imgmsg_to_cv2(msg, "bgr8")
         except Exception as exc:
-            self.get_logger().warn(f"Color image conversion failed: {exc}")
+            self.service_log.warn(
+                "image",
+                "fail",
+                source="color",
+                msg="color image conversion failed",
+                **exception_log_fields(exc),
+            )
+            self.service_log.bind("legacy").warn(f"Color image conversion failed: {exc}")
             return
 
         tool_detection = (
@@ -393,7 +489,7 @@ class HandGraspDetectionNode(Node):
                 cv2.waitKey(1)
 
         if result["state"] != self.last_state:
-            self.get_logger().info(
+            self.service_log.bind("legacy").info(
                 "grasp state={state}, human_grasped_tool={human_grasped_tool}, "
                 "ml={ml_stable_state}/{ml_raw_state}, mask={mask_source}, "
                 "mask_contact_count={mask_contact_count}".format(
@@ -471,7 +567,7 @@ class HandGraspDetectionNode(Node):
 
         if tool_detection is None:
             if self.latest_tool_mask is not None and self.allow_bbox_lock:
-                self.get_logger().warn(
+                self.service_log.bind("legacy").warn(
                     "Tool mask lock requested without YOLO ROI; "
                     "using latest bbox fallback."
                 )
@@ -480,7 +576,7 @@ class HandGraspDetectionNode(Node):
                     mask=self.latest_tool_mask.mask.copy(),
                     source=self.latest_tool_mask.source,
                 )
-            self.get_logger().warn(
+            self.service_log.bind("legacy").warn(
                 "Tool mask lock requested, but no YOLO tool ROI is available."
             )
             return None
@@ -489,7 +585,7 @@ class HandGraspDetectionNode(Node):
             mask = self.sam_segmenter.segment(frame, tool_detection.roi)
             if mask is not None and int(mask.sum()) > 0:
                 roi = mask_to_roi(mask) or tool_detection.roi
-                self.get_logger().info(
+                self.service_log.bind("legacy").info(
                     f"Locked SAM tool mask: label={tool_detection.label}, "
                     f"roi={roi}"
                 )
@@ -498,11 +594,18 @@ class HandGraspDetectionNode(Node):
                     mask=mask,
                     source="SAM_LOCKED",
                 )
-            self.get_logger().warn("SAM returned an empty tool mask; falling back if allowed.")
+            self.service_log.bind("legacy").warn("SAM returned an empty tool mask; falling back if allowed.")
+            self.service_log.warn(
+                "segmentation",
+                "skip",
+                model="sam",
+                reason="empty_tool_mask",
+                msg="SAM returned an empty tool mask",
+            )
 
         if self.allow_bbox_lock:
             locked = create_bbox_locked_mask(tool_detection.roi, frame.shape[:2])
-            self.get_logger().info(
+            self.service_log.bind("legacy").info(
                 f"Locked bbox tool mask: label={tool_detection.label}, roi={locked.roi}"
             )
             return locked
@@ -535,7 +638,14 @@ class HandGraspDetectionNode(Node):
         try:
             return self.ml_classifier.update(hand_info)
         except Exception as exc:
-            self.get_logger().warn(f"ML grasp update failed: {exc}")
+            self.service_log.warn(
+                "classification",
+                "fail",
+                model="ml_grasp",
+                msg="ML grasp update failed",
+                **exception_log_fields(exc),
+            )
+            self.service_log.bind("legacy").warn(f"ML grasp update failed: {exc}")
             self.ml_classifier.reset()
             return disabled_ml_result("model_error")
 
@@ -579,7 +689,7 @@ class HandGraspDetectionNode(Node):
                 return float(probabilities[classes.index("grasp")])
             return float(max(probabilities))
         except Exception as exc:
-            self.get_logger().warn(f"ML grasp 후보 점수 계산 실패: {exc}")
+            self.service_log.bind("legacy").warn(f"ML grasp ?꾨낫 ?먯닔 怨꾩궛 ?ㅽ뙣: {exc}")
             return None
 
     def _compose_result(
@@ -812,3 +922,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

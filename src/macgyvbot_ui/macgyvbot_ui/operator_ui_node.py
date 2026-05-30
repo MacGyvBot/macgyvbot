@@ -1,4 +1,4 @@
-"""Operator-facing GUI node for MacGyvBot.
+﻿"""Operator-facing GUI node for MacGyvBot.
 
 This node owns PyQt widgets and presentation logic only.  It communicates with
 the command, task, and perception packages through ROS topics.
@@ -21,6 +21,7 @@ from macgyvbot_config.topics import (
     STT_TEXT_TOPIC,
     TOOL_COMMAND_TOPIC,
 )
+from macgyvbot_domain.logging import MacGyvbotLogger
 from macgyvbot_interfaces.msg import (
     CommandFeedback,
     CommandShutdown,
@@ -38,6 +39,7 @@ from macgyvbot_ui.voice_command_window import (
 class OperatorUiNode(Node):
     def __init__(self):
         super().__init__('operator_ui_node')
+        self.service_log = MacGyvbotLogger(super().get_logger(), svc="ui")
 
         self.declare_parameter('stt_text_topic', STT_TEXT_TOPIC)
         self.declare_parameter('tool_command_topic', TOOL_COMMAND_TOPIC)
@@ -55,8 +57,8 @@ class OperatorUiNode(Node):
 
         if QApplication is None or VoiceCommandGuiWindow is None:
             raise RuntimeError(
-                'operator_ui_node 실행에는 PyQt5가 필요합니다. '
-                'sudo apt install python3-pyqt5 또는 pip install PyQt5 후 다시 실행하세요.'
+                'operator_ui_node ?ㅽ뻾?먮뒗 PyQt5媛 ?꾩슂?⑸땲?? '
+                'sudo apt install python3-pyqt5 ?먮뒗 pip install PyQt5 ???ㅼ떆 ?ㅽ뻾?섏꽭??'
             )
 
         stt_text_topic = self.get_parameter('stt_text_topic').value
@@ -116,12 +118,13 @@ class OperatorUiNode(Node):
             self._update_connection_status,
         )
 
-        self.get_logger().info('operator_ui_node 초기화 완료')
+        self.service_log.bind("legacy").info('operator_ui_node 珥덇린???꾨즺')
+        self.service_log.info("node", "done", pipe="startup", msg="operator UI initialized")
 
     def attach_window(self, window):
         self.window = window
         self._update_connection_status()
-        self._append_log('info', 'GUI 연결 완료')
+        self._append_log('info', 'GUI ?곌껐 ?꾨즺')
 
     def set_shutdown_callback(self, callback):
         self._shutdown_callback = callback
@@ -135,7 +138,7 @@ class OperatorUiNode(Node):
         msg.action = 'shutdown'
         msg.source = 'operator_ui'
         self._command_shutdown_pub.publish(msg)
-        self.get_logger().info('/command_shutdown 발행: command_input_node 종료 요청')
+        self.service_log.bind("legacy").info('/command_shutdown 諛쒗뻾: command_input_node 醫낅즺 ?붿껌')
 
     def publish_user_text(self, text):
         text = (text or '').strip()
@@ -171,9 +174,9 @@ class OperatorUiNode(Node):
         if self._consume_if_self_published(text):
             return
 
-        self.get_logger().info(f'외부 입력 수신: "{text}"')
+        self.service_log.bind("legacy").info(f'?몃? ?낅젰 ?섏떊: "{text}"')
         self._append_user(text, source='voice')
-        self._set_status('입력 수신')
+        self._set_status('?낅젰 ?섏떊')
 
     def _tool_command_cb(self, msg):
         command = self._tool_command_payload(msg)
@@ -181,13 +184,13 @@ class OperatorUiNode(Node):
         action = command.get('action', 'unknown')
         tool_name = command.get('tool_name', 'unknown')
         if action == 'pause':
-            self._append_log('warn', '정지 명령을 로봇 노드로 전달했습니다.')
+            self._append_log('warn', '?뺤? 紐낅졊??濡쒕큸 ?몃뱶濡??꾨떖?덉뒿?덈떎.')
             return
 
         if self.window is not None and hasattr(self.window, 'append_command_result'):
             self.window.append_command_result(command)
 
-        self._append_log('info', f'/tool_command 수신: action={action}, tool={tool_name}')
+        self._append_log('info', f'/tool_command ?섏떊: action={action}, tool={tool_name}')
 
     def _feedback_cb(self, msg):
         feedback = self._feedback_payload(msg)
@@ -207,92 +210,92 @@ class OperatorUiNode(Node):
                     self.window.append_command_result(command)
 
             if action == 'pause':
-                stop_message = '정지 요청을 로봇에 전달했습니다.'
+                stop_message = '?뺤? ?붿껌??濡쒕큸???꾨떖?덉뒿?덈떎.'
                 self._append_bot(stop_message)
                 self._append_log('warn', stop_message)
-                followup_message = '작업을 재개할까요, 아니면 이번 작업을 취소할까요?'
+                followup_message = '?묒뾽???ш컻?좉퉴?? ?꾨땲硫??대쾲 ?묒뾽??痍⑥냼?좉퉴??'
                 self._append_bot(followup_message)
                 if self.window is not None and hasattr(self.window, 'append_control_actions'):
                     self.window.append_control_actions(
                         (
-                            ('재개', '재개'),
-                            ('취소', '취소'),
+                            ('?ш컻', '?ш컻'),
+                            ('痍⑥냼', '痍⑥냼'),
                         )
                     )
                 self._append_log('info', followup_message)
-                self._set_status('정지 요청 전달')
+                self._set_status('?뺤? ?붿껌 ?꾨떖')
                 return
 
             if action == 'resume':
                 resume_message = (
                     message
-                    or '재개 요청을 이해했습니다. 제어 인터페이스 연결 후 사용할 수 있습니다.'
+                    or '?ш컻 ?붿껌???댄빐?덉뒿?덈떎. ?쒖뼱 ?명꽣?섏씠???곌껐 ???ъ슜?????덉뒿?덈떎.'
                 )
                 self._append_bot(resume_message)
-                self._append_log('info', '재개 명령 해석 완료')
-                self._set_status('재개 대기')
+                self._append_log('info', '?ш컻 紐낅졊 ?댁꽍 ?꾨즺')
+                self._set_status('resume pending')
                 return
 
             if action == 'cancel':
                 cancel_message = (
-                    message or '현재 작업을 취소합니다. 다음 명령을 기다리겠습니다.'
+                    message or '?꾩옱 ?묒뾽??痍⑥냼?⑸땲?? ?ㅼ쓬 紐낅졊??湲곕떎由ш쿋?듬땲??'
                 )
                 self._append_bot(cancel_message)
-                self._append_log('warn', '현재 작업 취소 요청 발행: queue와 진행 motion 정리')
-                self._set_status('작업 취소 처리 중')
+                self._append_log('warn', '?꾩옱 ?묒뾽 痍⑥냼 ?붿껌 諛쒗뻾: queue? 吏꾪뻾 motion ?뺣━')
+                self._set_status('cancel pending')
                 return
 
             if action == 'exit':
                 self._exit_pending = True
                 exit_message = (
                     message
-                    or '종료 요청을 전달했습니다. 작업을 정리하고 Home 위치로 복귀한 뒤 종료합니다.'
+                    or '醫낅즺 ?붿껌???꾨떖?덉뒿?덈떎. ?묒뾽???뺣━?섍퀬 Home ?꾩튂濡?蹂듦?????醫낅즺?⑸땲??'
                 )
                 self._append_bot(exit_message)
-                self._append_log('info', '종료 명령 해석 완료: 로봇 작업 중단 요청 발행')
-                self._set_status('종료 처리 중')
+                self._append_log('info', '醫낅즺 紐낅졊 ?댁꽍 ?꾨즺: 濡쒕큸 ?묒뾽 以묐떒 ?붿껌 諛쒗뻾')
+                self._set_status('exit pending')
                 return
 
-            accepted_message = message or '명령을 이해했습니다.'
+            accepted_message = message or '紐낅졊???댄빐?덉뒿?덈떎.'
             self._append_bot(accepted_message)
             self._append_log('info', accepted_message)
-            self._set_status('명령 해석 완료')
+            self._set_status('紐낅졊 ?댁꽍 ?꾨즺')
             return
 
         if status == 'pending_confirmation':
             confirmation_message = (
-                message or '제가 이해한 명령이 맞나요? 네 또는 아니오로 답해주세요.'
+                message or '?쒓? ?댄빐??紐낅졊??留욌굹?? ???먮뒗 ?꾨땲?ㅻ줈 ?듯빐二쇱꽭??'
             )
             if self.window is not None and hasattr(self.window, 'append_confirmation'):
                 self.window.append_confirmation(confirmation_message)
             else:
                 self._append_bot(confirmation_message)
             self._append_log('info', confirmation_message)
-            self._set_status('확인 응답 대기')
+            self._set_status('confirmation pending')
             return
 
         if status == 'cancelled':
-            cancel_message = message or '알겠습니다. 실행하지 않겠습니다.'
+            cancel_message = message or '?뚭쿋?듬땲?? ?ㅽ뻾?섏? ?딄쿋?듬땲??'
             self._append_bot(cancel_message)
             self._append_log('warn', cancel_message)
-            self._set_status('명령 취소')
+            self._set_status('紐낅졊 痍⑥냼')
             return
 
         if status == 'assistant_response':
-            response_message = message or '네, 필요한 공구가 있으면 말해주세요.'
+            response_message = message or '?? ?꾩슂??怨듦뎄媛 ?덉쑝硫?留먰빐二쇱꽭??'
             self._append_bot(response_message)
             self._append_log('info', response_message)
-            self._set_status('대화 응답')
+            self._set_status('????묐떟')
             return
 
         if status == 'rejected':
             rejected_message = self._build_rejected_message(reason, message)
             self._append_bot(rejected_message)
             self._append_log('warn', rejected_message)
-            self._set_status('재입력 필요')
+            self._set_status('?ъ엯???꾩슂')
             return
 
-        self._append_bot(message or '상태를 확인했습니다.')
+        self._append_bot(message or '?곹깭瑜??뺤씤?덉뒿?덈떎.')
         self._append_system(f'status={status}, reason={reason}')
 
     def _is_duplicate_feedback(self, feedback):
@@ -382,8 +385,8 @@ class OperatorUiNode(Node):
             return
 
         if state in {'done', 'completed', 'success'}:
-            self._append_log('info', 'Home 복귀 완료 상태 확인: operator UI를 종료합니다.')
-            self._set_status('종료')
+            self._append_log('info', 'Home 蹂듦? ?꾨즺 ?곹깭 ?뺤씤: operator UI瑜?醫낅즺?⑸땲??')
+            self._set_status('醫낅즺')
             self._exit_pending = False
             if QTimer is not None:
                 QTimer.singleShot(500, self.request_shutdown)
@@ -392,8 +395,8 @@ class OperatorUiNode(Node):
             return
 
         if state in {'failed', 'error', 'rejected'}:
-            self._append_log('warn', '종료 처리가 완료되지 않아 GUI를 유지합니다.')
-            self._set_status('종료 실패')
+            self._append_log('warn', '醫낅즺 泥섎━媛 ?꾨즺?섏? ?딆븘 GUI瑜??좎??⑸땲??')
+            self._set_status('醫낅즺 ?ㅽ뙣')
             self._exit_pending = False
 
     def _camera_status_cb(self, _msg):
@@ -405,7 +408,7 @@ class OperatorUiNode(Node):
             try:
                 self.window.set_detector_image(msg)
             except ValueError as exc:
-                self.get_logger().warn(f'detector image 표시 실패: {exc}')
+                self.service_log.bind("legacy").warn(f'detector image ?쒖떆 ?ㅽ뙣: {exc}')
 
     def _update_connection_status(self):
         if self.window is None:
@@ -414,7 +417,7 @@ class OperatorUiNode(Node):
         robot_text = self._robot_connection_text()
         camera_text = self._camera_connection_text()
         detector_text = self._detector_connection_text()
-        connection_text = f'{robot_text}|{camera_text}|{detector_text}|연결됨'
+        connection_text = f'{robot_text}|{camera_text}|{detector_text}|connection'
 
         if connection_text == self._last_connection_text:
             return
@@ -424,7 +427,7 @@ class OperatorUiNode(Node):
             self.window.set_connection_status(
                 robot_text,
                 camera_text,
-                gui_text='연결됨',
+                gui_text='connection',
                 detector_text=detector_text,
             )
 
@@ -436,55 +439,55 @@ class OperatorUiNode(Node):
         )
 
         if robot_node_alive or status_publishers:
-            return '실행 중'
-        return '미확인'
+            return 'running'
+        return 'unknown'
 
     def _camera_connection_text(self):
         if self._last_camera_stamp_ns is None:
-            return '미확인'
+            return 'unknown'
 
         elapsed_ns = self.get_clock().now().nanoseconds - self._last_camera_stamp_ns
         if elapsed_ns <= self._camera_timeout_ns:
-            return '연결됨'
-        return '미수신'
+            return 'connected'
+        return 'timeout'
 
     def _detector_connection_text(self):
         if self._last_detector_stamp_ns is None:
-            return '대기 중'
+            return 'waiting'
 
         elapsed_ns = self.get_clock().now().nanoseconds - self._last_detector_stamp_ns
         if elapsed_ns <= self._detector_timeout_ns:
-            return '수신 중'
-        return '미수신'
+            return 'receiving'
+        return 'timeout'
 
     def _build_rejected_message(self, reason, message):
         if reason == 'llm_failed':
             return (
-                '문장을 끝까지 이해하지 못했습니다. '
-                '드라이버, 플라이어, 망치, 줄자 중 어떤 공구인지 '
-                '조금 더 구체적으로 말해주세요.'
+                '臾몄옣???앷퉴吏 ?댄빐?섏? 紐삵뻽?듬땲?? '
+                '?쒕씪?대쾭, ?뚮씪?댁뼱, 留앹튂, 以꾩옄 以??대뼡 怨듦뎄?몄? '
+                '議곌툑 ??援ъ껜?곸쑝濡?留먰빐二쇱꽭??'
             )
         if reason == 'unknown_tool':
             return (
-                '어떤 공구인지 확실하지 않습니다. '
-                '드라이버, 플라이어, 망치, 줄자 중에서 다시 말해주세요.'
+                '?대뼡 怨듦뎄?몄? ?뺤떎?섏? ?딆뒿?덈떎. '
+                '?쒕씪?대쾭, ?뚮씪?댁뼱, 留앹튂, 以꾩옄 以묒뿉???ㅼ떆 留먰빐二쇱꽭??'
             )
         if reason == 'unknown_action':
             return (
-                '무엇을 할지 확실하지 않습니다. '
-                '가져다줘, 정리해, 멈춰처럼 말해주세요.'
+                '臾댁뾿???좎? ?뺤떎?섏? ?딆뒿?덈떎. '
+                '媛?몃떎以? ?뺣━?? 硫덉떠泥섎읆 留먰빐二쇱꽭??'
             )
         if reason == 'deictic_bring_not_supported':
             return (
-                '가져오기 명령은 공구 이름이 필요합니다. '
-                '어떤 공구를 가져올지 말해주세요.'
+                '媛?몄삤湲?紐낅졊? 怨듦뎄 ?대쫫???꾩슂?⑸땲?? '
+                '?대뼡 怨듦뎄瑜?媛?몄삱吏 留먰빐二쇱꽭??'
             )
         if reason == 'low_confidence':
             return (
-                '제가 이해한 내용이 확실하지 않습니다. '
-                '공구 이름과 동작을 조금 더 명확히 말해주세요.'
+                '?쒓? ?댄빐???댁슜???뺤떎?섏? ?딆뒿?덈떎. '
+                '怨듦뎄 ?대쫫怨??숈옉??議곌툑 ??紐낇솗??留먰빐二쇱꽭??'
             )
-        return message or '명령을 이해하지 못했습니다. 다시 입력해주세요.'
+        return message or '紐낅졊???댄빐?섏? 紐삵뻽?듬땲?? ?ㅼ떆 ?낅젰?댁＜?몄슂.'
 
     def _build_robot_status_view(self, status):
         state = str(status.get('status', status.get('state', 'unknown'))).strip()
@@ -531,139 +534,106 @@ class OperatorUiNode(Node):
     def _robot_status_message(self, state, target_label, raw_message, reason):
         if raw_message:
             if state in ('failed', 'error') and reason and reason not in raw_message:
-                return f'{raw_message} 원인: {reason}'
+                return f'{raw_message} ?먯씤: {reason}'
             return raw_message
 
         templates = {
-            'accepted': f'요청을 확인했습니다. {target_label} 작업을 시작할게요.',
-            'searching_drawer': f'{target_label}를 꺼낼 공구함을 찾는 중입니다.',
-            'moving_to_drawer': '공구함으로 이동 중입니다.',
-            'searching_drawer_handle': '서랍 손잡이를 찾는 중입니다.',
-            'opening_drawer': '서랍을 여는 중입니다.',
-            'closing_drawer': '서랍 문을 닫는 중입니다.',
-            'searching': f'{target_label}를 찾는 중입니다.',
-            'picking': f'{target_label}를 집는 위치로 이동 중입니다.',
-            'approaching_tool': f'{target_label} 상단으로 접근 중입니다.',
-            'grasping': '공구를 잡는 중입니다.',
-            'grasp_success': '공구를 안정적으로 잡았습니다.',
-            'lifting_tool': '공구를 안전 높이로 들어 올리는 중입니다.',
-            'moving_to_handoff': '사용자 전달 위치로 이동 중입니다.',
-            'searching_hand': '사용자 손을 찾는 중입니다.',
-            'waiting_handoff': '손으로 공구를 잡아주세요.',
-            'handoff_complete': '공구 전달을 완료했습니다.',
-            'waiting_return_handoff': '반납할 공구를 받을 준비를 하고 있습니다.',
-            'moving_return_grasp_pose': '반납 공구를 감지할 위치로 이동 중입니다.',
-            'checking_return_target': '반납 공구 위치를 확인하는 중입니다.',
-            'return_hand_detected': '사용자 손 위치에서 반납 공구를 받는 중입니다.',
-            'placing_return_tool': f'{target_label}를 보관 위치에 놓는 중입니다.',
-            'returning_home': 'Home 위치로 복귀하는 중입니다.',
-            'done': '작업이 완료되었습니다.',
-            'completed': '작업이 완료되었습니다.',
-            'success': '작업이 완료되었습니다.',
-            'failed': '작업에 실패했습니다.',
-            'error': '작업 중 오류가 발생했습니다.',
-            'busy': '이미 다른 작업을 수행 중입니다.',
-            'paused': '로봇이 일시정지되었습니다.',
-            'resumed': '작업을 다시 시작합니다.',
-            'cancelled': '작업이 취소되었습니다.',
-            'returned': '반납 작업을 완료했습니다.',
-            'rejected': '요청을 수행할 수 없습니다.',
-            'tool_dropped': '공구 drop이 감지되었습니다.',
-            'vlm_loading': 'VLM grasp 모델을 로드하는 중입니다. 잠시만 기다려주세요.',
-            'vlm_ready': 'VLM grasp 모델 준비가 완료되었습니다.',
-            'vlm_warning': 'VLM grasp 모델 상태를 확인해야 합니다.',
-            'vlm_error': 'VLM grasp 모델 처리 중 오류가 발생했습니다.',
+            'accepted': f'?붿껌???뺤씤?덉뒿?덈떎. {target_label} ?묒뾽???쒖옉?좉쾶??',
+            'searching_drawer': f'{target_label}瑜?爰쇰궪 怨듦뎄?⑥쓣 李얜뒗 以묒엯?덈떎.',
+            'moving_to_drawer': '怨듦뎄?⑥쑝濡??대룞 以묒엯?덈떎.',
+            'searching_drawer_handle': '?쒕엻 ?먯옟?대? 李얜뒗 以묒엯?덈떎.',
+            'opening_drawer': '?쒕엻???щ뒗 以묒엯?덈떎.',
+            'closing_drawer': '?쒕엻 臾몄쓣 ?ル뒗 以묒엯?덈떎.',
+            'searching': f'{target_label}瑜?李얜뒗 以묒엯?덈떎.',
+            'picking': f'{target_label}瑜?吏묐뒗 ?꾩튂濡??대룞 以묒엯?덈떎.',
+            'approaching_tool': f'{target_label} ?곷떒?쇰줈 ?묎렐 以묒엯?덈떎.',
+            'grasping': '怨듦뎄瑜??〓뒗 以묒엯?덈떎.',
+            'grasp_success': '怨듦뎄瑜??덉젙?곸쑝濡??≪븯?듬땲??',
+            'lifting_tool': '怨듦뎄瑜??덉쟾 ?믪씠濡??ㅼ뼱 ?щ━??以묒엯?덈떎.',
+            'moving_to_handoff': '?ъ슜???꾨떖 ?꾩튂濡??대룞 以묒엯?덈떎.',
+            'searching_hand': '?ъ슜???먯쓣 李얜뒗 以묒엯?덈떎.',
+            'waiting_handoff': '?먯쑝濡?怨듦뎄瑜??≪븘二쇱꽭??',
+            'handoff_complete': '怨듦뎄 ?꾨떖???꾨즺?덉뒿?덈떎.',
+            'waiting_return_handoff': '諛섎궔??怨듦뎄瑜?諛쏆쓣 以鍮꾨? ?섍퀬 ?덉뒿?덈떎.',
+            'moving_return_grasp_pose': '諛섎궔 怨듦뎄瑜?媛먯????꾩튂濡??대룞 以묒엯?덈떎.',
+            'checking_return_target': '諛섎궔 怨듦뎄 ?꾩튂瑜??뺤씤?섎뒗 以묒엯?덈떎.',
+            'return_hand_detected': '?ъ슜?????꾩튂?먯꽌 諛섎궔 怨듦뎄瑜?諛쏅뒗 以묒엯?덈떎.',
+            'placing_return_tool': f'{target_label}瑜?蹂닿? ?꾩튂???볥뒗 以묒엯?덈떎.',
+            'returning_home': 'Home ?꾩튂濡?蹂듦??섎뒗 以묒엯?덈떎.',
+            'done': '?묒뾽???꾨즺?섏뿀?듬땲??',
+            'completed': '?묒뾽???꾨즺?섏뿀?듬땲??',
+            'success': '?묒뾽???꾨즺?섏뿀?듬땲??',
+            'failed': '?묒뾽???ㅽ뙣?덉뒿?덈떎.',
+            'error': '?묒뾽 以??ㅻ쪟媛 諛쒖깮?덉뒿?덈떎.',
+            'busy': '?대? ?ㅻⅨ ?묒뾽???섑뻾 以묒엯?덈떎.',
+            'paused': '濡쒕큸???쇱떆?뺤??섏뿀?듬땲??',
+            'resumed': '?묒뾽???ㅼ떆 ?쒖옉?⑸땲??',
+            'cancelled': '?묒뾽??痍⑥냼?섏뿀?듬땲??',
+            'returned': '諛섎궔 ?묒뾽???꾨즺?덉뒿?덈떎.',
+            'rejected': '?붿껌???섑뻾?????놁뒿?덈떎.',
+            'tool_dropped': '怨듦뎄 drop??媛먯??섏뿀?듬땲??',
+            'vlm_loading': 'VLM grasp 紐⑤뜽??濡쒕뱶?섎뒗 以묒엯?덈떎. ?좎떆留?湲곕떎?ㅼ＜?몄슂.',
+            'vlm_ready': 'VLM grasp 紐⑤뜽 以鍮꾧? ?꾨즺?섏뿀?듬땲??',
+            'vlm_warning': 'VLM grasp 紐⑤뜽 ?곹깭瑜??뺤씤?댁빞 ?⑸땲??',
+            'vlm_error': 'VLM grasp 紐⑤뜽 泥섎━ 以??ㅻ쪟媛 諛쒖깮?덉뒿?덈떎.',
         }
-        message = templates.get(state, f'현재 작업 상태는 {state}입니다.')
+        message = templates.get(state, f'?꾩옱 ?묒뾽 ?곹깭??{state}?낅땲??')
         if state in ('failed', 'error') and reason:
-            return f'{message} 원인: {reason}'
+            return f'{message} ?먯씤: {reason}'
         return message
 
     @staticmethod
     def _robot_panel_status(state, message):
-        return {
-            'accepted': '요청 확인',
-            'searching_drawer': '공구함 탐색',
-            'moving_to_drawer': '공구함 이동',
-            'searching_drawer_handle': '손잡이 탐색',
-            'opening_drawer': '서랍 열기',
-            'closing_drawer': '서랍 닫기',
-            'searching': '공구 탐색',
-            'picking': '공구 접근',
-            'approaching_tool': '공구 접근',
-            'grasping': '공구 파지',
-            'grasp_success': '파지 성공',
-            'lifting_tool': '공구 들어올림',
-            'moving_to_handoff': '전달 위치 이동',
-            'searching_hand': '손 탐색',
-            'waiting_handoff': '전달 대기',
-            'handoff_complete': '전달 완료',
-            'waiting_return_handoff': '반납 대기',
-            'moving_return_grasp_pose': '반납 위치 이동',
-            'checking_return_target': '반납 위치 확인',
-            'return_hand_detected': '손 위치 수령',
-            'placing_return_tool': '공구 보관',
-            'returning_home': 'Home 복귀',
-            'done': '완료',
-            'completed': '완료',
-            'success': '완료',
-            'failed': '실패',
-            'error': '오류',
-            'busy': '작업 중',
-            'paused': '일시정지',
-            'resumed': '재개',
-            'cancelled': '취소',
-            'returned': '반납 완료',
-            'rejected': '거절',
-            'tool_dropped': '공구 낙하 감지',
-            'vlm_loading': 'VLM 로드 중',
-            'vlm_ready': 'VLM 준비 완료',
-            'vlm_warning': 'VLM 경고',
-            'vlm_error': 'VLM 오류',
-        }.get(state, message)
+        return OperatorUiNode._status_label(state, message)
 
     @staticmethod
     def _robot_stage_text(state, message):
-        return {
-            'accepted': '요청 확인',
-            'searching_drawer': '공구함 찾는 중',
-            'moving_to_drawer': '공구함 이동 중',
-            'searching_drawer_handle': '서랍 손잡이 찾는 중',
-            'opening_drawer': '서랍 여는 중',
-            'closing_drawer': '서랍 닫는 중',
-            'searching': '공구 찾는 중',
-            'picking': '공구 집는 위치로 이동 중',
-            'approaching_tool': '공구 접근 중',
-            'grasping': '공구 잡는 중',
-            'grasp_success': '공구 잡기 성공',
-            'lifting_tool': '안전 높이로 이동 중',
-            'moving_to_handoff': '전달 위치 이동 중',
-            'searching_hand': '사용자 손 찾는 중',
-            'waiting_handoff': '사용자 잡기 대기',
-            'handoff_complete': '공구 전달 완료',
-            'waiting_return_handoff': '반납 공구 수령 대기',
-            'moving_return_grasp_pose': '반납 공구 감지 위치 이동 중',
-            'checking_return_target': '반납 공구 위치 확인 중',
-            'return_hand_detected': '손 위치에서 공구 수령 중',
-            'placing_return_tool': '서랍 안에 공구 보관 중',
-            'returning_home': 'Home 복귀 중',
-            'done': '작업 완료',
-            'completed': '작업 완료',
-            'success': '작업 완료',
-            'failed': '작업 실패',
-            'error': '작업 오류',
-            'busy': '다른 작업 수행 중',
-            'paused': '작업 일시정지',
-            'resumed': '작업 재개',
-            'cancelled': '작업 취소',
-            'returned': '반납 완료',
-            'rejected': '작업 거절',
-            'tool_dropped': '공구 낙하 감지',
-            'vlm_loading': 'VLM 모델 로드 중',
-            'vlm_ready': 'VLM 모델 준비 완료',
-            'vlm_warning': 'VLM 상태 경고',
-            'vlm_error': 'VLM 상태 오류',
-        }.get(state, message)
+        return OperatorUiNode._status_label(state, message)
+
+    @staticmethod
+    def _status_label(state, message=None):
+        labels = {
+            'accepted': 'accepted',
+            'searching_drawer': 'searching drawer',
+            'moving_to_drawer': 'moving to drawer',
+            'searching_drawer_handle': 'searching handle',
+            'opening_drawer': 'opening drawer',
+            'closing_drawer': 'closing drawer',
+            'searching': 'searching tool',
+            'picking': 'picking tool',
+            'approaching_tool': 'approaching tool',
+            'grasping': 'grasping tool',
+            'grasp_success': 'grasp success',
+            'lifting_tool': 'lifting tool',
+            'moving_to_handoff': 'moving to handoff',
+            'searching_hand': 'searching hand',
+            'waiting_handoff': 'waiting handoff',
+            'handoff_complete': 'handoff complete',
+            'waiting_return_handoff': 'waiting return handoff',
+            'moving_return_grasp_pose': 'moving return grasp pose',
+            'checking_return_target': 'checking return target',
+            'return_hand_detected': 'return hand detected',
+            'placing_return_tool': 'placing return tool',
+            'returning_home': 'returning home',
+            'done': 'done',
+            'completed': 'completed',
+            'success': 'success',
+            'failed': 'failed',
+            'error': 'error',
+            'busy': 'busy',
+            'paused': 'paused',
+            'resumed': 'resumed',
+            'cancelled': 'cancelled',
+            'returned': 'returned',
+            'rejected': 'rejected',
+            'tool_dropped': 'tool dropped',
+            'vlm_loading': 'vlm loading',
+            'vlm_ready': 'vlm ready',
+            'vlm_warning': 'vlm warning',
+            'vlm_error': 'vlm error',
+        }
+        return labels.get(state, message or state or 'idle')
+
 
     @staticmethod
     def _chat_robot_statuses():
@@ -751,13 +721,13 @@ class OperatorUiNode(Node):
     def _tool_display_name(tool_name):
         label = str(tool_name or 'unknown').strip()
         display_names = {
-            'screwdriver': '드라이버',
-            'pliers': '플라이어',
-            'hammer': '망치',
-            'tape_measure': '줄자',
-            'drill': '드릴',
-            'wrench': '렌치',
-            'unknown': '공구',
+            'screwdriver': '?쒕씪?대쾭',
+            'pliers': '?뚮씪?댁뼱',
+            'hammer': '留앹튂',
+            'tape_measure': '以꾩옄',
+            'drill': '?쒕┫',
+            'wrench': '?뚯튂',
+            'unknown': '怨듦뎄',
         }
         return display_names.get(label, label)
 
@@ -785,13 +755,13 @@ class OperatorUiNode(Node):
         if not ros:
             return
 
-        logger = self.get_logger()
+        logger = self.service_log.bind("legacy")
         if level == 'error':
-            logger.error(message)
+            self.service_log.error("gui_log", "status", pipe="ui", msg=message)
         elif level in ('warn', 'warning'):
-            logger.warn(message)
+            self.service_log.warn("gui_log", "status", pipe="ui", msg=message)
         else:
-            logger.info(message)
+            self.service_log.info("gui_log", "status", pipe="ui", msg=message)
 
     def _set_status(self, text):
         if self.window is not None:
@@ -818,7 +788,7 @@ def main(args=None):
             return
         shutdown_requested['value'] = True
         node.publish_command_shutdown()
-        node.get_logger().info('종료 신호를 받아 operator_ui_node를 종료합니다.')
+        node.service_log.info("shutdown", "requested")
         window.close()
         app.quit()
 
@@ -846,3 +816,4 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
+

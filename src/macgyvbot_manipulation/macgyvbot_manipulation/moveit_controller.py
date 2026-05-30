@@ -389,7 +389,8 @@ class MoveItController:
         if goal_handle is None:
             return False
 
-        log = logger or (self.node.get_logger() if self.node is not None else None)
+        node_log = getattr(self.node, "service_log", None) if self.node is not None else None
+        log = logger or (node_log.bind("motion") if node_log is not None else None)
         if log is not None:
             suffix = f": {reason}" if reason else ""
             log.info(

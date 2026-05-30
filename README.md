@@ -19,7 +19,7 @@ src/
 ├── macgyvbot_perception/     # YOLO, VLM, depth, hand grasp perception
 ├── macgyvbot_manipulation/   # MoveIt, gripper, force, pose, safe workspace
 ├── macgyvbot_config/         # shared Python runtime constants
-├── macgyvbot_domain/         # shared dataclasses
+├── macgyvbot_domain/         # shared dataclasses and service log helpers
 ├── macgyvbot_resources/      # calibration and model assets
 └── macgyvbot_interfaces/     # typed msg/srv/action contracts
 ```

@@ -23,6 +23,14 @@ class GraspVerifier:
 
     def try_grasp(self, logger, publish_attempt=None, failure_prefix="공구 grasp"):
         for attempt in range(1, GRASP_RETRY_LIMIT + 1):
+            logger.info(
+                "grasp",
+                "start",
+                pipe="manipulation",
+                attempt=attempt,
+                max_attempts=GRASP_RETRY_LIMIT,
+                msg="grasp attempt started",
+            )
             if self.interrupted():
                 logger.info(f"{failure_prefix} 시도를 stop/pause 요청으로 중단합니다.")
                 return False
@@ -33,6 +41,13 @@ class GraspVerifier:
 
             self.gripper.close_gripper()
             if self.verify(logger):
+                logger.info(
+                    "grasp",
+                    "done",
+                    pipe="manipulation",
+                    attempt=attempt,
+                    msg="grasp confirmed",
+                )
                 return True
 
             if self.interrupted():
@@ -83,6 +98,14 @@ class GraspVerifier:
 
             self.wait_fn(GRASP_VERIFY_POLL_SEC)
 
+        logger.warn(
+            "grasp_verify",
+            "fail",
+            pipe="manipulation",
+            reason="timeout_or_unstable",
+            last_status=last_status,
+            msg="grasp verification failed",
+        )
         logger.warn(f"그리퍼 grasp 확인 실패: status={last_status}")
         return False
 

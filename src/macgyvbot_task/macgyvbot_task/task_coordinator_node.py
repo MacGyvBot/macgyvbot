@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """ROS node that owns task queue execution and task-control handling."""
 
 from __future__ import annotations
@@ -55,6 +55,7 @@ from macgyvbot_config.vlm import (
     VLM_GRASP_SERVICE_NAME,
     VLM_ONLY_MODES,
 )
+from macgyvbot_domain.logging import MacGyvbotLogger, exception_log_fields
 from macgyvbot_domain.target_models import PickTarget
 from macgyvbot_manipulation.drawer_motion import DrawerMotionFlow
 from macgyvbot_manipulation.moveit_controller import MoveItController
@@ -105,30 +106,51 @@ class VLMStatusLogger:
         self._logger = logger
         self._publish_status_payload = publish_status_payload
 
-    def info(self, message):
-        self._logger.info(message)
-        self._publish_if_vlm_status("info", message)
+    def info(self, *args, **fields):
+        self._logger.info(*args, **fields)
+        self._publish_if_vlm_status("info", *args, **fields)
 
-    def warn(self, message):
-        self._logger.warn(message)
-        self._publish_if_vlm_status("warn", message)
+    def warn(self, *args, **fields):
+        self._logger.warn(*args, **fields)
+        self._publish_if_vlm_status("warn", *args, **fields)
 
-    def error(self, message):
-        self._logger.error(message)
-        self._publish_if_vlm_status("error", message)
+    def error(self, *args, **fields):
+        self._logger.error(*args, **fields)
+        self._publish_if_vlm_status("error", *args, **fields)
 
-    def _publish_if_vlm_status(self, level, message):
-        text = str(message or "")
+    def _publish_if_vlm_status(self, level, *args, **fields):
+        step = str(args[0] if args else fields.get("step", "")).strip()
+        event = str(args[1] if len(args) > 1 else fields.get("event", "")).strip()
+        text = str(fields.get("msg") or (args[0] if args else ""))
+        if step == "model_load" and event == "start":
+            status = "vlm_loading"
+        elif step == "model_load" and event == "done":
+            status = "vlm_ready"
+        elif level == "error" or event == "fail":
+            status = "vlm_error"
+        elif level == "warn":
+            status = "vlm_warning"
+        else:
+            return
+        self._publish_status_payload(
+            {
+                "status": status,
+                "tool_name": "unknown",
+                "action": "system",
+                "message": text,
+            }
+        )
+        return
         if "VLM" not in text:
             return
 
-        if "로드 시작" in text:
+        if "濡쒕뱶 ?쒖옉" in text:
             status = "vlm_loading"
-        elif "로드 완료" in text:
+        elif "濡쒕뱶 ?꾨즺" in text:
             status = "vlm_ready"
-        elif level == "error" or "실패" in text:
+        elif level == "error" or "?ㅽ뙣" in text:
             status = "vlm_error"
-        elif level == "warn" or "CPU 실행" in text:
+        elif level == "warn" or "CPU ?ㅽ뻾" in text:
             status = "vlm_warning"
         else:
             return
@@ -148,6 +170,7 @@ class TaskCoordinatorNode(Node):
 
     def __init__(self):
         super().__init__("task_coordinator_node")
+        self.service_log = MacGyvbotLogger(super().get_logger(), svc="task")
 
         self.declare_parameter("display_debug_windows", False)
         self.bridge = CvBridge()
@@ -184,13 +207,13 @@ class TaskCoordinatorNode(Node):
         )
 
         self.state = TaskRuntimeState(
-            logger_provider=self.get_logger,
+            logger_provider=lambda: self.service_log.bind("task"),
             publish_robot_status=self._publish_robot_status,
             publish_status_payload=self._publish_status_payload,
         )
-        self.detector = YoloDetector(self.yolo_model)
+        self.detector = YoloDetector(self.yolo_model, self.service_log.bind("yolo"))
         self.grasp_point_logger = VLMStatusLogger(
-            self.get_logger(),
+            self.service_log.bind("vlm"),
             self._publish_status_payload,
         )
         self.grasp_point_selector = GraspPointSelector(
@@ -218,13 +241,13 @@ class TaskCoordinatorNode(Node):
         self.hand_grasp_adapter = HandGraspResultAdapter(
             self.state,
             self.depth_projector,
-            self.get_logger(),
+            self.service_log.bind("perception"),
         )
         self.pick_target_resolver = PickTargetResolver(
             self.detector,
             self.grasp_point_selector,
             self.depth_projector,
-            self.get_logger(),
+            self.service_log.bind("perception"),
         )
 
         self.pilz_params = PlanRequestParameters(self.robot)
@@ -272,7 +295,7 @@ class TaskCoordinatorNode(Node):
             self.pick_target_resolver,
             self.start_pick_sequence,
             self._publish_robot_status,
-            self.get_logger(),
+            self.service_log.bind("legacy"),
             drawer_ready_for_target=self._drawer_ready_for_target,
             prepare_drawer_for_target=self._prepare_drawer_for_target,
         )
@@ -283,7 +306,7 @@ class TaskCoordinatorNode(Node):
             self.frame_processor,
             self.pick_target_resolver,
             self.depth_projector,
-            self.get_logger(),
+            self.service_log.bind("legacy"),
         )
         self.pick_runner = PickSequenceRunner(
             self.robot,
@@ -336,7 +359,7 @@ class TaskCoordinatorNode(Node):
             .strip()
             .lower()
         )
-        return normalize_grasp_point_mode(grasp_point_mode, self.get_logger())
+        return normalize_grasp_point_mode(grasp_point_mode, self.service_log.bind("legacy"))
 
     def _read_yolo_model(self):
         self.declare_parameter("yolo_model", YOLO_MODEL_NAME)
@@ -455,12 +478,19 @@ class TaskCoordinatorNode(Node):
         self.create_subscription(ToolDropEvent, TOOL_DROP_TOPIC, self._tool_drop_cb, 10)
 
     def _log_startup(self):
-        self.get_logger().info("task coordinator node 초기화 완료")
-        self.get_logger().info(f"task request 토픽: {TASK_REQUEST_TOPIC}")
-        self.get_logger().info(f"task control 토픽: {TASK_CONTROL_TOPIC}")
-        self.get_logger().info(f"robot status 토픽: {ROBOT_STATUS_TOPIC}")
-        self.get_logger().info(f"YOLO model: {self.yolo_model}")
-        self.get_logger().info(f"grasp point mode: {self.grasp_point_mode}")
+        log = self.service_log.bind("startup")
+        log.info("node", "done", msg="task coordinator initialized")
+        log.info("topic", "status", name="task_request", topic=TASK_REQUEST_TOPIC)
+        log.info("topic", "status", name="task_control", topic=TASK_CONTROL_TOPIC)
+        log.info("topic", "status", name="robot_status", topic=ROBOT_STATUS_TOPIC)
+        log.info("model", "status", name="yolo", model=self.yolo_model)
+        log.info("grasp_point", "status", mode=self.grasp_point_mode)
+        self.service_log.bind("legacy").info("task coordinator node 珥덇린???꾨즺")
+        self.service_log.bind("legacy").info(f"task request ?좏뵿: {TASK_REQUEST_TOPIC}")
+        self.service_log.bind("legacy").info(f"task control ?좏뵿: {TASK_CONTROL_TOPIC}")
+        self.service_log.bind("legacy").info(f"robot status ?좏뵿: {ROBOT_STATUS_TOPIC}")
+        self.service_log.bind("legacy").info(f"YOLO model: {self.yolo_model}")
+        self.service_log.bind("legacy").info(f"grasp point mode: {self.grasp_point_mode}")
 
     def _task_request_cb(self, msg):
         task = str(msg.task or "").strip().lower()
@@ -477,10 +507,18 @@ class TaskCoordinatorNode(Node):
             self._handle_home_request(msg)
             return
 
-        self.get_logger().warn(f"지원하지 않는 task request: {task}")
+        self.service_log.warn(
+            "request",
+            "fail",
+            pipe="task",
+            target=task or "unknown",
+            reason="unsupported_task_request",
+            msg="unsupported task request",
+        )
+        self.service_log.bind("legacy").warn(f"吏?먰븯吏 ?딅뒗 task request: {task}")
         self._publish_robot_status(
             "rejected",
-            message="지원하지 않는 task request입니다.",
+            message="吏?먰븯吏 ?딅뒗 task request?낅땲??",
             reason="unsupported_task_request",
             command=self._task_request_command(msg),
         )
@@ -497,7 +535,7 @@ class TaskCoordinatorNode(Node):
                 "rejected",
                 tool_name=tool_name,
                 action="bring",
-                message="대상 공구가 unknown이라 pick 요청을 시작하지 않습니다.",
+                message="???怨듦뎄媛 unknown?대씪 pick ?붿껌???쒖옉?섏? ?딆뒿?덈떎.",
                 reason="unknown_tool",
                 command=command,
             )
@@ -508,7 +546,7 @@ class TaskCoordinatorNode(Node):
                 "busy",
                 tool_name=tool_name,
                 action="bring",
-                message="이미 작업 큐가 실행 중입니다.",
+                message="?대? ?묒뾽 ?먭? ?ㅽ뻾 以묒엯?덈떎.",
                 reason="task_queue_busy",
                 command=command,
             )
@@ -533,7 +571,7 @@ class TaskCoordinatorNode(Node):
             "accepted",
             tool_name=tool_name,
             action="bring",
-            message=f"{tool_name} 탐색 요청을 task coordinator가 수신했습니다.",
+            message=f"{tool_name} ?먯깋 ?붿껌??task coordinator媛 ?섏떊?덉뒿?덈떎.",
             command=command,
         )
         if not self._prepare_drawer_for_target(tool_name):
@@ -542,7 +580,7 @@ class TaskCoordinatorNode(Node):
                 "searching",
                 tool_name=tool_name,
                 action="bring",
-                message=f"{tool_name} 탐색을 시작합니다.",
+                message=f"{tool_name} ?먯깋???쒖옉?⑸땲??",
                 command=command,
             )
 
@@ -554,19 +592,19 @@ class TaskCoordinatorNode(Node):
                 "busy",
                 tool_name=tool_name,
                 action="release",
-                message="로봇이 작업 중이라 release 요청은 즉시 실행하지 않습니다.",
+                message="濡쒕큸???묒뾽 以묒씠??release ?붿껌? 利됱떆 ?ㅽ뻾?섏? ?딆뒿?덈떎.",
                 reason="already_picking",
                 command=command,
             )
             return
 
-        self.get_logger().info("release task request 수신: 그리퍼를 엽니다.")
+        self.service_log.bind("legacy").info("release task request ?섏떊: 洹몃━?쇰? ?쎈땲??")
         self.tool_hold_monitor.release_gripper()
         self._publish_robot_status(
             "done",
             tool_name=tool_name,
             action="release",
-            message="그리퍼를 열었습니다.",
+            message="洹몃━?쇰? ?댁뿀?듬땲??",
             command=command,
         )
 
@@ -578,7 +616,7 @@ class TaskCoordinatorNode(Node):
                 "busy",
                 tool_name=tool_name,
                 action="home",
-                message="로봇이 작업 중입니다. 먼저 정지한 뒤 Home 복귀를 요청해주세요.",
+                message="濡쒕큸???묒뾽 以묒엯?덈떎. 癒쇱? ?뺤?????Home 蹂듦?瑜??붿껌?댁＜?몄슂.",
                 reason="already_picking",
                 command=command,
             )
@@ -588,7 +626,7 @@ class TaskCoordinatorNode(Node):
             "returning_home",
             tool_name=tool_name,
             action="home",
-            message="Home 위치로 복귀하는 중입니다.",
+            message="Home ?꾩튂濡?蹂듦??섎뒗 以묒엯?덈떎.",
             command=command,
         )
         ok = self.home_initializer.initialize()
@@ -597,7 +635,7 @@ class TaskCoordinatorNode(Node):
                 "failed",
                 tool_name=tool_name,
                 action="home",
-                message="Home 위치 복귀에 실패했습니다.",
+                message="Home ?꾩튂 蹂듦????ㅽ뙣?덉뒿?덈떎.",
                 reason="home_motion_failed",
                 command=command,
             )
@@ -607,7 +645,7 @@ class TaskCoordinatorNode(Node):
             "done",
             tool_name=tool_name,
             action="home",
-            message="Home 위치로 복귀하고 그리퍼를 열었습니다.",
+            message="Home ?꾩튂濡?蹂듦??섍퀬 洹몃━?쇰? ?댁뿀?듬땲??",
             command=command,
         )
 
@@ -628,29 +666,54 @@ class TaskCoordinatorNode(Node):
         if action == "exit":
             self._handle_exit(reason)
             return
-        self.get_logger().warn(f"지원하지 않는 task control action: {action}")
+        self.service_log.warn(
+            "control",
+            "fail",
+            pipe="task",
+            target=action or "unknown",
+            reason="unsupported_task_control",
+            msg="unsupported task control action",
+        )
+        self.service_log.bind("legacy").warn(f"吏?먰븯吏 ?딅뒗 task control action: {action}")
 
     def _handle_pause(self, reason):
         if self.exit_req.is_set():
             return False
-        self.get_logger().warn(f"task queue pause 요청: reason={reason}")
+        self.service_log.warn(
+            "queue",
+            "pause",
+            pipe="task",
+            reason=reason or "pause_requested",
+            msg="task queue pause requested",
+        )
+        self.service_log.bind("legacy").warn(f"task queue pause ?붿껌: reason={reason}")
         self.pause_req.set()
         self.resume_req.clear()
         with self._queue_lock:
             if self._current_step is not None:
                 self._suspended_step = self._current_step
                 self._suspended_task_name = self._current_task_name
-        self.motion.cancel_current_goal(self.get_logger(), reason=reason or "pause")
+        self.motion.cancel_current_goal(
+            self.service_log.bind("moveit"),
+            reason=reason or "pause",
+        )
         self._publish_robot_status(
             "paused",
-            message="사용자 요청으로 작업을 일시정지합니다.",
+            message="?ъ슜???붿껌?쇰줈 ?묒뾽???쇱떆?뺤??⑸땲??",
             reason=reason or "pause_requested",
             command=self.state.current_command,
         )
         return True
 
     def _handle_resume(self, reason):
-        self.get_logger().info(f"task queue resume 요청: reason={reason}")
+        self.service_log.info(
+            "queue",
+            "resume",
+            pipe="task",
+            reason=reason or "resume_requested",
+            msg="task queue resume requested",
+        )
+        self.service_log.bind("legacy").info(f"task queue resume ?붿껌: reason={reason}")
         with self._queue_lock:
             if self._suspended_step is not None:
                 self._queue.appendleft(
@@ -663,7 +726,7 @@ class TaskCoordinatorNode(Node):
 
         self._publish_robot_status(
             "resumed",
-            message="작업을 재개합니다.",
+            message="?묒뾽???ш컻?⑸땲??",
             reason=reason or "resume_requested",
             command=self.state.current_command,
         )
@@ -671,12 +734,22 @@ class TaskCoordinatorNode(Node):
         return True
 
     def _handle_cancel(self, reason, publish_status=True):
-        self.get_logger().warn(f"task queue cancel 요청: reason={reason}")
+        self.service_log.warn(
+            "queue",
+            "cancel",
+            pipe="task",
+            reason=reason or "cancel_requested",
+            msg="task queue cancel requested",
+        )
+        self.service_log.bind("legacy").warn(f"task queue cancel ?붿껌: reason={reason}")
         task_running = self.is_running() or self.state.picking
         self.exit_req.set()
         self.pause_req.clear()
         self.resume_req.clear()
-        self.motion.cancel_current_goal(self.get_logger(), reason=reason or "cancel")
+        self.motion.cancel_current_goal(
+            self.service_log.bind("moveit"),
+            reason=reason or "cancel",
+        )
         with self._queue_lock:
             self._queue.clear()
             self._suspended_step = None
@@ -690,18 +763,29 @@ class TaskCoordinatorNode(Node):
             self._publish_robot_status(
                 "cancelled",
                 action="cancel",
-                message="현재 작업을 취소했습니다. 다음 명령을 기다립니다.",
+                message="?꾩옱 ?묒뾽??痍⑥냼?덉뒿?덈떎. ?ㅼ쓬 紐낅졊??湲곕떎由쎈땲??",
                 reason=reason or "cancel_requested",
                 command=self.state.current_command,
             )
         return True
 
     def _handle_exit(self, reason, publish_status=True):
-        self.get_logger().warn(f"task queue exit 요청: reason={reason}")
+        self.service_log.warn(
+            "queue",
+            "cancel",
+            pipe="task",
+            reason=reason or "exit_requested",
+            action="exit",
+            msg="task queue exit requested",
+        )
+        self.service_log.bind("legacy").warn(f"task queue exit ?붿껌: reason={reason}")
         self.exit_req.set()
         self.pause_req.clear()
         self.resume_req.clear()
-        self.motion.cancel_current_goal(self.get_logger(), reason=reason or "exit")
+        self.motion.cancel_current_goal(
+            self.service_log.bind("moveit"),
+            reason=reason or "exit",
+        )
         with self._queue_lock:
             self._queue.clear()
             self._suspended_step = None
@@ -711,7 +795,7 @@ class TaskCoordinatorNode(Node):
             self._publish_robot_status(
                 "cancelled",
                 action="exit",
-                message="사용자 요청으로 작업을 중단합니다.",
+                message="?ъ슜???붿껌?쇰줈 ?묒뾽??以묐떒?⑸땲??",
                 reason=reason or "exit_requested",
                 command=self.state.current_command,
             )
@@ -731,24 +815,24 @@ class TaskCoordinatorNode(Node):
         self._exit_home_thread.start()
 
     def _move_home_after_exit(self, reason):
-        log = self.get_logger()
+        log = self.service_log.bind("task")
         command = self.state.current_command
         if not self._wait_for_task_queue_to_stop(log):
             self._publish_robot_status(
                 "failed",
                 action="exit",
-                message="종료 요청 후 작업 큐가 멈추지 않아 Home 복귀를 시작하지 못했습니다.",
+                message="醫낅즺 ?붿껌 ???묒뾽 ?먭? 硫덉텛吏 ?딆븘 Home 蹂듦?瑜??쒖옉?섏? 紐삵뻽?듬땲??",
                 reason="exit_queue_shutdown_timeout",
                 command=command,
             )
             return
 
         self.exit_req.clear()
-        log.info("종료 요청 후 Home 위치로 복귀합니다.")
+        log.info("醫낅즺 ?붿껌 ??Home ?꾩튂濡?蹂듦??⑸땲??")
         self._publish_robot_status(
             "returning_home",
             action="exit",
-            message="종료 요청 후 Home 위치로 복귀합니다.",
+            message="醫낅즺 ?붿껌 ??Home ?꾩튂濡?蹂듦??⑸땲??",
             reason=reason or "exit_requested",
             command=command,
         )
@@ -758,7 +842,7 @@ class TaskCoordinatorNode(Node):
             self._publish_robot_status(
                 "failed",
                 action="exit",
-                message="종료 요청 후 Home 위치 복귀에 실패했습니다.",
+                message="醫낅즺 ?붿껌 ??Home ?꾩튂 蹂듦????ㅽ뙣?덉뒿?덈떎.",
                 reason="exit_home_failed",
                 command=command,
             )
@@ -767,11 +851,11 @@ class TaskCoordinatorNode(Node):
         try:
             self.tool_hold_monitor.release_gripper("exit_home_completed")
         except Exception as exc:
-            log.warn(f"exit Home 복귀 후 그리퍼 열기 실패: {exc}")
+            log.warn(f"exit Home 蹂듦? ??洹몃━???닿린 ?ㅽ뙣: {exc}")
             self._publish_robot_status(
                 "failed",
                 action="exit",
-                message="종료 요청 후 Home 복귀는 완료했지만 그리퍼 열기에 실패했습니다.",
+                message="醫낅즺 ?붿껌 ??Home 蹂듦????꾨즺?덉?留?洹몃━???닿린???ㅽ뙣?덉뒿?덈떎.",
                 reason="exit_gripper_release_failed",
                 command=command,
             )
@@ -780,7 +864,7 @@ class TaskCoordinatorNode(Node):
         self._publish_robot_status(
             "done",
             action="exit",
-            message="종료 요청 후 Home 위치로 복귀하고 그리퍼를 열었습니다.",
+            message="醫낅즺 ?붿껌 ??Home ?꾩튂濡?蹂듦??섍퀬 洹몃━?쇰? ?댁뿀?듬땲??",
             reason=reason or "exit_home_completed",
             command=command,
         )
@@ -790,7 +874,7 @@ class TaskCoordinatorNode(Node):
         while self.is_running() and time.monotonic() < deadline:
             time.sleep(TASK_QUEUE_STOP_POLL_SEC)
         if self.is_running():
-            logger.warn("exit 요청 후 task queue 종료 대기 시간이 초과되었습니다.")
+            logger.warn("exit ?붿껌 ??task queue 醫낅즺 ?湲??쒓컙??珥덇낵?섏뿀?듬땲??")
             return False
         return True
 
@@ -799,20 +883,20 @@ class TaskCoordinatorNode(Node):
         if payload.get("event") != "tool_dropped":
             return
         reason = payload.get("reason") or "tool_dropped"
-        self.get_logger().warn(
-            "공구 drop 감지를 task exit으로 처리합니다: "
+        self.service_log.bind("legacy").warn(
+            "怨듦뎄 drop 媛먯?瑜?task exit?쇰줈 泥섎━?⑸땲?? "
             f"reason={reason}, tool={payload.get('tool_name', 'unknown')}"
         )
         self._handle_exit(reason, publish_status=False)
 
     def start_pick_sequence(self, bx, by, bz, vlm_yaw_deg=None):
         if self.is_running() or self.state.picking:
-            self.get_logger().warn("이미 pick 동작 중이라 새 pick 요청을 무시합니다.")
+            self.service_log.bind("legacy").warn("?대? pick ?숈옉 以묒씠????pick ?붿껌??臾댁떆?⑸땲??")
             self._publish_robot_status(
                 "busy",
                 tool_name=self.state.target_label,
                 action="bring",
-                message="이미 작업 큐가 실행 중입니다.",
+                message="?대? ?묒뾽 ?먭? ?ㅽ뻾 以묒엯?덈떎.",
                 reason="task_queue_busy",
                 command=self.state.current_command,
             )
@@ -823,7 +907,7 @@ class TaskCoordinatorNode(Node):
             "picking",
             tool_name=self.state.target_label,
             action="bring",
-            message=f"{self.state.target_label} pick 동작을 시작합니다.",
+            message=f"{self.state.target_label} pick ?숈옉???쒖옉?⑸땲??",
             command=self.state.current_command,
         )
         steps = self.pick_runner.build_steps(bx, by, bz, vlm_yaw_deg)
@@ -836,13 +920,13 @@ class TaskCoordinatorNode(Node):
                 "busy",
                 tool_name=tool_name,
                 action="return",
-                message="이미 작업 큐가 실행 중입니다.",
+                message="?대? ?묒뾽 ?먭? ?ㅽ뻾 以묒엯?덈떎.",
                 reason="task_queue_busy",
                 command=command,
             )
             return False
 
-        self.get_logger().info(f"반납 시퀀스 시작: tool={tool_name}")
+        self.service_log.bind("legacy").info(f"諛섎궔 ?쒗???쒖옉: tool={tool_name}")
         self.state.picking = True
         self.state.target_label = None
         self.state.current_command = command
@@ -852,16 +936,30 @@ class TaskCoordinatorNode(Node):
     def _load_queue(self, task_name, steps):
         with self._queue_lock:
             if self._current_step is not None or self._step_thread_alive():
-                self.get_logger().warn(
-                    f"이미 task coordinator가 실행 중이라 {task_name} 요청을 무시합니다."
+                self.service_log.warn(
+                    "queue",
+                    "skip",
+                    pipe=task_name,
+                    reason="task_queue_busy",
+                    msg="task request ignored while queue is running",
+                )
+                self.service_log.bind("legacy").warn(
+                    f"?대? task coordinator媛 ?ㅽ뻾 以묒씠??{task_name} ?붿껌??臾댁떆?⑸땲??"
                 )
                 return False
             self.exit_req.clear()
             self.resume_req.clear()
             self._queue.clear()
             self._queue.extend((task_name, step) for step in steps)
-            self.get_logger().info(
-                f"{task_name} task queue 로딩 완료: {len(steps)} steps"
+            self.service_log.info(
+                "queue",
+                "done",
+                pipe=task_name,
+                step_count=len(steps),
+                msg="task queue loaded",
+            )
+            self.service_log.bind("legacy").info(
+                f"{task_name} task queue 濡쒕뵫 ?꾨즺: {len(steps)} steps"
             )
         self._dispatch_next()
         return True
@@ -885,21 +983,38 @@ class TaskCoordinatorNode(Node):
                 name=f"task_step:{step.name}",
                 daemon=True,
             )
-            self.get_logger().info(f"task step 시작: {step.name}")
+            self.service_log.info(
+                "step",
+                "start",
+                pipe=task_name,
+                target=self.state.target_label or "unknown",
+                step_name=step.name,
+                msg="task step started",
+            )
+            self.service_log.bind("legacy").info(f"task step ?쒖옉: {step.name}")
             self._step_thread.start()
 
     def _execute_step(self, task_name, step):
         ok = False
         exc = None
+        start = time.monotonic()
         try:
             ok = bool(step.execute())
         except Exception as error:
             exc = error
-        self._finish_step(task_name, step, ok, exc)
+        dur_ms = int((time.monotonic() - start) * 1000)
+        self._finish_step(task_name, step, ok, exc, dur_ms)
 
-    def _finish_step(self, task_name, step: TaskStep, ok, exc):
+    def _finish_step(self, task_name, step: TaskStep, ok, exc, dur_ms=None):
         if exc is not None:
-            self._log_step_exception(self.get_logger(), task_name, step.name, exc)
+            self._log_step_exception(
+                self.service_log,
+                task_name,
+                step.name,
+                exc,
+                dur_ms=dur_ms,
+                target=self.state.target_label or "unknown",
+            )
             self._publish_task_exception_status(
                 task_name,
                 step.name,
@@ -915,20 +1030,55 @@ class TaskCoordinatorNode(Node):
             self._step_thread = None
 
             if ok and not self.pause_req.is_set():
-                self.get_logger().info(f"task step 완료: {step.name}")
+                self.service_log.info(
+                    "step",
+                    "done",
+                    pipe=task_name,
+                    target=self.state.target_label or "unknown",
+                    step_name=step.name,
+                    dur_ms=dur_ms,
+                    msg="task step completed",
+                )
+                self.service_log.bind("legacy").info(f"task step ?꾨즺: {step.name}")
             elif self.pause_req.is_set() and step.retry_on_pause:
-                self.get_logger().info(f"task step 일시정지 보관: {step.name}")
+                self.service_log.info(
+                    "step",
+                    "pause",
+                    pipe=task_name,
+                    target=self.state.target_label or "unknown",
+                    step_name=step.name,
+                    dur_ms=dur_ms,
+                    msg="task step suspended",
+                )
+                self.service_log.bind("legacy").info(f"task step ?쇱떆?뺤? 蹂닿?: {step.name}")
                 if self._suspended_step is None:
                     self._suspended_step = step
                     self._suspended_task_name = task_name
                 return
             elif self.exit_req.is_set():
-                self.get_logger().info(f"{task_name} task queue 종료 요청으로 중단")
+                self.service_log.info(
+                    "queue",
+                    "cancel",
+                    pipe=task_name,
+                    reason="exit_requested",
+                    msg="task queue stopped by exit request",
+                )
+                self.service_log.bind("legacy").info(f"{task_name} task queue 醫낅즺 ?붿껌?쇰줈 以묐떒")
                 self._run_cleanup_callbacks()
                 self._clear_task_state()
                 return
             elif not ok:
-                self.get_logger().error(f"task step 실패: {step.name}")
+                self.service_log.error(
+                    "step",
+                    "fail",
+                    pipe=task_name,
+                    target=self.state.target_label or "unknown",
+                    step_name=step.name,
+                    reason="task_step_failed",
+                    dur_ms=dur_ms,
+                    msg="task step failed",
+                )
+                self.service_log.bind("legacy").error(f"task step ?ㅽ뙣: {step.name}")
                 self._run_cleanup_callbacks()
                 self._clear_task_state()
                 return
@@ -941,12 +1091,25 @@ class TaskCoordinatorNode(Node):
             self._current_step = None
             self._current_task_name = None
             self._step_thread = None
-        self.get_logger().info(f"{task_name} task queue 실패로 종료")
+        self.service_log.bind("legacy").info(f"{task_name} task queue ?ㅽ뙣濡?醫낅즺")
+        self.service_log.warn(
+            "queue",
+            "fail",
+            pipe=task_name,
+            reason="task_step_exception",
+            msg="task queue failed",
+        )
         self._run_cleanup_callbacks()
         self._clear_task_state()
 
     def _complete_queue_locked(self):
-        self.get_logger().info("task queue 완료")
+        self.service_log.info(
+            "queue",
+            "done",
+            pipe=self._current_task_name or "task",
+            msg="task queue completed",
+        )
+        self.service_log.bind("legacy").info("task queue ?꾨즺")
         self._step_thread = None
         self._run_cleanup_callbacks()
         self._clear_task_state()
@@ -976,7 +1139,15 @@ class TaskCoordinatorNode(Node):
         try:
             self.tool_hold_monitor.stop("task_queue_finished")
         except Exception as exc:
-            self.get_logger().warn(f"task cleanup callback 실패: {exc}")
+            fields = exception_log_fields(exc)
+            self.service_log.warn(
+                "cleanup",
+                "fail",
+                pipe="task",
+                msg="task cleanup callback failed",
+                **fields,
+            )
+            self.service_log.bind("legacy").warn(f"task cleanup callback ?ㅽ뙣: {exc}")
 
     def _publish_task_exception_status(self, task_name, step_name, exc, reason):
         action = "bring" if task_name == "pick" else task_name
@@ -986,7 +1157,7 @@ class TaskCoordinatorNode(Node):
             tool_name=self.state.target_label,
             action=action,
             message=(
-                f"{task_name} task step 예외로 작업을 중단합니다: "
+                f"{task_name} task step ?덉쇅濡??묒뾽??以묐떒?⑸땲?? "
                 f"{step_name} ({exc_type})"
             ),
             reason=reason,
@@ -994,12 +1165,26 @@ class TaskCoordinatorNode(Node):
         )
 
     @staticmethod
-    def _log_step_exception(log, task_name, step_name, exc):
+    def _log_step_exception(log, task_name, step_name, exc, dur_ms=None, target=None):
+        fields = exception_log_fields(exc)
         log.error(
-            f"{task_name} task step 예외 발생: "
-            f"step={step_name}, error={type(exc).__name__}: {exc}"
+            "step",
+            "fail",
+            pipe=task_name,
+            target=target or "unknown",
+            step_name=step_name,
+            dur_ms=dur_ms,
+            msg="task step raised exception",
+            **fields,
         )
-        log.error(traceback.format_exc())
+        log.error(
+            "step_traceback",
+            "fail",
+            pipe=task_name,
+            target=target or "unknown",
+            step_name=step_name,
+            msg=traceback.format_exc(),
+        )
 
     def _drawer_ready_for_target(self, target_label):
         drawer_id = self.drawer_flow.drawer_id_for_tool(target_label)
@@ -1022,7 +1207,7 @@ class TaskCoordinatorNode(Node):
             "opening_drawer",
             tool_name=target_label,
             action="bring",
-            message=f"{target_label}가 들어있는 서랍을 엽니다.",
+            message=f"{target_label}媛 ?ㅼ뼱?덈뒗 ?쒕엻???쎈땲??",
             command=self.state.current_command,
         )
         worker = threading.Thread(
@@ -1035,9 +1220,9 @@ class TaskCoordinatorNode(Node):
 
     def _prepare_drawer_worker(self, target_label, drawer_id):
         try:
-            log = self.get_logger()
+            log = self.service_log.bind("legacy")
             log.info(
-                f"{target_label} 탐색 전 drawer {drawer_id}를 열고 관찰 위치로 이동합니다."
+                f"{target_label} ?먯깋 ??drawer {drawer_id}瑜??닿퀬 愿李??꾩튂濡??대룞?⑸땲??"
             )
             ok = self.drawer_flow.open_drawer(drawer_id, log)
             if ok:
@@ -1045,7 +1230,7 @@ class TaskCoordinatorNode(Node):
                     "observing_drawer",
                     tool_name=target_label,
                     action="bring",
-                    message=f"{target_label} 탐색을 위해 서랍 내부를 관찰합니다.",
+                    message=f"{target_label} ?먯깋???꾪빐 ?쒕엻 ?대?瑜?愿李고빀?덈떎.",
                     command=self.state.current_command,
                 )
                 ok = self.drawer_flow.observe_drawer(drawer_id, log)
@@ -1057,7 +1242,7 @@ class TaskCoordinatorNode(Node):
                     "searching",
                     tool_name=target_label,
                     action="bring",
-                    message=f"{target_label} 탐색을 시작합니다.",
+                    message=f"{target_label} ?먯깋???쒖옉?⑸땲??",
                     command=self.state.current_command,
                 )
             else:
@@ -1065,7 +1250,7 @@ class TaskCoordinatorNode(Node):
                     "failed",
                     tool_name=target_label,
                     action="bring",
-                    message=f"{target_label} 탐색 전 서랍 준비에 실패했습니다.",
+                    message=f"{target_label} ?먯깋 ???쒕엻 以鍮꾩뿉 ?ㅽ뙣?덉뒿?덈떎.",
                     reason="drawer_prepare_failed",
                     command=self.state.current_command,
                 )
@@ -1079,7 +1264,7 @@ class TaskCoordinatorNode(Node):
         if not self.pick_target_resolver.should_defer_vlm_until_top_view():
             return None
         if not self.frame_processor.has_camera_state():
-            self.get_logger().warn("상단 view VLM 갱신을 위한 camera state가 없습니다.")
+            self.service_log.bind("legacy").warn("?곷떒 view VLM 媛깆떊???꾪븳 camera state媛 ?놁뒿?덈떎.")
             return None
 
         color_image = self.state.color_image.copy()
@@ -1121,7 +1306,7 @@ class TaskCoordinatorNode(Node):
             interrupted=self._motion_interrupted,
         )
         if response is None:
-            self.get_logger().warn(
+            self.service_log.bind("legacy").warn(
                 "Top-view VLM service refine failed. Keeping existing pick plan."
             )
             return PickTarget(
@@ -1166,7 +1351,7 @@ class TaskCoordinatorNode(Node):
         try:
             self.state.hand_grasp_image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
         except Exception as exc:
-            self.get_logger().warn(f"잡기 인식 화면 변환 실패: {exc}")
+            self.service_log.bind("legacy").warn(f"?↔린 ?몄떇 ?붾㈃ 蹂???ㅽ뙣: {exc}")
 
     def _cam_info_cb(self, msg):
         self.state.intrinsics = {
@@ -1192,7 +1377,7 @@ class TaskCoordinatorNode(Node):
     def _process_frames(self):
         if self.state.home_xyz is None or self.state.home_ori is None:
             return
-        self.get_logger().info("task coordinator camera loop 대기 중...")
+        self.service_log.bind("legacy").info("task coordinator camera loop ?湲?以?..")
 
         while rclpy.ok():
             if not self.frame_processor.has_camera_state():
@@ -1402,3 +1587,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

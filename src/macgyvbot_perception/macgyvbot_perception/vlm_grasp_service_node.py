@@ -18,6 +18,7 @@ from macgyvbot_config.vlm import (
     VLM_ONLY_MODEL_BY_MODE,
     VLM_ONLY_MODES,
 )
+from macgyvbot_domain.logging import MacGyvbotLogger, exception_log_fields
 from macgyvbot_interfaces.srv import VLMGrasp
 from macgyvbot_perception.grasp_point.vlm_grasp_point_selector import (
     VLMGraspPointSelector,
@@ -32,6 +33,7 @@ class VLMGraspServiceNode(Node):
 
     def __init__(self) -> None:
         super().__init__("vlm_grasp_service_node")
+        self.service_log = MacGyvbotLogger(super().get_logger(), svc="perception", pipe="vlm")
 
         self.bridge = CvBridge()
         self.declare_parameter("vlm_service_name", VLM_GRASP_SERVICE_NAME)
@@ -60,19 +62,26 @@ class VLMGraspServiceNode(Node):
             self._handle_request,
         )
         self._preload_default_mode()
-        self.get_logger().info(
-            "VLM grasp service ready: "
-            f"service={service_name}, default_mode={self.grasp_point_mode}"
+        self.service_log.info(
+            "service",
+            "done",
+            name=service_name,
+            mode=self.grasp_point_mode,
+            msg="VLM grasp service ready",
         )
 
     def _handle_request(self, request, response):
         request_received_wall = self._timestamp()
         request_received_mono = time.monotonic()
         mode = str(request.mode or self.grasp_point_mode).strip()
-        self.get_logger().info(
-            "VLM service request received: "
-            f"received_at={request_received_wall}, mode={mode}, "
-            f"target={request.target_label}, label={request.label}"
+        self.service_log.info(
+            "request",
+            "start",
+            target=request.target_label,
+            label=request.label,
+            mode=mode,
+            received_at=request_received_wall,
+            msg="VLM service request received",
         )
 
         try:
@@ -80,28 +89,54 @@ class VLMGraspServiceNode(Node):
         except Exception as exc:
             response.success = False
             response.error_message = f"image conversion failed: {exc}"
-            self.get_logger().warn(f"VLM service image conversion failed: {exc}")
+            self.service_log.warn(
+                "request",
+                "fail",
+                target=request.target_label,
+                mode=mode,
+                msg="VLM service image conversion failed",
+                **exception_log_fields(exc),
+            )
             return response
 
         bbox = [float(value) for value in request.bbox_xyxy]
         if len(bbox) < 4:
             response.success = False
             response.error_message = "bbox_xyxy must contain four values"
-            self.get_logger().warn("VLM service request bbox is invalid.")
+            self.service_log.warn(
+                "request",
+                "fail",
+                target=request.target_label,
+                mode=mode,
+                reason="invalid_bbox",
+                bbox_len=len(bbox),
+                msg="VLM service request bbox is invalid",
+            )
             return response
 
         selector = self._selector_for_mode(mode)
         if selector is None:
             response.success = False
             response.error_message = f"unsupported VLM service mode: {mode}"
-            self.get_logger().warn(response.error_message)
+            self.service_log.warn(
+                "request",
+                "fail",
+                target=request.target_label,
+                mode=mode,
+                reason="unsupported_mode",
+                msg=response.error_message,
+            )
             return response
 
         infer_start_wall = self._timestamp()
         infer_start_mono = time.monotonic()
-        self.get_logger().info(
-            "VLM service inference started: "
-            f"started_at={infer_start_wall}, mode={mode}"
+        self.service_log.info(
+            "inference",
+            "start",
+            target=request.target_label,
+            mode=mode,
+            started_at=infer_start_wall,
+            msg="VLM service inference started",
         )
         try:
             selected = selector.select_grasp_pixel(
@@ -115,20 +150,39 @@ class VLMGraspServiceNode(Node):
         except Exception as exc:
             response.success = False
             response.error_message = f"VLM inference failed: {exc}"
-            self.get_logger().warn(response.error_message)
+            self.service_log.warn(
+                "inference",
+                "fail",
+                target=request.target_label,
+                mode=mode,
+                msg="VLM inference failed",
+                **exception_log_fields(exc),
+            )
             return response
 
         infer_end_wall = self._timestamp()
         infer_end_mono = time.monotonic()
-        self.get_logger().info(
-            "VLM service inference completed: "
-            f"completed_at={infer_end_wall}, "
-            f"inference_latency_sec={infer_end_mono - infer_start_mono:.3f}"
+        self.service_log.info(
+            "inference",
+            "done",
+            target=request.target_label,
+            mode=mode,
+            completed_at=infer_end_wall,
+            dur_ms=int((infer_end_mono - infer_start_mono) * 1000),
+            msg="VLM service inference completed",
         )
 
         if selected is None:
             response.success = False
             response.error_message = "VLM selector returned no grasp result"
+            self.service_log.warn(
+                "inference",
+                "fail",
+                target=request.target_label,
+                mode=mode,
+                reason="empty_result",
+                msg=response.error_message,
+            )
             return response
 
         pixel_u, pixel_v, source, orientation_rpy_deg = selected
@@ -146,22 +200,29 @@ class VLMGraspServiceNode(Node):
             f"pixel=({response.pixel_u}, {response.pixel_v}), "
             f"yaw_deg={response.grasp_yaw_deg:.1f}, source={response.source}"
         )
-        self.get_logger().info(
-            "VLM service request completed: "
-            f"total_latency_sec={time.monotonic() - request_received_mono:.3f}, "
-            f"result={response.result_text}"
+        self.service_log.info(
+            "request",
+            "done",
+            target=request.target_label,
+            mode=mode,
+            dur_ms=int((time.monotonic() - request_received_mono) * 1000),
+            result=response.result_text,
+            msg="VLM service request completed",
         )
         return response
 
     def _selector_for_mode(self, mode):
         if mode == GRASP_POINT_MODE_VLM:
             if self._vlm_selector is None:
-                self.get_logger().info(
-                    "Preloading VLM service selector: "
-                    f"mode={mode}, model=grid_vlm_default"
+                self.service_log.info(
+                    "model_load",
+                    "start",
+                    mode=mode,
+                    model="grid_vlm_default",
+                    msg="preloading VLM service selector",
                 )
                 self._vlm_selector = VLMGraspPointSelector(
-                    self.get_logger(),
+                    self.service_log.bind("vlm"),
                     **self.sam_kwargs,
                 )
                 self._vlm_selector.preload()
@@ -171,12 +232,15 @@ class VLMGraspServiceNode(Node):
             selector = self._vlm_only_selectors.get(mode)
             if selector is None:
                 model_id = VLM_ONLY_MODEL_BY_MODE[mode]
-                self.get_logger().info(
-                    "Preloading VLM service selector: "
-                    f"mode={mode}, model_id={model_id}"
+                self.service_log.info(
+                    "model_load",
+                    "start",
+                    mode=mode,
+                    model=model_id,
+                    msg="preloading VLM-only service selector",
                 )
                 selector = VLMOnlyGraspPointSelector(
-                    self.get_logger(),
+                    self.service_log.bind("vlm"),
                     **self.sam_kwargs,
                     model_id=model_id,
                     mode=mode,
@@ -190,21 +254,30 @@ class VLMGraspServiceNode(Node):
     def _preload_default_mode(self):
         mode = self.grasp_point_mode
         if mode != GRASP_POINT_MODE_VLM and mode not in VLM_ONLY_MODES:
-            self.get_logger().info(
-                "VLM service preload skipped: "
-                f"default_mode={mode} does not use a local VLM selector"
+            self.service_log.info(
+                "model_load",
+                "skip",
+                mode=mode,
+                reason="mode_without_local_vlm",
+                msg="VLM service preload skipped",
             )
             return
 
         preload_started = time.monotonic()
-        self.get_logger().info(
-            "VLM service preload started: "
-            f"mode={mode}, started_at={self._timestamp()}"
+        self.service_log.info(
+            "model_load",
+            "start",
+            mode=mode,
+            started_at=self._timestamp(),
+            msg="VLM service preload started",
         )
         self._selector_for_mode(mode)
-        self.get_logger().info(
-            "VLM service preload completed: "
-            f"mode={mode}, elapsed_sec={time.monotonic() - preload_started:.3f}"
+        self.service_log.info(
+            "model_load",
+            "done",
+            mode=mode,
+            dur_ms=int((time.monotonic() - preload_started) * 1000),
+            msg="VLM service preload completed",
         )
 
     @staticmethod

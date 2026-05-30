@@ -25,6 +25,14 @@ class ForceReactionDetector:
         current_z = float(start_z)
 
         logger.info(
+            "force_descent",
+            "start",
+            pipe="manipulation",
+            threshold_n=f"{RETURN_HOME_FORCE_THRESHOLD_N:.1f}",
+            min_z=f"{SAFE_Z_MIN:.3f}",
+            msg="Z force descent started",
+        )
+        logger.info(
             "Z force 하강 시작 "
             f"threshold={RETURN_HOME_FORCE_THRESHOLD_N:.1f}N, "
             f"min_z={SAFE_Z_MIN:.3f}"
@@ -32,11 +40,27 @@ class ForceReactionDetector:
 
         while rclpy.ok():
             if self.interrupted():
+                logger.info(
+                    "force_descent",
+                    "cancel",
+                    pipe="manipulation",
+                    reason="interrupted",
+                    msg="Z force descent interrupted",
+                )
                 logger.info("Z force 하강을 stop/pause 요청으로 중단합니다.")
                 return None
 
             force_z = self._latest_force_z()
             if force_z is not None and force_z >= RETURN_HOME_FORCE_THRESHOLD_N:
+                logger.info(
+                    "force_descent",
+                    "done",
+                    pipe="manipulation",
+                    reason="threshold_reached",
+                    force_z=f"{force_z:.2f}",
+                    z=f"{current_z:.3f}",
+                    msg="Z force threshold reached",
+                )
                 logger.info(
                     "Z 반대방향 힘 감지로 하강을 중단합니다: "
                     f"force_z={force_z:.2f}N, z={current_z:.3f}"
@@ -44,6 +68,15 @@ class ForceReactionDetector:
                 return current_z
 
             if current_z <= SAFE_Z_MIN:
+                logger.warn(
+                    "force_descent",
+                    "done",
+                    pipe="manipulation",
+                    reason="safe_z_min_reached",
+                    last_force_z=force_z,
+                    z=f"{current_z:.3f}",
+                    msg="safe minimum Z reached before force threshold",
+                )
                 logger.warn(
                     "Z 반력이 임계값에 도달하지 않았지만 안전 최소 Z까지 하강했습니다: "
                     f"last_force_z={force_z}"
@@ -60,6 +93,14 @@ class ForceReactionDetector:
                     logger.info("Z force 하강 motion 중 stop/pause 요청을 확인했습니다.")
                     return None
 
+                logger.error(
+                    "force_descent",
+                    "fail",
+                    pipe="manipulation",
+                    reason="motion_failed",
+                    z=f"{next_z:.3f}",
+                    msg="Z force descent motion failed",
+                )
                 logger.error("Z force 하강 motion 계획/실행 실패")
                 return None
 
