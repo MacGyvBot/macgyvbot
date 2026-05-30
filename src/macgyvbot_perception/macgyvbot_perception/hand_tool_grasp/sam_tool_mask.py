@@ -1,41 +1,21 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 
 import cv2
 import numpy as np
 
+from macgyvbot_domain.mask_models import (
+    LockedToolMask,
+    MaskContactResult,
+    MaskTrackValidation,
+    Rect,
+)
 from macgyvbot_perception.hand_tool_grasp.calculations import (
     point_to_rect_distance,
 )
 from macgyvbot_perception.model_paths import resolve_weight_path
-
-Rect = Tuple[int, int, int, int]
-
-
-@dataclass(frozen=True)
-class LockedToolMask:
-    roi: Rect
-    mask: np.ndarray
-    source: str
-
-
-@dataclass(frozen=True)
-class MaskContactResult:
-    mask_contact_count: int
-    mask_contact_confirmed: bool
-    mask_proximity_ok: bool
-    min_landmark_to_tool_distance: Optional[float]
-
-    @property
-    def near_or_contact(self) -> bool:
-        return bool(
-            self.mask_contact_confirmed
-            or self.mask_proximity_ok
-            or self.mask_contact_count > 0
-        )
 
 
 class BBoxPromptSegmenter:
@@ -159,6 +139,54 @@ def create_bbox_locked_mask(roi: Rect, frame_shape: tuple[int, int]) -> LockedTo
     return LockedToolMask(roi=(x1, y1, x2, y2), mask=mask, source="BBOX_LOCKED")
 
 
+def validate_tracked_mask(
+    previous: LockedToolMask,
+    tracked: LockedToolMask,
+    max_center_shift_px: float,
+    min_area_ratio: float,
+    max_area_ratio: float,
+) -> MaskTrackValidation:
+    previous_area = mask_area(previous.mask)
+    tracked_area = mask_area(tracked.mask)
+    if previous_area <= 0:
+        return MaskTrackValidation(False, "previous_mask_empty")
+    if tracked_area <= 0:
+        return MaskTrackValidation(False, "tracked_mask_empty")
+
+    area_ratio = tracked_area / previous_area
+    if area_ratio < min_area_ratio:
+        return MaskTrackValidation(False, "tracked_mask_too_small")
+    if area_ratio > max_area_ratio:
+        return MaskTrackValidation(False, "tracked_mask_too_large")
+
+    previous_center = rect_center(previous.roi)
+    tracked_center = rect_center(tracked.roi)
+    center_shift = float(
+        np.hypot(
+            tracked_center[0] - previous_center[0],
+            tracked_center[1] - previous_center[1],
+        )
+    )
+    if center_shift > max_center_shift_px:
+        return MaskTrackValidation(False, "tracked_mask_center_jump")
+
+    return MaskTrackValidation(True)
+
+
+def mask_area(mask: np.ndarray) -> int:
+    return int(mask.astype(bool).sum())
+
+
+def rect_area(rect: Rect) -> int:
+    x1, y1, x2, y2 = rect
+    return max(0, x2 - x1) * max(0, y2 - y1)
+
+
+def rect_center(rect: Rect) -> tuple[float, float]:
+    x1, y1, x2, y2 = rect
+    return ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
+
+
 def compute_mask_contact(
     hand_info: Optional[dict],
     locked_tool: Optional[LockedToolMask],
@@ -196,13 +224,18 @@ def compute_mask_contact(
     )
 
 
-def overlay_locked_mask(frame: np.ndarray, locked_tool: Optional[LockedToolMask]) -> None:
+def overlay_locked_mask(
+    frame: np.ndarray,
+    locked_tool: Optional[LockedToolMask],
+    color: tuple[int, int, int] = (0, 255, 0),
+    alpha: float = 0.35,
+) -> None:
     if locked_tool is None:
         return
-    green = np.zeros_like(frame)
-    green[:, :] = (0, 255, 0)
+    overlay = np.zeros_like(frame)
+    overlay[:, :] = color
     mask = locked_tool.mask.astype(bool)
-    frame[mask] = cv2.addWeighted(frame, 0.65, green, 0.35, 0)[mask]
+    frame[mask] = cv2.addWeighted(frame, 1.0 - alpha, overlay, alpha, 0)[mask]
 
 
 def resolve_checkpoint_path(checkpoint_path: str) -> Path:

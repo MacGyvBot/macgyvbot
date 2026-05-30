@@ -15,6 +15,7 @@ from macgyvbot_config.return_flow import (
     RETURN_HAND_CLOSE_ROI_HEIGHT_RATIO,
     RETURN_HAND_CLOSE_ROI_WIDTH_RATIO,
 )
+from macgyvbot_domain.mask_models import LockedToolMask
 from macgyvbot_perception.hand_tool_grasp.tool_detector import (
     ToolDetection,
 )
@@ -23,7 +24,6 @@ from macgyvbot_perception.hand_tool_grasp.calculations import (
     median_depth_in_rect,
 )
 from macgyvbot_perception.hand_tool_grasp.sam_tool_mask import (
-    LockedToolMask,
     overlay_locked_mask,
 )
 

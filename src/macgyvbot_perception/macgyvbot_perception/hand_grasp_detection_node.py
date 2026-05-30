@@ -27,6 +27,7 @@ from macgyvbot_config.topics import (
     ROBOT_STATUS_TOPIC,
 )
 from macgyvbot_interfaces.msg import HumanGraspResult, RobotTaskStatus, ToolMaskLock
+from macgyvbot_domain.mask_models import LockedToolMask
 from macgyvbot_perception.hand_tool_grasp.hand_detector import (
     HandDetector,
 )
@@ -42,6 +43,7 @@ from macgyvbot_perception.hand_tool_grasp.tool_detector import (
 from macgyvbot_perception.hand_tool_grasp.calculations import (
     build_depth_grasp_info,
     depth_to_mm,
+    median_depth_in_rect,
     select_active_hand,
 )
 from macgyvbot_perception.hand_tool_grasp.ml_grasp_classifier import (
@@ -52,13 +54,14 @@ from macgyvbot_perception.hand_tool_grasp.ml_grasp_classifier import (
 )
 from macgyvbot_perception.hand_tool_grasp.sam_tool_mask import (
     BBoxPromptSegmenter,
-    LockedToolMask,
     compute_mask_contact,
     create_bbox_locked_mask,
     mask_to_roi,
+    validate_tracked_mask,
 )
 from macgyvbot_perception.hand_tool_grasp.visualization import (
-    draw_grasp_overlay,
+    draw_pick_overlay,
+    draw_return_overlay,
 )
 
 
@@ -70,10 +73,12 @@ class HandGraspDetectionNode(Node):
 
         self.bridge = CvBridge()
         self.latest_depth_mm = None
+        self.robot_status = ""
         self.last_state = None
         self.lock_requested = False
         self.locked_tool: Optional[LockedToolMask] = None
         self.latest_tool_detection: Optional[ToolDetection] = None
+        self.tool_mask_anchor: Optional[LockedToolMask] = None
         self.latest_tool_mask: Optional[LockedToolMask] = None
         self.mask_tracking_active = False
         self.frame_index = 0
@@ -99,6 +104,9 @@ class HandGraspDetectionNode(Node):
             self._as_bool(self.declare_parameter("publish_annotated", True).value)
         )
         self.display = self._as_bool(self.declare_parameter("display", False).value)
+        self.show_return_close_roi = self._as_bool(
+            self.declare_parameter("show_return_close_roi", False).value
+        )
         self.robot_status_topic = self.declare_parameter(
             "robot_status_topic",
             ROBOT_STATUS_TOPIC,
@@ -142,6 +150,18 @@ class HandGraspDetectionNode(Node):
         )
         self.sam_track_margin = int(
             self.declare_parameter("sam_track_margin", 12).value
+        )
+        self.sam_reseed_from_yolo = self._as_bool(
+            self.declare_parameter("sam_reseed_from_yolo", False).value
+        )
+        self.sam_track_max_center_shift_px = float(
+            self.declare_parameter("sam_track_max_center_shift_px", 80.0).value
+        )
+        self.sam_track_min_area_ratio = float(
+            self.declare_parameter("sam_track_min_area_ratio", 0.35).value
+        )
+        self.sam_track_max_area_ratio = float(
+            self.declare_parameter("sam_track_max_area_ratio", 2.5).value
         )
         self.allow_bbox_lock = self._as_bool(
             self.declare_parameter("allow_bbox_lock", True).value
@@ -281,6 +301,7 @@ class HandGraspDetectionNode(Node):
 
     def _robot_status_cb(self, msg: RobotTaskStatus) -> None:
         status = str(msg.status or "").strip().lower()
+        self.robot_status = status
 
         if status == self.lock_on_status:
             self.lock_requested = True
@@ -296,6 +317,7 @@ class HandGraspDetectionNode(Node):
                 self.lock_requested = False
                 self.locked_tool = None
                 self.latest_tool_detection = None
+                self.tool_mask_anchor = None
                 self.latest_tool_mask = None
             self.mask_tracking_active = True
             return
@@ -304,6 +326,7 @@ class HandGraspDetectionNode(Node):
             self.lock_requested = False
             self.locked_tool = None
             self.latest_tool_detection = None
+            self.tool_mask_anchor = None
             self.latest_tool_mask = None
             self.mask_tracking_active = False
             if self.ml_classifier is not None:
@@ -333,10 +356,12 @@ class HandGraspDetectionNode(Node):
         )
         if tool_detection is not None:
             self.latest_tool_detection = tool_detection
-            if self.mask_tracking_active:
-                self._update_prelock_tool_mask(frame, tool_detection)
-        elif self.mask_tracking_active and self.latest_tool_mask is not None:
-            self._track_prelock_tool_mask(frame)
+
+        if self.mask_tracking_active:
+            if self.latest_tool_mask is None:
+                self._seed_prelock_tool_mask(frame, tool_detection)
+            else:
+                self._track_prelock_tool_mask(frame)
 
         if self.lock_requested and self.locked_tool is None:
             self.locked_tool = self._lock_tool_mask(
@@ -345,17 +370,20 @@ class HandGraspDetectionNode(Node):
             )
             self._publish_mask_lock_result(self.locked_tool)
 
-        tool_roi = (
+        detected_tool_roi = (
             self.locked_tool.roi
             if self.locked_tool is not None
             else tool_detection.roi if tool_detection is not None else None
         )
         hand_infos = self.hand_detector.detect_all(frame)
-        active_hand = self._select_active_hand(hand_infos, tool_roi)
+        active_hand = self._select_active_hand(hand_infos, detected_tool_roi)
+        if active_hand is None and hand_infos:
+            active_hand = hand_infos[0]
         hand_for_state = active_hand if active_hand is not None else (
             hand_infos[0] if hand_infos else None
         )
-        depth_info = self._build_depth_info(hand_for_state, tool_roi)
+        observation_roi = self._observation_roi(detected_tool_roi, active_hand)
+        depth_info = self._build_depth_info(hand_for_state, observation_roi)
         mask_result = compute_mask_contact(
             hand_info=hand_for_state,
             locked_tool=self.locked_tool,
@@ -366,7 +394,7 @@ class HandGraspDetectionNode(Node):
         ml_result = self._update_ml_grasp(hand_for_state)
         result = self._compose_result(
             hand_info=hand_for_state,
-            tool_roi=tool_roi,
+            tool_roi=observation_roi,
             depth_info=depth_info,
             mask_result=mask_result,
             ml_result=ml_result,
@@ -376,14 +404,25 @@ class HandGraspDetectionNode(Node):
 
         if self.publish_annotated or self.display:
             annotated = frame.copy()
-            draw_grasp_overlay(
-                annotated,
-                hand_infos,
-                active_hand,
-                tool_detection,
-                result,
-                self.locked_tool,
-            )
+            if self._uses_return_overlay():
+                draw_return_overlay(
+                    frame=annotated,
+                    hand_infos=hand_infos,
+                    active_hand=active_hand,
+                    tool_detection=tool_detection,
+                    result=result,
+                    depth_mm=self.latest_depth_mm,
+                )
+            else:
+                draw_pick_overlay(
+                    frame=annotated,
+                    hand_infos=hand_infos,
+                    active_hand=active_hand,
+                    tool_detection=tool_detection,
+                    result=result,
+                    locked_tool=self.locked_tool,
+                    candidate_tool_mask=self.latest_tool_mask,
+                )
             if self.annotated_pub is not None:
                 self.annotated_pub.publish(
                     self.bridge.cv2_to_imgmsg(annotated, encoding="bgr8")
@@ -405,8 +444,17 @@ class HandGraspDetectionNode(Node):
     def _build_depth_info(self, hand_info: Optional[dict], tool_roi):
         if not self.use_depth:
             return None
-        if self.latest_depth_mm is None or hand_info is None or tool_roi is None:
+        if self.latest_depth_mm is None or tool_roi is None:
             return None
+        if hand_info is None:
+            tool_depth = median_depth_in_rect(self.latest_depth_mm, tool_roi)
+            return {
+                "depth_available": tool_depth is not None,
+                "tool_depth_mm": tool_depth,
+                "min_hand_tool_depth_diff_mm": None,
+                "depth_contact_count": 0,
+                "depth_grasp_confirmed": False,
+            }
 
         return build_depth_grasp_info(
             hand_info=hand_info,
@@ -416,8 +464,29 @@ class HandGraspDetectionNode(Node):
             min_depth_contact_landmarks=self.depth_min_contact_landmarks,
         )
 
-    def _update_prelock_tool_mask(self, frame, tool_detection: ToolDetection) -> None:
+    @staticmethod
+    def _observation_roi(
+        tool_roi: Optional[tuple[int, int, int, int]],
+        active_hand: Optional[dict],
+    ) -> Optional[tuple[int, int, int, int]]:
+        if tool_roi is not None:
+            return tool_roi
+        if active_hand is None:
+            return None
+        return active_hand.get("hand_rect")
+
+    def _uses_return_overlay(self) -> bool:
+        return self.show_return_close_roi or "return" in self.robot_status
+
+    def _seed_prelock_tool_mask(
+        self,
+        frame,
+        tool_detection: Optional[ToolDetection],
+    ) -> None:
         if self.locked_tool is not None:
+            return
+
+        if tool_detection is None:
             return
 
         if self.sam_segmenter is None:
@@ -425,6 +494,7 @@ class HandGraspDetectionNode(Node):
                 tool_detection.roi,
                 frame.shape[:2],
             )
+            self.tool_mask_anchor = self.latest_tool_mask
             return
 
         if self.frame_index % max(1, self.sam_track_interval) != 0:
@@ -438,9 +508,13 @@ class HandGraspDetectionNode(Node):
                 mask=mask,
                 source="SAM_TRACKED",
             )
+            self.tool_mask_anchor = self.latest_tool_mask
 
     def _track_prelock_tool_mask(self, frame) -> None:
         if self.locked_tool is not None or self.sam_segmenter is None:
+            return
+
+        if self.latest_tool_mask is None:
             return
 
         if self.frame_index % max(1, self.sam_track_interval) != 0:
@@ -451,8 +525,24 @@ class HandGraspDetectionNode(Node):
             self.latest_tool_mask,
             margin=self.sam_track_margin,
         )
-        if tracked is not None:
-            self.latest_tool_mask = tracked
+        if tracked is None:
+            return
+
+        validation = validate_tracked_mask(
+            previous=self.latest_tool_mask,
+            tracked=tracked,
+            max_center_shift_px=self.sam_track_max_center_shift_px,
+            min_area_ratio=self.sam_track_min_area_ratio,
+            max_area_ratio=self.sam_track_max_area_ratio,
+        )
+        if not validation.accepted:
+            self.get_logger().warn(
+                f"Rejected SAM tracked tool mask: reason={validation.reason}, "
+                f"previous_roi={self.latest_tool_mask.roi}, tracked_roi={tracked.roi}"
+            )
+            return
+
+        self.latest_tool_mask = tracked
 
     def _lock_tool_mask(
         self,
@@ -466,6 +556,16 @@ class HandGraspDetectionNode(Node):
             return LockedToolMask(
                 roi=self.latest_tool_mask.roi,
                 mask=self.latest_tool_mask.mask.copy(),
+                source="SAM_LOCKED",
+            )
+
+        if (
+            self.tool_mask_anchor is not None
+            and self.tool_mask_anchor.source == "SAM_TRACKED"
+        ):
+            return LockedToolMask(
+                roi=self.tool_mask_anchor.roi,
+                mask=self.tool_mask_anchor.mask.copy(),
                 source="SAM_LOCKED",
             )
 
@@ -485,7 +585,7 @@ class HandGraspDetectionNode(Node):
             )
             return None
 
-        if self.sam_segmenter is not None:
+        if self.sam_segmenter is not None and self.sam_reseed_from_yolo:
             mask = self.sam_segmenter.segment(frame, tool_detection.roi)
             if mask is not None and int(mask.sum()) > 0:
                 roi = mask_to_roi(mask) or tool_detection.roi
@@ -619,6 +719,7 @@ class HandGraspDetectionNode(Node):
                 locked_mask_grasp_ok=locked_mask_grasp_ok,
                 human_grasped_tool=human_grasped_tool,
             ),
+            "hand_present": hand_info is not None,
             "human_grasped_tool": human_grasped_tool,
             "grasp_counter": 1 if human_grasped_tool else 0,
             "grasp_score": 1 if human_grasped_tool else 0,
@@ -629,6 +730,7 @@ class HandGraspDetectionNode(Node):
             "depth_grasp_confirmed": depth_info.get("depth_grasp_confirmed", False),
             "min_landmark_to_tool_distance": mask_result.min_landmark_to_tool_distance,
         }
+        result["tool_roi"] = tool_roi
         result["ml_raw_state"] = ml_result.raw_state
         result["ml_stable_state"] = ml_result.stable_state
         result["ml_confidence"] = ml_result.confidence
@@ -720,11 +822,7 @@ class HandGraspDetectionNode(Node):
             "active_handedness": active_hand["handedness"] if active_hand else None,
             "tool_label": tool_detection.label if tool_detection else None,
             "tool_confidence": tool_detection.confidence if tool_detection else None,
-            "tool_roi": (
-                self.locked_tool.roi
-                if self.locked_tool is not None
-                else tool_detection.roi if tool_detection else None
-            ),
+            "tool_roi": result.get("tool_roi"),
             "hand_pixel": hand_pixel,
         }
         msg = HumanGraspResult()
