@@ -7,19 +7,27 @@
 GUI 표시는 `macgyvbot_ui/operator_ui_node`가 ROS topic만 구독해서 담당한다.
 """
 
-import json
-
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import String
 
-from macgyvbot_config.topics import COMMAND_SHUTDOWN_TOPIC, ROBOT_TASK_CONTROL_TOPIC
+from macgyvbot_config.topics import (
+    COMMAND_FEEDBACK_TOPIC,
+    COMMAND_SHUTDOWN_TOPIC,
+    ROBOT_STATUS_TOPIC,
+    STT_TEXT_TOPIC,
+    TASK_CONTROL_TOPIC,
+    TOOL_COMMAND_TOPIC,
+)
 from macgyvbot_interfaces.msg import (
     CommandFeedback,
     CommandShutdown,
+    CommandText,
     RobotTaskControl,
     RobotTaskStatus,
     ToolCommand,
+)
+from macgyvbot_command.input_mapping.command_hard_parser import (
+    find_short_control_action,
 )
 from macgyvbot_command.input_mapping.command_llm_parser import CommandLlmParser
 from macgyvbot_command.stt.speech_to_text import SpeechToTextService
@@ -34,17 +42,17 @@ class CommandInputNode(Node):
         self.declare_parameter('language', 'ko-KR')
         self.declare_parameter('device_index', -1)
         self.declare_parameter('energy_threshold', 300.0)
-        self.declare_parameter('pause_threshold', 0.8)
-        self.declare_parameter('phrase_time_limit', 5.0)
+        self.declare_parameter('pause_threshold', 0.45)
+        self.declare_parameter('phrase_threshold', 0.15)
+        self.declare_parameter('non_speaking_duration', 0.25)
+        self.declare_parameter('phrase_time_limit', 3.0)
         self.declare_parameter('dynamic_energy', True)
-        self.declare_parameter('ambient_duration', 1.0)
-        self.declare_parameter('stt_text_topic', '/stt_text')
-        self.declare_parameter('compat_topic', '/stt_result')
-        self.declare_parameter('publish_compat_topic', True)
+        self.declare_parameter('ambient_duration', 0.5)
+        self.declare_parameter('stt_text_topic', STT_TEXT_TOPIC)
 
-        self.declare_parameter('tool_command_topic', '/tool_command')
-        self.declare_parameter('command_feedback_topic', '/command_feedback')
-        self.declare_parameter('robot_status_topic', '/robot_task_status')
+        self.declare_parameter('tool_command_topic', TOOL_COMMAND_TOPIC)
+        self.declare_parameter('command_feedback_topic', COMMAND_FEEDBACK_TOPIC)
+        self.declare_parameter('robot_status_topic', ROBOT_STATUS_TOPIC)
 
         self.declare_parameter(
             'ollama_url',
@@ -70,12 +78,8 @@ class CommandInputNode(Node):
         self._phrase_time_limit = float(
             self.get_parameter('phrase_time_limit').value
         )
-        self._publish_compat = bool(
-            self.get_parameter('publish_compat_topic').value
-        )
 
         stt_text_topic = self.get_parameter('stt_text_topic').value
-        compat_topic = self.get_parameter('compat_topic').value
         tool_command_topic = self.get_parameter('tool_command_topic').value
         command_feedback_topic = self.get_parameter('command_feedback_topic').value
         robot_status_topic = self.get_parameter('robot_status_topic').value
@@ -83,23 +87,18 @@ class CommandInputNode(Node):
         self._exit_pending = False
         self._recent_bot_texts = {}
         self._bot_echo_ignore_ns = 10_000_000_000
-        self._stt_pub = self.create_publisher(String, stt_text_topic, 10)
-        self._compat_pub = (
-            self.create_publisher(String, compat_topic, 10)
-            if self._publish_compat
-            else None
-        )
+        self._stt_pub = self.create_publisher(CommandText, stt_text_topic, 10)
         self._tool_command_pub = self.create_publisher(ToolCommand, tool_command_topic, 10)
         self._feedback_pub = self.create_publisher(
             CommandFeedback, command_feedback_topic, 10
         )
         self._task_control_pub = self.create_publisher(
             RobotTaskControl,
-            ROBOT_TASK_CONTROL_TOPIC,
+            TASK_CONTROL_TOPIC,
             10,
         )
 
-        self.create_subscription(String, stt_text_topic, self._text_cb, 10)
+        self.create_subscription(CommandText, stt_text_topic, self._text_cb, 10)
         self.create_subscription(
             CommandFeedback, command_feedback_topic, self._feedback_cb, 10
         )
@@ -139,6 +138,10 @@ class CommandInputNode(Node):
                 device_index=self._device_index,
                 energy_threshold=float(self.get_parameter('energy_threshold').value),
                 pause_threshold=float(self.get_parameter('pause_threshold').value),
+                phrase_threshold=float(self.get_parameter('phrase_threshold').value),
+                non_speaking_duration=float(
+                    self.get_parameter('non_speaking_duration').value
+                ),
                 dynamic_energy=bool(self.get_parameter('dynamic_energy').value),
                 ambient_duration=float(self.get_parameter('ambient_duration').value),
                 phrase_time_limit=self._phrase_time_limit,
@@ -158,8 +161,6 @@ class CommandInputNode(Node):
             f'출력 topic: {tool_command_topic}, {command_feedback_topic}'
         )
         self.get_logger().info(f'로봇 상태 topic: {robot_status_topic}')
-        if self._publish_compat:
-            self.get_logger().info(f'수업 예제 호환 topic: {compat_topic}')
         if self._tts_service.enabled:
             self.get_logger().info('TTS 모드 활성화: MacGyvBot 응답을 음성으로 출력합니다.')
 
@@ -184,16 +185,15 @@ class CommandInputNode(Node):
         if not text:
             return
 
-        msg = String()
-        msg.data = text
+        msg = CommandText()
+        msg.text = text
+        msg.source = 'microphone'
         self._stt_pub.publish(msg)
-        if self._compat_pub is not None:
-            self._compat_pub.publish(msg)
 
         self.get_logger().info(f'STT 인식 결과: "{text}"')
 
     def _text_cb(self, msg):
-        text = (msg.data or '').strip()
+        text = (msg.text or '').strip()
         if not text:
             return
 
@@ -205,6 +205,9 @@ class CommandInputNode(Node):
         self._handle_text(text)
 
     def _handle_text(self, text):
+        if self._handle_fast_control_text(text):
+            return
+
         result = self._parser.interpret(text)
 
         command = result.get('command')
@@ -236,6 +239,52 @@ class CommandInputNode(Node):
         for payload in result.get('feedbacks', []):
             self._publish_feedback_payload(payload)
 
+    def _handle_fast_control_text(self, text):
+        action = find_short_control_action(text)
+        if not action:
+            return False
+
+        command = {
+            'tool_name': 'unknown',
+            'action': action,
+            'target_mode': 'unknown',
+            'raw_text': text,
+            'match_method': f'{action}_fast_keyword',
+            'match_score': 1.0,
+            'confidence': 1.0,
+        }
+        feedback = {
+            'status': 'accepted',
+            'reason': 'fast_control_keyword',
+            'message': self._fast_control_feedback_message(action),
+            'raw_text': text,
+            'command': command,
+        }
+
+        self.get_logger().info(
+            f'짧은 작업 제어 명령 즉시 처리: action={action}, raw_text="{text}"'
+        )
+        self._publish_feedback_payload(feedback)
+
+        if action in ('pause', 'resume', 'cancel'):
+            self._send_task_control_request(action=action, reason=text)
+            return True
+
+        if action == 'home':
+            self._publish_command(command)
+            return True
+
+        return False
+
+    @staticmethod
+    def _fast_control_feedback_message(action):
+        return {
+            'pause': '정지 명령으로 이해했습니다.',
+            'resume': '재개 명령으로 이해했습니다. 작업 재개 요청으로 전달합니다.',
+            'cancel': '현재 작업을 취소합니다. 다음 명령을 기다리겠습니다.',
+            'home': 'Home 위치로 복귀하라는 뜻으로 이해했습니다.',
+        }.get(action, '명령을 올바른 입력으로 판단했습니다.')
+
     def _publish_command(self, command):
         command_msg = self._tool_command_message(command)
         self._tool_command_pub.publish(command_msg)
@@ -251,11 +300,7 @@ class CommandInputNode(Node):
         msg.reason = str(payload.get('reason', ''))
         msg.message = str(payload.get('message', ''))
         msg.raw_text = str(payload.get('raw_text', ''))
-        command = payload.get('command')
-        msg.command_json = (
-            json.dumps(command, ensure_ascii=False) if command is not None else ''
-        )
-        msg.payload_json = json.dumps(payload, ensure_ascii=False)
+        msg.command = self._tool_command_message(payload.get('command') or {})
         self._feedback_pub.publish(msg)
 
     def _send_task_control_request(self, action, reason):
@@ -265,7 +310,7 @@ class CommandInputNode(Node):
         msg.source = 'command_input'
         self._task_control_pub.publish(msg)
         self.get_logger().info(
-            f'{ROBOT_TASK_CONTROL_TOPIC} 발행: action={action}, reason={reason}'
+            f'{TASK_CONTROL_TOPIC} 발행: action={action}, reason={reason}'
         )
 
     def _shutdown_cb(self, msg):
@@ -318,36 +363,40 @@ class CommandInputNode(Node):
         msg.raw_text = str(command.get('raw_text', ''))
         msg.match_method = str(command.get('match_method', 'unknown'))
         msg.confidence = float(command.get('confidence', 0.0))
-        msg.payload_json = json.dumps(command, ensure_ascii=False)
         return msg
 
     @staticmethod
+    def _tool_command_payload(msg):
+        return {
+            'action': msg.action,
+            'tool_name': msg.tool_name,
+            'target_mode': msg.target_mode,
+            'raw_text': msg.raw_text,
+            'match_method': msg.match_method,
+            'confidence': msg.confidence,
+        }
+
+    @staticmethod
     def _feedback_payload(msg):
-        payload = json.loads(msg.payload_json) if msg.payload_json else {}
-        payload.update({
+        return {
             'status': msg.status,
             'reason': msg.reason,
             'message': msg.message,
             'raw_text': msg.raw_text,
-        })
-        if msg.command_json:
-            payload['command'] = json.loads(msg.command_json)
-        return payload
+            'command': CommandInputNode._tool_command_payload(msg.command),
+        }
 
     @staticmethod
     def _robot_status_payload(msg):
-        payload = json.loads(msg.payload_json) if msg.payload_json else {}
-        payload.update({
+        return {
             'status': msg.status,
             'task': msg.task,
             'tool_name': msg.tool_name,
             'action': msg.action,
             'message': msg.message,
             'reason': msg.reason,
-        })
-        if msg.command_json:
-            payload['command'] = json.loads(msg.command_json)
-        return payload
+            'command': CommandInputNode._tool_command_payload(msg.command),
+        }
 
     def _feedback_speech_message(self, feedback):
         status = feedback.get('status', 'unknown')

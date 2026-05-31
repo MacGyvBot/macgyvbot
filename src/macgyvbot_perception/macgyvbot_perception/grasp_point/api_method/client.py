@@ -14,11 +14,7 @@ from PIL import Image
 
 from macgyvbot_perception.grasp_point.api_method.prompts import build_grasp_prompt
 from macgyvbot_perception.grasp_point.vlm.parser import Parser
-
-try:
-    from ament_index_python.packages import get_package_share_directory
-except ImportError:
-    get_package_share_directory = None
+from macgyvbot_resources.resources import resolve_env_file
 
 
 DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
@@ -193,29 +189,7 @@ class GeminiGraspAPIClient:
 
     @staticmethod
     def _default_env_file() -> str:
-        candidates = []
-        if get_package_share_directory is not None:
-            try:
-                share_dir = Path(get_package_share_directory("macgyvbot_resources"))
-                candidates.append(share_dir / DEFAULT_ENV_FILENAME)
-            except Exception:
-                pass
-
-        cwd = Path.cwd()
-        candidates.append(cwd / "src" / "macgyvbot_resources" / DEFAULT_ENV_FILENAME)
-        candidates.append(cwd / "macgyvbot_resources" / DEFAULT_ENV_FILENAME)
-        current = Path(__file__).resolve()
-        for parent in current.parents:
-            candidates.append(parent / "src" / "macgyvbot_resources" / DEFAULT_ENV_FILENAME)
-            candidates.append(parent / "macgyvbot_resources" / DEFAULT_ENV_FILENAME)
-
-        for candidate in candidates:
-            if candidate.exists() and candidate.is_file():
-                return str(candidate)
-        for candidate in candidates:
-            if candidate.parent.exists():
-                return str(candidate)
-        return str(current.parents[0] / DEFAULT_ENV_FILENAME)
+        return str(resolve_env_file(DEFAULT_ENV_FILENAME))
 
     def _prepare_image(self, image: Image.Image) -> Image.Image:
         image = image.convert("RGB")

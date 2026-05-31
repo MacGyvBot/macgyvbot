@@ -7,7 +7,6 @@ import json
 import math
 import warnings
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 from PIL import Image
@@ -17,12 +16,8 @@ try:
 except ImportError:
     torch = None
 
-try:
-    from ament_index_python.packages import get_package_share_directory
-except ImportError:
-    get_package_share_directory = None
-
 from macgyvbot_config.vlm import VLM_MODEL_SMOL
+from macgyvbot_resources.resources import resolve_resource_file
 
 
 DEFAULT_VLM_MODEL = VLM_MODEL_SMOL
@@ -30,14 +25,7 @@ DEFAULT_MAX_IMAGE_SIZE = 640
 
 
 def _default_local_model_root():
-    try:
-        if get_package_share_directory is None:
-            raise RuntimeError("ament_index_python is unavailable")
-        share_dir = Path(get_package_share_directory("macgyvbot_resources"))
-        return share_dir / "weights" / "vlm"
-    except Exception:
-        workspace_src = Path(__file__).resolve().parents[4]
-        return workspace_src / "macgyvbot_resources" / "weights" / "vlm"
+    return resolve_resource_file("weights", "vlm")
 
 
 DEFAULT_LOCAL_MODEL_ROOT = _default_local_model_root()

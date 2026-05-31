@@ -4,13 +4,14 @@ import time
 
 import rclpy
 
-from macgyvbot_config.drawer import DRAWER_1_SAFE_Z_OFFSET_M
-from macgyvbot_config.timing import SEQUENCE_WAIT_POLL_SEC
+from macgyvbot_config.pick import OBSERVE_X_OFFSET_M
+
 from macgyvbot_manipulation.robot_pose import (
     current_ee_orientation,
     make_safe_pose,
 )
-from macgyvbot_manipulation.robot_safezone import SAFE_Z_MIN
+from macgyvbot_manipulation.robot_safezone import safe_z_min_for_drawer
+from macgyvbot_manipulation.timing import cooperative_wait
 from macgyvbot_task.application.pick_flow.pick_grasp_flow import PickGraspFlow
 from macgyvbot_task.application.pick_flow.pick_handoff_flow import PickHandoffFlow
 from macgyvbot_task.application.pick_flow.pick_target_planner import PickTargetPlanner
@@ -45,14 +46,14 @@ class PickSequenceRunner:
             motion_controller,
             gripper,
             state,
-            self.cooperative_wait,
+            cooperative_wait,
             tool_hold_monitor,
             interrupted=self._interrupted,
         )
         self.grasp = PickGraspFlow(
             gripper,
             state,
-            self.cooperative_wait,
+            cooperative_wait,
             interrupted=self._interrupted,
         )
 
@@ -64,7 +65,7 @@ class PickSequenceRunner:
 
         log = self.state.logger()
         drawer_id = self._drawer_id_for_current_target()
-        safe_z_min = self._safe_z_min_for_drawer(drawer_id)
+        safe_z_min = safe_z_min_for_drawer(drawer_id)
         plan = self.target_planner.plan(
             bx,
             by,
@@ -108,7 +109,7 @@ class PickSequenceRunner:
                 "pick/xy_move",
                 lambda: self._move_to_pose(
                     "2단계: 안전 높이에서 XY 수평 이동",
-                    context["plan"].target_x,
+                    context["plan"].target_x-OBSERVE_X_OFFSET_M,
                     context["plan"].target_y,
                     context["plan"].travel_z,
                     context["ori"],
@@ -176,7 +177,7 @@ class PickSequenceRunner:
 
     def _open_gripper(self):
         self.gripper.open_gripper()
-        self.cooperative_wait(0.5)
+        cooperative_wait(0.5)
         return True
 
     def _move_to_pose(
@@ -215,13 +216,23 @@ class PickSequenceRunner:
         log = self.state.logger()
         target_label = self.state.target_label
         refined_target = None
+        refine_started = time.monotonic()
 
         if self.refine_pick_target is not None and target_label:
-            self.cooperative_wait(0.2)
+            cooperative_wait(0.2)
             try:
+                log.info(
+                    "pick/refine_target_and_apply_vlm_yaw started: "
+                    f"target={target_label}"
+                )
                 refined_target = self.refine_pick_target(target_label)
             except Exception as exc:
                 log.warn(f"상단 view VLM target 갱신 실패: {exc}")
+            finally:
+                log.info(
+                    "pick/refine_target_and_apply_vlm_yaw completed: "
+                    f"elapsed_sec={time.monotonic() - refine_started:.3f}"
+                )
 
         if refined_target is not None and refined_target.found:
             bx, by, bz = refined_target.base_xyz
@@ -412,7 +423,7 @@ class PickSequenceRunner:
         if self.tool_hold_monitor is not None:
             self.tool_hold_monitor.stop("handoff_release")
         self.gripper.open_gripper()
-        self.cooperative_wait(0.8)
+        cooperative_wait(0.8)
         return True
 
     def _home_after_handoff(self):
@@ -449,12 +460,6 @@ class PickSequenceRunner:
             return None
         return self.drawer_flow.drawer_id_for_tool(self.state.target_label)
 
-    @staticmethod
-    def _safe_z_min_for_drawer(drawer_id):
-        if drawer_id == 1:
-            return SAFE_Z_MIN + DRAWER_1_SAFE_Z_OFFSET_M
-        return SAFE_Z_MIN
-
     def _interrupted(self):
         return any(
             event is not None and event.is_set()
@@ -463,10 +468,3 @@ class PickSequenceRunner:
                 self.control_events.get("pause"),
             )
         )
-
-    @staticmethod
-    def cooperative_wait(duration_sec):
-        end_time = time.monotonic() + max(0.0, float(duration_sec))
-        while rclpy.ok() and time.monotonic() < end_time:
-            remaining = end_time - time.monotonic()
-            time.sleep(min(SEQUENCE_WAIT_POLL_SEC, max(0.0, remaining)))

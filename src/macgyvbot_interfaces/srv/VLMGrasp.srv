@@ -1,0 +1,14 @@
+sensor_msgs/Image color_image
+float64[] bbox_xyxy
+string label
+string target_label
+string mode
+---
+bool success
+int32 pixel_u
+int32 pixel_v
+string source
+float64[] orientation_rpy_deg
+float64 grasp_yaw_deg
+string result_text
+string error_message

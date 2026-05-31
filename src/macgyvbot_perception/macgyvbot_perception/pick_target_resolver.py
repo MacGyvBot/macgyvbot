@@ -33,55 +33,76 @@ class PickTargetResolver:
         if boxes is None:
             return self._not_found(target_label, "detector_boxes_unavailable")
 
-        matched_target_label = False
-        for box in boxes:
-            label = self._box_label(box)
-            if label != target_label:
-                continue
+        matched_box = self.matching_box(boxes, target_label)
+        if matched_box is None:
+            return self._not_found(target_label, "target_not_found")
 
-            matched_target_label = True
-            if use_bbox_center:
-                selected = self.grasp_point_selector.select_bbox_center(box)
-            else:
-                selected = self.grasp_point_selector.select(
-                    box,
-                    label,
-                    color_image,
-                    depth_image,
-                    intrinsics,
-                    target_label,
-                )
-            u, v, source, vlm_rpy_deg = selected
-            target = self.depth_projector.pixel_to_base_target(
-                u,
-                v,
+        box, label = matched_box
+        if use_bbox_center:
+            selected = self.grasp_point_selector.select_bbox_center(box)
+        else:
+            selected = self.grasp_point_selector.select(
+                box,
                 label,
-                source,
+                color_image,
                 depth_image,
                 intrinsics,
-                self.logger,
-                vlm_rpy_deg,
-            )
-            if target is None:
-                continue
-
-            bx, by, bz, z_m, vlm_rpy_deg = target
-            return PickTarget(
-                found=True,
-                label=label,
-                pixel=(u, v),
-                base_xyz=(bx, by, bz),
-                depth_m=z_m,
-                yaw_deg=self._extract_yaw(vlm_rpy_deg),
-                source=source,
+                target_label,
             )
 
-        reason = (
-            "depth_projection_failed"
-            if matched_target_label
-            else "target_not_found"
+        return self.target_from_selected_grasp(
+            label,
+            target_label,
+            selected,
+            depth_image,
+            intrinsics,
         )
-        return self._not_found(target_label, reason)
+
+    def matching_box(self, boxes, target_label):
+        if boxes is None:
+            return None
+
+        for box in boxes:
+            label = self._box_label(box)
+            if label == target_label:
+                return box, label
+        return None
+
+    def target_from_selected_grasp(
+        self,
+        label,
+        target_label,
+        selected,
+        depth_image,
+        intrinsics,
+    ) -> PickTarget:
+        if selected is None:
+            return self._not_found(target_label, "grasp_selection_failed")
+
+        u, v, source, vlm_rpy_deg = selected
+        target = self.depth_projector.pixel_to_base_target(
+            u,
+            v,
+            label,
+            source,
+            depth_image,
+            intrinsics,
+            self.logger,
+            vlm_rpy_deg,
+        )
+        if target is None:
+            return self._not_found(target_label, "depth_projection_failed")
+
+        bx, by, bz, z_m, vlm_rpy_deg = target
+        return PickTarget(
+            found=True,
+            label=label,
+            pixel=(u, v),
+            base_xyz=(bx, by, bz),
+            depth_m=z_m,
+            yaw_deg=self._extract_yaw(vlm_rpy_deg),
+            source=source,
+        )
 
     def should_defer_vlm_until_top_view(self):
         return self.grasp_point_selector.should_defer_vlm_until_top_view()

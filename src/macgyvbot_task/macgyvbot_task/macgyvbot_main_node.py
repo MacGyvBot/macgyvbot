@@ -3,18 +3,15 @@
 
 from __future__ import annotations
 
-import json
-
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import String
 
 from macgyvbot_config.topics import (
     ROBOT_STATUS_TOPIC,
     TASK_REQUEST_TOPIC,
     TOOL_COMMAND_TOPIC,
 )
-from macgyvbot_interfaces.msg import RobotTaskStatus, ToolCommand
+from macgyvbot_interfaces.msg import RobotTaskStatus, TaskRequest, ToolCommand
 from macgyvbot_task.application import RobotStatusPublisher, ToolCommandController
 
 
@@ -62,7 +59,11 @@ class MacGyvBotNode(Node):
         self._target_label = None
         self._current_command = None
 
-        self.task_request_pub = self.create_publisher(String, TASK_REQUEST_TOPIC, 10)
+        self.task_request_pub = self.create_publisher(
+            TaskRequest,
+            TASK_REQUEST_TOPIC,
+            10,
+        )
         self.robot_status_pub = self.create_publisher(
             RobotTaskStatus,
             ROBOT_STATUS_TOPIC,
@@ -84,7 +85,6 @@ class MacGyvBotNode(Node):
             move_home=self._request_home,
         )
 
-        self.create_subscription(String, "/target_label", self._target_label_cb, 10)
         self.create_subscription(
             ToolCommand,
             TOOL_COMMAND_TOPIC,
@@ -103,23 +103,8 @@ class MacGyvBotNode(Node):
         self.get_logger().info(f"task request 토픽: {TASK_REQUEST_TOPIC}")
         self.get_logger().info(f"로봇 상태 토픽: {ROBOT_STATUS_TOPIC}")
 
-    def _target_label_cb(self, msg):
-        val = msg.data.strip()
-        if not val:
-            return
-        self.task_controller.handle_target_label(val, source="/target_label")
-
     def _tool_command_cb(self, msg):
-        try:
-            command = self._tool_command_payload(msg)
-        except json.JSONDecodeError:
-            self.get_logger().warn("/tool_command payload_json 파싱 실패")
-            self._publish_robot_status(
-                "rejected",
-                message="명령 payload를 해석하지 못했습니다.",
-                reason="invalid_payload_json",
-            )
-            return
+        command = self._tool_command_payload(msg)
 
         action = str(command.get("action", "unknown")).strip().lower()
         if action == "release":
@@ -214,8 +199,20 @@ class MacGyvBotNode(Node):
         return None
 
     def _publish_task_request(self, payload):
-        msg = String()
-        msg.data = json.dumps(payload, ensure_ascii=False)
+        msg = TaskRequest()
+        msg.task = str(payload.get("task", ""))
+        msg.tool_name = str(payload.get("tool_name", "unknown"))
+        msg.reason = str(payload.get("reason", ""))
+        msg.command = self._tool_command_message(payload.get("command") or {})
+        if all(key in payload for key in ("bx", "by", "bz")):
+            msg.has_base_target = True
+            msg.bx = float(payload["bx"])
+            msg.by = float(payload["by"])
+            msg.bz = float(payload["bz"])
+        vlm_yaw_deg = payload.get("vlm_yaw_deg")
+        if vlm_yaw_deg is not None:
+            msg.has_vlm_yaw_deg = True
+            msg.vlm_yaw_deg = float(vlm_yaw_deg)
         self.task_request_pub.publish(msg)
         self.get_logger().info(
             f"{TASK_REQUEST_TOPIC} 발행: task={payload.get('task')}, "
@@ -223,10 +220,7 @@ class MacGyvBotNode(Node):
         )
 
     def _robot_status_cb(self, msg):
-        try:
-            payload = self._robot_status_payload(msg)
-        except json.JSONDecodeError:
-            return
+        payload = self._robot_status_payload(msg)
 
         action = str(payload.get("action", "")).strip().lower()
         status = str(payload.get("status", payload.get("state", ""))).strip().lower()
@@ -275,44 +269,42 @@ class MacGyvBotNode(Node):
         msg.action = str(payload.get("action", "unknown"))
         msg.message = str(payload.get("message", ""))
         msg.reason = str(payload.get("reason", ""))
-        command = payload.get("command")
-        msg.command_json = (
-            json.dumps(command, ensure_ascii=False) if command is not None else ""
-        )
-        msg.payload_json = json.dumps(payload, ensure_ascii=False)
+        msg.command = self._tool_command_message(payload.get("command") or {})
         self.robot_status_pub.publish(msg)
 
     @staticmethod
     def _tool_command_payload(msg):
-        payload = json.loads(msg.payload_json) if msg.payload_json else {}
-        payload.update(
-            {
-                "action": msg.action,
-                "tool_name": msg.tool_name,
-                "target_mode": msg.target_mode,
-                "raw_text": msg.raw_text,
-                "match_method": msg.match_method,
-                "confidence": msg.confidence,
-            }
-        )
-        return payload
+        return {
+            "action": msg.action,
+            "tool_name": msg.tool_name,
+            "target_mode": msg.target_mode,
+            "raw_text": msg.raw_text,
+            "match_method": msg.match_method,
+            "confidence": msg.confidence,
+        }
+
+    @staticmethod
+    def _tool_command_message(command):
+        msg = ToolCommand()
+        msg.action = str(command.get("action", "unknown"))
+        msg.tool_name = str(command.get("tool_name", "unknown"))
+        msg.target_mode = str(command.get("target_mode", "unknown"))
+        msg.raw_text = str(command.get("raw_text", ""))
+        msg.match_method = str(command.get("match_method", "unknown"))
+        msg.confidence = float(command.get("confidence", 0.0))
+        return msg
 
     @staticmethod
     def _robot_status_payload(msg):
-        payload = json.loads(msg.payload_json) if msg.payload_json else {}
-        payload.update(
-            {
-                "status": msg.status,
-                "task": msg.task,
-                "tool_name": msg.tool_name,
-                "action": msg.action,
-                "message": msg.message,
-                "reason": msg.reason,
-            }
-        )
-        if msg.command_json:
-            payload["command"] = json.loads(msg.command_json)
-        return payload
+        return {
+            "status": msg.status,
+            "task": msg.task,
+            "tool_name": msg.tool_name,
+            "action": msg.action,
+            "message": msg.message,
+            "reason": msg.reason,
+            "command": MacGyvBotNode._tool_command_payload(msg.command),
+        }
 
 
 def main():

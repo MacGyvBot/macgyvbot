@@ -1,3 +1,5 @@
 """Shared workflow timing constants."""
 
 SEQUENCE_WAIT_POLL_SEC = 0.03
+TASK_QUEUE_STOP_POLL_SEC = 0.02
+CAMERA_LOOP_IDLE_SLEEP_SEC = 0.01
