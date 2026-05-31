@@ -36,6 +36,42 @@ from macgyvbot_ui.voice_command_window import (
 
 
 class OperatorUiNode(Node):
+    _GRIPPER_SAFE_STATES = {
+        'idle',
+        'ready',
+        'done',
+        'completed',
+        'success',
+        'failed',
+        'error',
+        'paused',
+        'cancelled',
+        'rejected',
+    }
+    _GRIPPER_ACTIVE_STATES = {
+        'accepted',
+        'opening_drawer',
+        'moving_to_drawer',
+        'searching_drawer',
+        'searching_drawer_handle',
+        'searching',
+        'picking',
+        'approaching_tool',
+        'grasping',
+        'grasp_success',
+        'lifting_tool',
+        'moving_to_handoff',
+        'waiting_handoff',
+        'handoff_complete',
+        'waiting_return_handoff',
+        'moving_return_grasp_pose',
+        'checking_return_target',
+        'placing_return_tool',
+        'returning_home',
+        'closing_drawer',
+        'resumed',
+    }
+
     def __init__(self):
         super().__init__('operator_ui_node')
 
@@ -78,6 +114,12 @@ class OperatorUiNode(Node):
         self._last_connection_text = ''
         self._last_robot_status_key = None
         self._last_robot_log_key = None
+        self._last_robot_state = 'unknown'
+        # No safe ROS gripper command interface exists yet; keep the GUI
+        # operator control disabled until task-owned backend arbitration exists.
+        self._manual_gripper_backend_available = False
+        self._last_gripper_enabled = None
+        self._last_gripper_reason = ''
         self._robot_status_topic = robot_status_topic
         self._self_published = {}
         self._self_pub_lock = threading.Lock()
@@ -121,6 +163,7 @@ class OperatorUiNode(Node):
     def attach_window(self, window):
         self.window = window
         self._update_connection_status()
+        self._refresh_gripper_control_state()
         self._append_log('info', 'GUI 연결 완료')
 
     def set_shutdown_callback(self, callback):
@@ -333,6 +376,8 @@ class OperatorUiNode(Node):
         self._last_target_label = view['target_label']
         self._set_status(view['panel_status'])
         self._set_task_status(view['target_label'], view['stage_text'])
+        self._last_robot_state = view['state']
+        self._refresh_gripper_control_state()
 
         if view['show_log']:
             self._append_log(view['severity'], view['log_message'], ros=False)
@@ -801,13 +846,72 @@ class OperatorUiNode(Node):
         if self.window is not None and hasattr(self.window, 'set_task_status'):
             self.window.set_task_status(target_text, stage_text)
 
+    def request_manual_gripper_width(self, width_mm):
+        try:
+            width_mm = int(width_mm)
+        except (TypeError, ValueError):
+            width_mm = -1
+
+        if not self._manual_gripper_backend_available:
+            message = '수동 그리퍼 조작 백엔드가 아직 연결되지 않았습니다.'
+            self._append_bot(message)
+            self._append_log('warn', f'{message} requested_width_mm={width_mm}')
+            self._refresh_gripper_control_state()
+            return False
+
+        if not self._gripper_state_is_safe(self._last_robot_state):
+            message = '작업 실행 중에는 수동 그리퍼 조작을 사용할 수 없습니다.'
+            self._append_bot(message)
+            self._append_log(
+                'warn',
+                f'{message} state={self._last_robot_state}, width_mm={width_mm}',
+            )
+            self._refresh_gripper_control_state()
+            return False
+
+        message = '그리퍼 명령을 전송했습니다.'
+        self._append_bot(message)
+        self._append_log('info', f'{message} width_mm={width_mm}')
+        return True
+
+    def _refresh_gripper_control_state(self):
+        if self.window is None or not hasattr(self.window, 'set_gripper_control_state'):
+            return
+
+        enabled, reason = self._gripper_control_state()
+        if (
+            enabled == self._last_gripper_enabled
+            and reason == self._last_gripper_reason
+        ):
+            return
+        self._last_gripper_enabled = enabled
+        self._last_gripper_reason = reason
+        self.window.set_gripper_control_state(enabled, reason)
+
+    def _gripper_control_state(self):
+        state = str(self._last_robot_state or 'unknown').strip().lower()
+        if not self._manual_gripper_backend_available:
+            return False, '비활성화: 안전한 그리퍼 제어 인터페이스 없음'
+        if state in self._GRIPPER_SAFE_STATES:
+            return True, '활성화: 수동 조작 가능'
+        if state in self._GRIPPER_ACTIVE_STATES:
+            return False, '비활성화: 작업 실행 중'
+        return False, '비활성화: 로봇 상태 미확인'
+
+    def _gripper_state_is_safe(self, state):
+        normalized = str(state or 'unknown').strip().lower()
+        return normalized in self._GRIPPER_SAFE_STATES
+
 
 def main(args=None):
     rclpy.init(args=args)
     node = OperatorUiNode()
 
     app = QApplication(sys.argv)
-    window = VoiceCommandGuiWindow(on_user_text=node.publish_user_text)
+    window = VoiceCommandGuiWindow(
+        on_user_text=node.publish_user_text,
+        on_gripper_width=node.request_manual_gripper_width,
+    )
     node.attach_window(window)
     window.show()
 
