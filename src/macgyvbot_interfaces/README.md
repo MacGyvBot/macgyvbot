@@ -31,6 +31,7 @@ msg/
   HumanGraspResult.msg
   ToolMaskLock.msg
 srv/
+  SetGripper.srv
   VLMGrasp.srv
 
 future msg/
@@ -41,7 +42,6 @@ future msg/
   ForceContactState.msg
 
 future srv/
-  SetGripper.srv
   MoveToPose.srv
   GetRobotPose.srv
 

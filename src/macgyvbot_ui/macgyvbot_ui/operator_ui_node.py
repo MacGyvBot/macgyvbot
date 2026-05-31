@@ -17,6 +17,7 @@ from macgyvbot_config.topics import (
     COMMAND_FEEDBACK_TOPIC,
     COMMAND_SHUTDOWN_TOPIC,
     HAND_GRASP_IMAGE_TOPIC,
+    MANUAL_GRIPPER_SERVICE,
     ROBOT_STATUS_TOPIC,
     STT_TEXT_TOPIC,
     TOOL_COMMAND_TOPIC,
@@ -28,6 +29,7 @@ from macgyvbot_interfaces.msg import (
     RobotTaskStatus,
     ToolCommand,
 )
+from macgyvbot_interfaces.srv import SetGripper
 from macgyvbot_ui.voice_command_window import (
     QApplication,
     QTimer,
@@ -81,6 +83,7 @@ class OperatorUiNode(Node):
         self.declare_parameter('robot_status_topic', ROBOT_STATUS_TOPIC)
         self.declare_parameter('camera_status_topic', CAMERA_COLOR_TOPIC)
         self.declare_parameter('detector_image_topic', HAND_GRASP_IMAGE_TOPIC)
+        self.declare_parameter('manual_gripper_service', MANUAL_GRIPPER_SERVICE)
         self.declare_parameter('connection_check_period_sec', 1.0)
         self.declare_parameter('camera_timeout_sec', 3.0)
         self.declare_parameter('detector_timeout_sec', 3.0)
@@ -101,6 +104,7 @@ class OperatorUiNode(Node):
         robot_status_topic = self.get_parameter('robot_status_topic').value
         camera_status_topic = self.get_parameter('camera_status_topic').value
         detector_image_topic = self.get_parameter('detector_image_topic').value
+        manual_gripper_service = self.get_parameter('manual_gripper_service').value
 
         self.window = None
         self._shutdown_callback = None
@@ -115,12 +119,14 @@ class OperatorUiNode(Node):
         self._last_robot_status_key = None
         self._last_robot_log_key = None
         self._last_robot_state = 'unknown'
-        # No safe ROS gripper command interface exists yet; keep the GUI
-        # operator control disabled until task-owned backend arbitration exists.
         self._manual_gripper_backend_available = False
+        self._manual_gripper_request_pending = False
         self._last_gripper_enabled = None
         self._last_gripper_reason = ''
         self._robot_status_topic = robot_status_topic
+        self._manual_gripper_service = (
+            str(manual_gripper_service).strip() or MANUAL_GRIPPER_SERVICE
+        )
         self._self_published = {}
         self._self_pub_lock = threading.Lock()
         self._robot_node_names = {
@@ -140,6 +146,10 @@ class OperatorUiNode(Node):
             CommandShutdown,
             COMMAND_SHUTDOWN_TOPIC,
             10,
+        )
+        self._manual_gripper_client = self.create_client(
+            SetGripper,
+            self._manual_gripper_service,
         )
         self.create_subscription(CommandText, stt_text_topic, self._text_cb, 10)
         self.create_subscription(
@@ -163,6 +173,7 @@ class OperatorUiNode(Node):
     def attach_window(self, window):
         self.window = window
         self._update_connection_status()
+        self._update_manual_gripper_backend_availability()
         self._refresh_gripper_control_state()
         self._append_log('info', 'GUI 연결 완료')
 
@@ -456,6 +467,8 @@ class OperatorUiNode(Node):
         if self.window is None:
             return
 
+        self._update_manual_gripper_backend_availability()
+
         robot_text = self._robot_connection_text()
         camera_text = self._camera_connection_text()
         detector_text = self._detector_connection_text()
@@ -472,6 +485,25 @@ class OperatorUiNode(Node):
                 gui_text='연결됨',
                 detector_text=detector_text,
             )
+
+    def _update_manual_gripper_backend_availability(self):
+        try:
+            available = self._manual_gripper_client.wait_for_service(
+                timeout_sec=0.0
+            )
+        except Exception as exc:
+            available = False
+            self.get_logger().warn(f'그리퍼 service 확인 실패: {exc}')
+
+        if available != self._manual_gripper_backend_available:
+            self._manual_gripper_backend_available = available
+            state_text = '연결됨' if available else '미연결'
+            self._append_log(
+                'info' if available else 'warn',
+                f'수동 그리퍼 service {state_text}: {self._manual_gripper_service}',
+                ros=False,
+            )
+            self._refresh_gripper_control_state()
 
     def _robot_connection_text(self):
         node_names = set(self.get_node_names())
@@ -852,8 +884,16 @@ class OperatorUiNode(Node):
         except (TypeError, ValueError):
             width_mm = -1
 
+        self._update_manual_gripper_backend_availability()
         if not self._manual_gripper_backend_available:
             message = '수동 그리퍼 조작 백엔드가 아직 연결되지 않았습니다.'
+            self._append_bot(message)
+            self._append_log('warn', f'{message} requested_width_mm={width_mm}')
+            self._refresh_gripper_control_state()
+            return False
+
+        if self._manual_gripper_request_pending:
+            message = '이전 그리퍼 명령을 처리 중입니다. 잠시만 기다려주세요.'
             self._append_bot(message)
             self._append_log('warn', f'{message} requested_width_mm={width_mm}')
             self._refresh_gripper_control_state()
@@ -869,10 +909,64 @@ class OperatorUiNode(Node):
             self._refresh_gripper_control_state()
             return False
 
+        if width_mm < 0:
+            message = '그리퍼 폭 값이 올바르지 않습니다.'
+            self._append_bot(message)
+            self._append_log('warn', f'{message} width_mm={width_mm}')
+            return False
+
+        request = SetGripper.Request()
+        request.width_mm = float(width_mm)
+        request.source = 'operator_ui'
+        self._manual_gripper_request_pending = True
+        self._refresh_gripper_control_state()
+
+        try:
+            future = self._manual_gripper_client.call_async(request)
+        except Exception as exc:
+            self._manual_gripper_request_pending = False
+            message = '그리퍼 명령 전송에 실패했습니다.'
+            self._append_bot(message)
+            self._append_log('error', f'{message} error={type(exc).__name__}: {exc}')
+            self._refresh_gripper_control_state()
+            return False
+
+        future.add_done_callback(self._handle_manual_gripper_response)
         message = '그리퍼 명령을 전송했습니다.'
         self._append_bot(message)
         self._append_log('info', f'{message} width_mm={width_mm}')
         return True
+
+    def _handle_manual_gripper_response(self, future):
+        self._manual_gripper_request_pending = False
+        try:
+            response = future.result()
+        except Exception as exc:
+            message = '그리퍼 명령 응답을 받지 못했습니다.'
+            self._append_bot(message)
+            self._append_log('error', f'{message} error={type(exc).__name__}: {exc}')
+            self._refresh_gripper_control_state()
+            return
+
+        response_message = str(getattr(response, 'message', '') or '').strip()
+        if bool(getattr(response, 'success', False)):
+            applied_width = float(getattr(response, 'applied_width_mm', 0.0))
+            message = response_message or f'그리퍼를 {applied_width:.0f} mm로 이동합니다.'
+            self._append_bot(message)
+            self._append_log(
+                'info',
+                f'그리퍼 명령 완료: width_mm={applied_width:.1f}, '
+                f'status={getattr(response, "status", "")}',
+            )
+        else:
+            message = response_message or '그리퍼 명령이 거부되었습니다.'
+            self._append_bot(message)
+            self._append_log(
+                'warn',
+                f'그리퍼 명령 거부: status={getattr(response, "status", "")}, '
+                f'requested_width_mm={getattr(response, "requested_width_mm", 0.0)}',
+            )
+        self._refresh_gripper_control_state()
 
     def _refresh_gripper_control_state(self):
         if self.window is None or not hasattr(self.window, 'set_gripper_control_state'):
@@ -890,6 +984,8 @@ class OperatorUiNode(Node):
 
     def _gripper_control_state(self):
         state = str(self._last_robot_state or 'unknown').strip().lower()
+        if self._manual_gripper_request_pending:
+            return False, '비활성화: 그리퍼 명령 처리 중'
         if not self._manual_gripper_backend_available:
             return False, '비활성화: 안전한 그리퍼 제어 인터페이스 없음'
         if state in self._GRIPPER_SAFE_STATES:
