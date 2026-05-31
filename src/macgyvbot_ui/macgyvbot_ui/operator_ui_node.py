@@ -16,17 +16,27 @@ from macgyvbot_config.topics import (
     CAMERA_COLOR_TOPIC,
     COMMAND_FEEDBACK_TOPIC,
     COMMAND_SHUTDOWN_TOPIC,
+    HAND_GRASP_TOPIC,
     HAND_GRASP_IMAGE_TOPIC,
     ROBOT_STATUS_TOPIC,
     STT_TEXT_TOPIC,
+    TOOL_DROP_TOPIC,
     TOOL_COMMAND_TOPIC,
 )
 from macgyvbot_interfaces.msg import (
     CommandFeedback,
     CommandShutdown,
     CommandText,
+    HumanGraspResult,
     RobotTaskStatus,
     ToolCommand,
+    ToolDropEvent,
+)
+from macgyvbot_ui.event_chat import (
+    command_feedback_chat,
+    hand_detection_chat,
+    robot_status_chat,
+    tool_drop_chat,
 )
 from macgyvbot_ui.voice_command_window import (
     QApplication,
@@ -78,6 +88,9 @@ class OperatorUiNode(Node):
         self._last_connection_text = ''
         self._last_robot_status_key = None
         self._last_robot_log_key = None
+        self._last_abnormal_chat_key = None
+        self._last_hand_present = None
+        self._last_tool_drop_key = None
         self._robot_status_topic = robot_status_topic
         self._self_published = {}
         self._self_pub_lock = threading.Lock()
@@ -108,6 +121,18 @@ class OperatorUiNode(Node):
         )
         self.create_subscription(
             RobotTaskStatus, robot_status_topic, self._robot_status_cb, 10
+        )
+        self.create_subscription(
+            HumanGraspResult,
+            HAND_GRASP_TOPIC,
+            self._hand_grasp_cb,
+            10,
+        )
+        self.create_subscription(
+            ToolDropEvent,
+            TOOL_DROP_TOPIC,
+            self._tool_drop_cb,
+            10,
         )
         self.create_subscription(Image, camera_status_topic, self._camera_status_cb, 10)
         self.create_subscription(Image, detector_image_topic, self._detector_image_cb, 10)
@@ -286,7 +311,10 @@ class OperatorUiNode(Node):
             return
 
         if status == 'rejected':
-            rejected_message = self._build_rejected_message(reason, message)
+            rejected_message = (
+                command_feedback_chat(status, reason, message)
+                or self._build_rejected_message(reason, message)
+            )
             self._append_bot(rejected_message)
             self._append_log('warn', rejected_message)
             self._set_status('재입력 필요')
@@ -341,6 +369,49 @@ class OperatorUiNode(Node):
             self._append_bot(view['chat_message'])
 
         self._handle_exit_status(status, view['state'])
+
+    def _hand_grasp_cb(self, msg):
+        message = hand_detection_chat(self._last_hand_present, msg.hand_present)
+        self._last_hand_present = bool(msg.hand_present)
+        if not message:
+            return
+
+        self._append_abnormal_chat(
+            'hand_detected' if msg.hand_present else 'hand_not_found',
+            message,
+        )
+        self._append_log(
+            'info' if msg.hand_present else 'warn',
+            (
+                f'{HAND_GRASP_TOPIC}: hand_present={msg.hand_present}, '
+                f'human_grasped_tool={msg.human_grasped_tool}, '
+                f'state={msg.state}'
+            ),
+        )
+
+    def _tool_drop_cb(self, msg):
+        message = tool_drop_chat(msg.event)
+        if not message:
+            return
+
+        key = (
+            str(msg.event or ''),
+            str(msg.tool_name or ''),
+            str(msg.reason or ''),
+            float(msg.width_mm) if msg.has_width_mm else None,
+        )
+        if key == self._last_tool_drop_key:
+            return
+        self._last_tool_drop_key = key
+
+        self._append_abnormal_chat('tool_dropped', message, force=True)
+        self._append_log(
+            'error',
+            (
+                f'{TOOL_DROP_TOPIC}: event={msg.event}, tool={msg.tool_name}, '
+                f'action={msg.action}, reason={msg.reason}'
+            ),
+        )
 
     @staticmethod
     def _tool_command_payload(msg):
@@ -497,14 +568,18 @@ class OperatorUiNode(Node):
         raw_message = str(status.get('message') or '').strip()
         reason = str(status.get('reason') or '').strip()
 
-        message = self._robot_status_message(state, target_label, raw_message, reason)
+        abnormal_message = robot_status_chat(state, reason, raw_message)
+        message = (
+            abnormal_message
+            or self._robot_status_message(state, target_label, raw_message, reason)
+        )
         panel_status = self._robot_panel_status(state, message)
         stage_text = self._robot_stage_text(state, message)
         severity = self._robot_status_severity(state)
         log_message = self._robot_log_message(status, state, target_label, message, reason)
 
         key = (state, str(tool_name), raw_message or message)
-        chat_state = state in self._chat_robot_statuses()
+        chat_state = bool(abnormal_message) or state in self._chat_robot_statuses()
         force_show = state in self._always_show_robot_statuses()
         show_chat = chat_state and (force_show or key != self._last_robot_status_key)
         if show_chat:
@@ -768,6 +843,17 @@ class OperatorUiNode(Node):
     def _append_bot(self, text):
         if self.window is not None:
             self.window.append_bot(text)
+
+    def _append_abnormal_chat(self, event, message, force=False):
+        message = str(message or '').strip()
+        if not message:
+            return
+
+        key = (str(event or ''), message)
+        if not force and key == self._last_abnormal_chat_key:
+            return
+        self._last_abnormal_chat_key = key
+        self._append_bot(message)
 
     def _append_system(self, text):
         if self.window is not None:
