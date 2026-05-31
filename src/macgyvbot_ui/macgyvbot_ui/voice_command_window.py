@@ -8,6 +8,7 @@ try:
     from PyQt5.QtWidgets import (
         QApplication,
         QFrame,
+        QGridLayout,
         QHBoxLayout,
         QLabel,
         QLineEdit,
@@ -107,8 +108,7 @@ else:
 
             status_panel = QFrame()
             status_panel.setObjectName('statusPanel')
-            status_panel.setFixedWidth(290)
-            status_panel.setMinimumHeight(330)
+            status_panel.setFixedSize(290, 330)
             status_panel_layout = QVBoxLayout()
             status_panel_layout.setContentsMargins(16, 16, 16, 16)
             status_panel_layout.setSpacing(10)
@@ -161,6 +161,7 @@ else:
             gripper_panel = QFrame()
             gripper_panel.setObjectName('gripperPanel')
             gripper_panel.setFixedWidth(290)
+            gripper_panel.setMinimumHeight(210)
             gripper_panel_layout = QVBoxLayout()
             gripper_panel_layout.setContentsMargins(16, 14, 16, 14)
             gripper_panel_layout.setSpacing(8)
@@ -221,12 +222,13 @@ else:
             log_scroll = QScrollArea()
             log_scroll.setObjectName('taskLogScroll')
             log_scroll.setWidgetResizable(True)
-            log_scroll.setMinimumHeight(190)
+            log_scroll.setMinimumHeight(185)
             log_scroll.setWidget(self._task_log)
             self._task_log_scroll = log_scroll
 
             log_panel = QFrame()
             log_panel.setObjectName('taskLogPanel')
+            log_panel.setMinimumHeight(210)
             log_panel_layout = QVBoxLayout()
             log_panel_layout.setContentsMargins(14, 12, 14, 12)
             log_panel_layout.setSpacing(8)
@@ -240,21 +242,19 @@ else:
             left_workspace_layout.setSpacing(18)
             left_workspace.setLayout(left_workspace_layout)
 
-            status_column = QWidget()
-            status_column_layout = QVBoxLayout()
-            status_column_layout.setContentsMargins(0, 0, 0, 0)
-            status_column_layout.setSpacing(14)
-            status_column.setLayout(status_column_layout)
-            status_column_layout.addWidget(status_panel)
-            status_column_layout.addWidget(gripper_panel)
-
-            top_left_layout = QHBoxLayout()
-            top_left_layout.setContentsMargins(0, 0, 0, 0)
-            top_left_layout.setSpacing(14)
-            top_left_layout.addWidget(status_column)
-            top_left_layout.addWidget(detector_panel, 1)
-            left_workspace_layout.addLayout(top_left_layout, 0)
-            left_workspace_layout.addWidget(log_panel, 1)
+            workspace_grid = QGridLayout()
+            workspace_grid.setContentsMargins(0, 0, 0, 0)
+            workspace_grid.setHorizontalSpacing(14)
+            workspace_grid.setVerticalSpacing(14)
+            workspace_grid.addWidget(status_panel, 0, 0, Qt.AlignTop)
+            workspace_grid.addWidget(detector_panel, 0, 1)
+            workspace_grid.addWidget(gripper_panel, 1, 0, Qt.AlignTop)
+            workspace_grid.addWidget(log_panel, 1, 1)
+            workspace_grid.setColumnStretch(0, 0)
+            workspace_grid.setColumnStretch(1, 1)
+            workspace_grid.setRowStretch(0, 0)
+            workspace_grid.setRowStretch(1, 1)
+            left_workspace_layout.addLayout(workspace_grid, 1)
 
             content_layout = QHBoxLayout()
             content_layout.setContentsMargins(0, 0, 0, 0)
