@@ -23,8 +23,12 @@ from macgyvbot_manipulation.handover_targeting import (
     move_to_observation_pose,
     start_async_observation_search,
 )
-from macgyvbot_manipulation.robot_pose import make_safe_pose
+from macgyvbot_manipulation.robot_pose import get_ee_matrix, make_safe_pose
 from macgyvbot_manipulation.robot_safezone import SAFE_Z_MIN
+from macgyvbot_task.application.drawer_store_motion import (
+    drawer_store_clearance_z,
+    move_to_drawer_store_exit,
+)
 
 
 class PickHandoffFlow:
@@ -57,7 +61,13 @@ class PickHandoffFlow:
         ori,
         logger,
         safe_z_min=SAFE_Z_MIN,
+        drawer_id=None,
+        move_home=True,
     ):
+        clearance_z = travel_z
+        if drawer_id is not None:
+            clearance_z = drawer_store_clearance_z(drawer_id)
+
         if grasp_z < safe_z_min:
             logger.warn(
                 f"원래 위치 반환 grasp_z({grasp_z:.3f})가 "
@@ -66,13 +76,35 @@ class PickHandoffFlow:
             )
             grasp_z = safe_z_min
 
-        logger.info("반환 1단계: 원래 공구 위치 상단으로 이동")
+        current_pose = get_ee_matrix(self.robot)
+        current_x = float(current_pose[0, 3])
+        current_y = float(current_pose[1, 3])
+
+        logger.info("반환 1단계: 현재 위치에서 서랍 접근 안전 높이로 상승")
+        ok = self.motion.plan_and_execute(
+            logger,
+            pose_goal=make_safe_pose(
+                current_x,
+                current_y,
+                clearance_z,
+                ori,
+                logger,
+            ),
+        )
+        if not ok:
+            logger.error(
+                "서랍 접근 안전 높이 상승 실패. "
+                "공구를 잡은 상태로 중단합니다."
+            )
+            return False
+
+        logger.info("반환 2단계: 서랍 접근 안전 높이에서 원래 공구 위치 XY로 이동")
         ok = self.motion.plan_and_execute(
             logger,
             pose_goal=make_safe_pose(
                 target_x,
                 target_y,
-                travel_z,
+                clearance_z,
                 ori,
                 logger,
             ),
@@ -84,7 +116,7 @@ class PickHandoffFlow:
             )
             return False
 
-        logger.info("반환 2단계: 원래 공구 위치로 하강")
+        logger.info("반환 3단계: 원래 공구 grasp 위치로 하강")
         ok = self.motion.plan_and_execute(
             logger,
             pose_goal=make_safe_pose(target_x, target_y, grasp_z, ori, logger),
@@ -96,19 +128,19 @@ class PickHandoffFlow:
             )
             return False
 
-        logger.info("반환 3단계: 원래 위치에 공구 놓기")
+        logger.info("반환 4단계: 원래 위치에 공구 놓기")
         if self.tool_hold_monitor is not None:
             self.tool_hold_monitor.stop("return_to_original_position")
         self.gripper.open_gripper()
         self.wait_fn(HANDOFF_RELEASE_WAIT_SEC)
 
-        logger.info("반환 4단계: 공구를 놓은 뒤 안전 높이로 복귀")
+        logger.info("반환 5단계: 공구를 놓은 뒤 서랍 접근 안전 높이로 복귀")
         ok = self.motion.plan_and_execute(
             logger,
             pose_goal=make_safe_pose(
                 target_x,
                 target_y,
-                travel_z,
+                clearance_z,
                 ori,
                 logger,
             ),
@@ -117,7 +149,23 @@ class PickHandoffFlow:
             logger.error("공구를 놓은 뒤 안전 높이 복귀 실패")
             return False
 
-        logger.info("반환 5단계: Home joint pose로 복귀")
+        if drawer_id is not None:
+            if not move_to_drawer_store_exit(
+                self.motion,
+                logger,
+                target_x,
+                target_y,
+                clearance_z,
+                ori,
+                "반환 6단계: 공구를 놓은 뒤 drawer exit offset 이동",
+                "공구를 놓은 뒤 drawer exit offset 이동 실패",
+            ):
+                return False
+
+        if not move_home:
+            return True
+
+        logger.info("반환 7단계: Home joint pose로 복귀")
         ok = self.motion.move_to_home_joints(logger)
         if not ok:
             logger.error("공구 반환 후 Home 복귀 실패")
