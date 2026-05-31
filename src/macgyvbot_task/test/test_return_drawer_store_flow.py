@@ -71,6 +71,7 @@ from macgyvbot_config.drawer import (
     DRAWER_STORE_TOOL_OBSERVE_POINT,
 )
 from macgyvbot_manipulation.robot_safezone import SAFE_Z_MIN
+from macgyvbot_manipulation.robot_safezone import safe_z_min_for_drawer
 from macgyvbot_task.application.return_flow.return_drawer_placement_flow import (
     ReturnDrawerPlacementFlow,
 )
@@ -129,11 +130,11 @@ def test_drawer_store_observe_point_uses_staging_joint_pose():
 
 
 def test_return_drawer_placement_uses_same_drawer_safe_z_min_as_pick():
-    assert ReturnDrawerPlacementFlow._safe_z_min_for_drawer(1) == (
+    assert safe_z_min_for_drawer(1) == (
         SAFE_Z_MIN + DRAWER_1_SAFE_Z_OFFSET_M
     )
-    assert ReturnDrawerPlacementFlow._safe_z_min_for_drawer(0) == SAFE_Z_MIN
-    assert ReturnDrawerPlacementFlow._safe_z_min_for_drawer(None) == SAFE_Z_MIN
+    assert safe_z_min_for_drawer(0) == SAFE_Z_MIN
+    assert safe_z_min_for_drawer(None) == SAFE_Z_MIN
     assert ReturnDrawerPlacementFlow._clearance_z_for_drawer(1) == (
         SAFE_Z_MIN
         + DRAWER_1_SAFE_Z_OFFSET_M

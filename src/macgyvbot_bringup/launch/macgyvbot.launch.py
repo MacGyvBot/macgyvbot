@@ -11,11 +11,13 @@ from macgyvbot_config.topics import (
     CAMERA_COLOR_TOPIC,
     CAMERA_DEPTH_TOPIC,
     CAMERA_INFO_TOPIC,
+    FORCE_TORQUE_TOPIC,
     HAND_GRASP_IMAGE_TOPIC,
     HAND_GRASP_MASK_LOCK_TOPIC,
     HAND_GRASP_TOPIC,
     ROBOT_STATUS_TOPIC,
 )
+from macgyvbot_config.vlm import VLM_GRASP_SERVICE_NAME
 from moveit_configs_utils import MoveItConfigsBuilder
 
 
@@ -52,6 +54,13 @@ def generate_launch_description():
     grasp_point_api_base_url = LaunchConfiguration("grasp_point_api_base_url")
     grasp_point_api_timeout_sec = LaunchConfiguration(
         "grasp_point_api_timeout_sec"
+    )
+    vlm_service_name = LaunchConfiguration("vlm_service_name")
+    vlm_service_wait_timeout_sec = LaunchConfiguration(
+        "vlm_service_wait_timeout_sec"
+    )
+    vlm_service_response_timeout_sec = LaunchConfiguration(
+        "vlm_service_response_timeout_sec"
     )
 
     moveit_config = (
@@ -163,7 +172,7 @@ def generate_launch_description():
                 default_value="vlm_only_qwen3b",
                 description=(
                     "Grasp point selection mode: center, vlm, vlm_only_smol, "
-                    "vlm_only_qwen3b, vlm_only_qwen7b, vlm_only, or api"
+                    "vlm_only_qwen3b, vlm_only_qwen7b, or api"
                 ),
             ),
             DeclareLaunchArgument(
@@ -177,8 +186,20 @@ def generate_launch_description():
                 default_value="30.0",
             ),
             DeclareLaunchArgument(
+                "vlm_service_name",
+                default_value=VLM_GRASP_SERVICE_NAME,
+            ),
+            DeclareLaunchArgument(
+                "vlm_service_wait_timeout_sec",
+                default_value="2.0",
+            ),
+            DeclareLaunchArgument(
+                "vlm_service_response_timeout_sec",
+                default_value="30.0",
+            ),
+            DeclareLaunchArgument(
                 "force_torque_topic",
-                default_value="/force_torque_sensor_broadcaster/wrench",
+                default_value=FORCE_TORQUE_TOPIC,
             ),
             DeclareLaunchArgument(
                 "grasp_model",
@@ -213,10 +234,32 @@ def generate_launch_description():
                         "grasp_point_api_env_file": grasp_point_api_env_file,
                         "grasp_point_api_base_url": grasp_point_api_base_url,
                         "grasp_point_api_timeout_sec": grasp_point_api_timeout_sec,
+                        "vlm_service_name": vlm_service_name,
+                        "vlm_service_wait_timeout_sec": vlm_service_wait_timeout_sec,
+                        "vlm_service_response_timeout_sec": (
+                            vlm_service_response_timeout_sec
+                        ),
                         "force_torque_topic": LaunchConfiguration(
                             "force_torque_topic"
                         ),
                         "display_debug_windows": display_debug_windows,
+                        "sam_enabled": sam_enabled,
+                        "sam_checkpoint": sam_checkpoint,
+                        "sam_backend": "mobile_sam",
+                        "sam_model_type": "vit_t",
+                        "sam_device": "cuda",
+                    },
+                ],
+            ),
+            Node(
+                package="macgyvbot_perception",
+                executable="vlm_grasp_service_node",
+                name="vlm_grasp_service_node",
+                output="screen",
+                parameters=[
+                    {
+                        "vlm_service_name": vlm_service_name,
+                        "grasp_point_mode": LaunchConfiguration("grasp_point_mode"),
                         "sam_enabled": sam_enabled,
                         "sam_checkpoint": sam_checkpoint,
                         "sam_backend": "mobile_sam",

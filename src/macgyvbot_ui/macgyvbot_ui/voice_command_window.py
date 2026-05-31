@@ -30,8 +30,7 @@ else:
             super().__init__()
             self._on_user_text = on_user_text
             self.setWindowTitle('MacGyvBot Assistant')
-            self.resize(1420, 900)
-            self.setMinimumSize(1280, 800)
+            self.setFixedSize(1420, 900)
             self._detector_pixmap = None
 
             self._chat_scroll = QScrollArea()
@@ -284,13 +283,21 @@ else:
             self._task_target_status.setText(f'작업 대상: {target_text}')
             self._task_stage_status.setText(f'작업 단계: {stage_text}')
 
-        def append_task_log(self, level, message):
+        def append_task_log(self, level, message, source='ui', event='EVENT', detail=''):
             level = str(level or 'INFO').upper()
             message = str(message or '').strip()
             if not message:
                 return
 
-            entry = f'{datetime.now().strftime("%H:%M:%S")} [{level}] {message}'
+            source = str(source or 'ui').strip() or 'ui'
+            event = str(event or 'EVENT').strip().upper() or 'EVENT'
+            detail = str(detail or '').strip()
+            entry = (
+                f'[{datetime.now().strftime("%H:%M:%S")}] '
+                f'[{source}] [{level}] {event} - {message}'
+            )
+            if detail:
+                entry = f'{entry} | {detail}'
             self._task_log_entries.append(entry)
             self._task_log_entries = self._task_log_entries[-80:]
             self._task_log.setText('\n'.join(self._task_log_entries))

@@ -3,12 +3,9 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import cv2
 import numpy as np
 import rclpy
-from ament_index_python.packages import get_package_share_directory
 from cv_bridge import CvBridge
 from moveit.planning import MoveItPy
 from rclpy.node import Node
@@ -25,6 +22,7 @@ from macgyvbot_perception.depth_projection import (
     pixel_to_camera_point,
     transform_point_to_base,
 )
+from macgyvbot_resources.calibration import resolve_calibration_file
 
 
 WINDOW_NAME = "Click Base Point"
@@ -145,24 +143,11 @@ class ClickBasePointNode(Node):
         }
 
     def _load_gripper_to_camera(self):
-        calib_file = self._resolve_calibration_file(CALIBRATION_FILE)
+        calib_file = resolve_calibration_file(CALIBRATION_FILE)
         transform = np.load(str(calib_file)).astype(float)
         transform[:3, 3] /= 1000.0
         self.get_logger().info(f"Loaded calibration: {calib_file}")
         return transform
-
-    @staticmethod
-    def _resolve_calibration_file(filename):
-        try:
-            package_share = Path(get_package_share_directory("macgyvbot_resources"))
-            candidate = package_share / "calibration" / filename
-            if candidate.exists():
-                return candidate
-        except Exception:
-            pass
-
-        workspace_src = Path(__file__).resolve().parents[2]
-        return workspace_src / "macgyvbot_resources" / "calibration" / filename
 
 
 def main():

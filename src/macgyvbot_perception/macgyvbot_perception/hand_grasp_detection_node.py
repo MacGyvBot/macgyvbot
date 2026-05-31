@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Optional
 
@@ -527,7 +526,6 @@ class HandGraspDetectionNode(Node):
         msg.tool_roi = [int(value) for value in roi] if roi is not None else [0, 0, 0, 0]
         msg.has_reason = "reason" in payload
         msg.reason = str(payload.get("reason", ""))
-        msg.payload_json = json.dumps(payload, ensure_ascii=False)
         self.mask_lock_pub.publish(msg)
 
     def _update_ml_grasp(self, hand_info: Optional[dict]) -> MLGraspResult:
@@ -731,6 +729,7 @@ class HandGraspDetectionNode(Node):
         }
         msg = HumanGraspResult()
         msg.state = str(payload["state"])
+        msg.hand_present = bool(payload["hand_present"])
         msg.human_grasped_tool = bool(payload["human_grasped_tool"])
         msg.grasp_counter = int(payload["grasp_counter"])
         msg.grasp_score = float(payload["grasp_score"])
@@ -790,7 +789,6 @@ class HandGraspDetectionNode(Node):
         handedness = payload["active_handedness"]
         msg.has_active_handedness = handedness is not None
         msg.active_handedness = str(handedness) if handedness is not None else ""
-        msg.payload_json = json.dumps(payload, ensure_ascii=False)
         self.result_pub.publish(msg)
 
     def destroy_node(self) -> bool:
