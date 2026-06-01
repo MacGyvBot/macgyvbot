@@ -46,3 +46,35 @@ DRAWER_STORE_MARKER_APPROACH_Z_OFFSET_M = 0.08
 DRAWER_STORE_MARKER_RELEASE_Z_OFFSET_M = 0.02
 DRAWER_CLOSE_LIFT_OFFSET_M = 0.01
 DRAWER_OBSERVATION_J6_DEG = 0.0
+
+# Initial drawer collision boundaries in the robot base frame. These are
+# intentionally conservative placeholders and should be calibrated in RViz.
+DRAWER_COLLISION_FRAME_ID = "base_link"
+DRAWER_COLLISION_APPLY_SERVICE = "/apply_planning_scene"
+DRAWER_COLLISION_SCENE_TOPICS = [
+    "/planning_scene",
+    "/moveit_cpp/monitored_planning_scene",
+]
+DRAWER_COLLISION_BOXES = [
+    {
+        "id": "drawer_cabinet_boundary",
+        "frame_id": DRAWER_COLLISION_FRAME_ID,
+        "center_xyz": [0.55, -0.30, 0.36],
+        "size_xyz": [0.58, 0.34, 0.42],
+        "color_rgba": [0.12, 0.45, 0.85, 0.35],
+    },
+    {
+        "id": "drawer_front_boundary",
+        "frame_id": DRAWER_COLLISION_FRAME_ID,
+        "center_xyz": [0.55, -0.48, 0.35],
+        "size_xyz": [0.58, 0.05, 0.30],
+        "color_rgba": [0.95, 0.55, 0.15, 0.45],
+    },
+    {
+        "id": "drawer_inner_keepout",
+        "frame_id": DRAWER_COLLISION_FRAME_ID,
+        "center_xyz": [0.55, -0.24, 0.35],
+        "size_xyz": [0.46, 0.20, 0.22],
+        "color_rgba": [0.85, 0.15, 0.12, 0.25],
+    },
+]

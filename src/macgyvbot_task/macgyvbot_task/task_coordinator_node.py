@@ -58,6 +58,9 @@ from macgyvbot_config.vlm import (
     VLM_ONLY_MODES,
 )
 from macgyvbot_domain.target_models import PickTarget
+from macgyvbot_manipulation.drawer_collision_scene import (
+    DrawerCollisionSceneManager,
+)
 from macgyvbot_manipulation.drawer_motion import DrawerMotionFlow
 from macgyvbot_manipulation.moveit_controller import MoveItController
 from macgyvbot_manipulation.onrobot_gripper import RG
@@ -153,10 +156,15 @@ class TaskCoordinatorNode(Node):
 
         self.declare_parameter("display_debug_windows", False)
         self.declare_parameter("manual_gripper_service", MANUAL_GRIPPER_SERVICE)
+        self.declare_parameter("enable_drawer_collision_scene", True)
         self.bridge = CvBridge()
         self.display_debug_windows = self._read_bool_parameter(
             "display_debug_windows",
             False,
+        )
+        self.enable_drawer_collision_scene = self._read_bool_parameter(
+            "enable_drawer_collision_scene",
+            True,
         )
         self.display = DebugDisplay(enabled=self.display_debug_windows)
         self.exit_req = threading.Event()
@@ -218,6 +226,19 @@ class TaskCoordinatorNode(Node):
         self.gripper = RG("rg2", "192.168.1.1", 502)
         self.robot = MoveItPy(node_name="task_coordinator_moveit_py")
         self.arm = self.robot.get_planning_component(GROUP_NAME)
+        self.drawer_collision_scene = DrawerCollisionSceneManager(
+            self,
+            moveit_robot=self.robot,
+        )
+        self._drawer_collision_scene_retries_remaining = 0
+        self._drawer_collision_scene_timer = None
+        if self.enable_drawer_collision_scene:
+            self._apply_drawer_collision_scene()
+            self._drawer_collision_scene_retries_remaining = 3
+            self._drawer_collision_scene_timer = self.create_timer(
+                1.0,
+                self._retry_drawer_collision_scene,
+            )
         self.depth_projector = DepthProjector(self._base_to_camera_matrix)
         self.hand_grasp_adapter = HandGraspResultAdapter(
             self.state,
@@ -324,6 +345,19 @@ class TaskCoordinatorNode(Node):
 
     def _base_to_camera_matrix(self):
         return get_ee_matrix(self.robot) @ self.gripper2cam
+
+    def _apply_drawer_collision_scene(self):
+        return self.drawer_collision_scene.apply(self.get_logger())
+
+    def _retry_drawer_collision_scene(self):
+        if self._drawer_collision_scene_retries_remaining <= 0:
+            if self._drawer_collision_scene_timer is not None:
+                self.destroy_timer(self._drawer_collision_scene_timer)
+                self._drawer_collision_scene_timer = None
+            return
+
+        self._apply_drawer_collision_scene()
+        self._drawer_collision_scene_retries_remaining -= 1
 
     def _drawer_observation_orientation(self):
         joint_positions = dict(HOME_JOINTS)

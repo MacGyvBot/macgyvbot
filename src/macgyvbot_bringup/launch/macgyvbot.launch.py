@@ -1,3 +1,6 @@
+from pathlib import Path
+
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, EmitEvent, RegisterEventHandler
 from launch.conditions import IfCondition
@@ -19,6 +22,15 @@ from macgyvbot_config.topics import (
 )
 from macgyvbot_config.vlm import VLM_GRASP_SERVICE_NAME
 from moveit_configs_utils import MoveItConfigsBuilder
+
+
+COMBINED_ROBOT_URDF = "m0609_onrobot_rg2_combined.urdf"
+
+
+def load_combined_robot_description():
+    resources_share = Path(get_package_share_directory("macgyvbot_resources"))
+    urdf_path = resources_share / "urdf" / COMBINED_ROBOT_URDF
+    return urdf_path.read_text(encoding="utf-8")
 
 
 def generate_launch_description():
@@ -47,6 +59,9 @@ def generate_launch_description():
     parser_mode = LaunchConfiguration("parser_mode")
     detector_image_topic = LaunchConfiguration("detector_image_topic")
     display_debug_windows = LaunchConfiguration("display_debug_windows")
+    enable_drawer_collision_scene = LaunchConfiguration(
+        "enable_drawer_collision_scene"
+    )
     sam_enabled = LaunchConfiguration("sam_enabled")
     sam_checkpoint = LaunchConfiguration("sam_checkpoint")
     grasp_point_api_model = LaunchConfiguration("grasp_point_api_model")
@@ -77,6 +92,8 @@ def generate_launch_description():
         .sensors_3d()
         .to_moveit_configs()
     )
+    moveit_config_dict = moveit_config.to_dict()
+    moveit_config_dict["robot_description"] = load_combined_robot_description()
 
     moveit_py_params = PathJoinSubstitution(
         [bringup_share, "config", "moveit_py.yaml"]
@@ -168,6 +185,11 @@ def generate_launch_description():
                 ),
             ),
             DeclareLaunchArgument(
+                "enable_drawer_collision_scene",
+                default_value="true",
+                description="Register static drawer collision boxes in MoveIt.",
+            ),
+            DeclareLaunchArgument(
                 "grasp_point_mode",
                 default_value="vlm_only_qwen3b",
                 description=(
@@ -223,7 +245,7 @@ def generate_launch_description():
                 executable="task_coordinator_node",
                 output="screen",
                 parameters=[
-                    moveit_config.to_dict(),
+                    moveit_config_dict,
                     moveit_py_params,
                     {
                         "yolo_model": LaunchConfiguration("yolo_model"),
@@ -243,6 +265,9 @@ def generate_launch_description():
                             "force_torque_topic"
                         ),
                         "display_debug_windows": display_debug_windows,
+                        "enable_drawer_collision_scene": (
+                            enable_drawer_collision_scene
+                        ),
                         "sam_enabled": sam_enabled,
                         "sam_checkpoint": sam_checkpoint,
                         "sam_backend": "mobile_sam",
