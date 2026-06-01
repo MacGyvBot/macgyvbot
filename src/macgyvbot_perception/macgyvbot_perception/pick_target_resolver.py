@@ -90,8 +90,18 @@ class PickTargetResolver:
             self.logger,
             vlm_rpy_deg,
         )
+        yaw_deg = self._extract_yaw(vlm_rpy_deg)
         if target is None:
-            return self._not_found(target_label, "depth_projection_failed")
+            return PickTarget(
+                found=False,
+                label=label,
+                pixel=(u, v),
+                base_xyz=None,
+                depth_m=None,
+                yaw_deg=yaw_deg,
+                reason="depth_projection_failed",
+                source=source,
+            )
 
         bx, by, bz, z_m, vlm_rpy_deg = target
         return PickTarget(

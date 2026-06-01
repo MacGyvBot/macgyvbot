@@ -255,6 +255,13 @@ class PickSequenceRunner:
                 f"safe_z_min={context['safe_z_min']:.3f}"
             )
         elif refined_target is not None:
+            yaw_deg = getattr(refined_target, "yaw_deg", None)
+            if yaw_deg is not None:
+                context["vlm_yaw_deg"] = yaw_deg
+                log.info(
+                    "상단 view target 갱신은 실패했지만 yaw 보정은 적용합니다: "
+                    f"yaw={yaw_deg}, reason={getattr(refined_target, 'reason', 'unknown')}"
+                )
             reason = getattr(refined_target, "reason", "unknown")
             log.warn(
                 "상단 view VLM target을 얻지 못해 bbox center plan을 유지합니다. "
@@ -481,4 +488,3 @@ class PickSequenceRunner:
         while rclpy.ok() and time.monotonic() < end_time:
             remaining = end_time - time.monotonic()
             time.sleep(min(SEQUENCE_WAIT_POLL_SEC, max(0.0, remaining)))
-
