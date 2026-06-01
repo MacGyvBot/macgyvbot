@@ -23,11 +23,15 @@ class FakeSamPredictor:
         self._masks = masks
         self._scores = scores or [1.0] * len(masks)
         self.last_image = None
+        self.last_point_coords = None
+        self.last_point_labels = None
 
     def set_image(self, image):
         self.last_image = image
 
     def predict(self, point_coords=None, point_labels=None, box=None, multimask_output=True):
+        self.last_point_coords = point_coords
+        self.last_point_labels = point_labels
         return np.asarray(self._masks), np.asarray(self._scores), None
 
 
@@ -130,6 +134,31 @@ def test_estimate_sam_mask_for_crop_prefers_mask_containing_grasp_point():
     assert debug["grasp_point_inside_mask"] is True
     assert mask is not None
     assert mask[30, 40] == 1
+
+
+def test_estimate_sam_mask_for_crop_uses_positive_and_negative_prompt_points():
+    crop = np.zeros((60, 80, 3), dtype=np.uint8)
+    tool_mask = np.zeros((60, 80), dtype=np.uint8)
+    tool_mask[20:45, 25:55] = 1
+    predictor = FakeSamPredictor([tool_mask])
+
+    mask, debug = estimate_sam_mask_for_crop(
+        crop,
+        sam_predictor=predictor,
+        grasp_point=(40, 30),
+        config={
+            "sam_positive_point_offsets_px": ((0, 0), (-4, 0), (4, 0)),
+            "sam_negative_points_enabled": True,
+            "sam_negative_point_margin_ratio": 0.1,
+        },
+    )
+
+    assert mask is not None
+    assert debug["success"] is True
+    assert debug["sam_prompt_num_positive_points"] == 3
+    assert debug["sam_prompt_num_negative_points"] == 4
+    assert predictor.last_point_coords is not None
+    assert predictor.last_point_labels.tolist() == [1, 1, 1, 0, 0, 0, 0]
 
 
 def test_estimate_sam_mask_for_crop_saves_received_mask_before_selection():

@@ -97,6 +97,8 @@ def estimate_sam_mask_for_crop(
         "selected_mask_score": None,
         "mask_area_ratio": 0.0,
         "grasp_point_inside_mask": False,
+        "sam_prompt_num_positive_points": 0,
+        "sam_prompt_num_negative_points": 0,
         "sam_received_mask_paths": [],
         "reason": "",
     }
@@ -118,7 +120,13 @@ def estimate_sam_mask_for_crop(
         return None, debug_info
 
     box = _normalize_bbox_prompt(bbox_prompt, width, height)
-    point_coords, point_labels = _build_point_prompt(grasp_point, width, height)
+    point_coords, point_labels = _build_point_prompt(grasp_point, width, height, cfg)
+    debug_info["sam_prompt_num_positive_points"] = int(
+        np.sum(point_labels == 1)
+    ) if point_labels is not None else 0
+    debug_info["sam_prompt_num_negative_points"] = int(
+        np.sum(point_labels == 0)
+    ) if point_labels is not None else 0
 
     try:
         predictor.set_image(cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB))
@@ -631,13 +639,85 @@ def _normalize_bbox_prompt(bbox_prompt, width: int, height: int) -> list[float]:
     return [0.0, 0.0, float(width - 1), float(height - 1)]
 
 
-def _build_point_prompt(grasp_point, width: int, height: int):
+def _build_point_prompt(grasp_point, width: int, height: int, cfg: dict[str, Any]):
     point = _coerce_point(grasp_point)
     if point is None:
         return None, None
     x = float(np.clip(point[0], 0, max(width - 1, 0)))
     y = float(np.clip(point[1], 0, max(height - 1, 0)))
-    return np.asarray([[x, y]], dtype=np.float32), np.asarray([1], dtype=np.int32)
+
+    positive_points = _build_positive_prompt_points((x, y), width, height, cfg)
+    negative_points = _build_negative_prompt_points((x, y), width, height, cfg)
+    points = positive_points + negative_points
+    labels = ([1] * len(positive_points)) + ([0] * len(negative_points))
+    if not points:
+        return None, None
+
+    return np.asarray(points, dtype=np.float32), np.asarray(labels, dtype=np.int32)
+
+
+def _build_positive_prompt_points(
+    point: tuple[float, float],
+    width: int,
+    height: int,
+    cfg: dict[str, Any],
+) -> list[tuple[float, float]]:
+    offsets = cfg.get("sam_positive_point_offsets_px", ((0, 0),))
+    points: list[tuple[float, float]] = []
+    for offset in offsets:
+        try:
+            dx, dy = offset[:2]
+        except Exception:
+            continue
+        x = float(np.clip(point[0] + float(dx), 0, max(width - 1, 0)))
+        y = float(np.clip(point[1] + float(dy), 0, max(height - 1, 0)))
+        _append_unique_point(points, (x, y))
+    return points
+
+
+def _build_negative_prompt_points(
+    positive_anchor: tuple[float, float],
+    width: int,
+    height: int,
+    cfg: dict[str, Any],
+) -> list[tuple[float, float]]:
+    if not bool(cfg.get("sam_negative_points_enabled", True)):
+        return []
+
+    margin_ratio = float(cfg.get("sam_negative_point_margin_ratio", 0.08))
+    margin_x = float(np.clip(width * margin_ratio, 0, max(width - 1, 0)))
+    margin_y = float(np.clip(height * margin_ratio, 0, max(height - 1, 0)))
+    candidates = [
+        (margin_x, margin_y),
+        (float(max(width - 1, 0)) - margin_x, margin_y),
+        (margin_x, float(max(height - 1, 0)) - margin_y),
+        (
+            float(max(width - 1, 0)) - margin_x,
+            float(max(height - 1, 0)) - margin_y,
+        ),
+    ]
+    min_distance = float(cfg.get("sam_negative_point_min_distance_px", 12.0))
+    min_distance = max(0.0, min_distance)
+
+    points: list[tuple[float, float]] = []
+    anchor = np.asarray(positive_anchor, dtype=np.float32)
+    for candidate in candidates:
+        candidate_xy = np.asarray(candidate, dtype=np.float32)
+        if float(np.linalg.norm(candidate_xy - anchor)) < min_distance:
+            continue
+        _append_unique_point(points, candidate)
+    return points
+
+
+def _append_unique_point(
+    points: list[tuple[float, float]],
+    point: tuple[float, float],
+) -> None:
+    rounded = (round(float(point[0]), 3), round(float(point[1]), 3))
+    for existing in points:
+        if rounded == (round(float(existing[0]), 3), round(float(existing[1]), 3)):
+            return
+    points.append((float(point[0]), float(point[1])))
 
 
 def _coerce_point(grasp_point) -> tuple[float, float] | None:

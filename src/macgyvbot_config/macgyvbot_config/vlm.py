@@ -41,6 +41,10 @@ PCA_YAW_SAM_DEFAULT_CONFIG = {
     "morph_open_iterations": 1,
     "morph_close_iterations": 1,
     "min_pca_pixels": 30,
+    "sam_positive_point_offsets_px": ((0, 0), (-6, 0), (6, 0), (0, -6), (0, 6)),
+    "sam_negative_points_enabled": True,
+    "sam_negative_point_margin_ratio": 0.08,
+    "sam_negative_point_min_distance_px": 12.0,
     "save_pca_input_mask_image": True,
     "pca_input_mask_dir": "src/macgyvbot_perception/data/yaw_pca",
 }
