@@ -932,9 +932,7 @@ class OperatorUiNode(Node):
             return False
 
         future.add_done_callback(self._handle_manual_gripper_response)
-        message = '그리퍼 명령을 전송했습니다.'
-        self._append_bot(message)
-        self._append_log('info', f'{message} width_mm={width_mm}')
+        self._append_log('info', f'수동 그리퍼 명령 요청: width_mm={width_mm}')
         return True
 
     def _handle_manual_gripper_response(self, future):

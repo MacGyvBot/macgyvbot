@@ -553,7 +553,7 @@ class TaskCoordinatorNode(Node):
 
         response.success = True
         response.status = "accepted"
-        response.message = f"그리퍼를 {requested_width_mm:.0f} mm로 이동합니다."
+        response.message = f"그리퍼를 {requested_width_mm:.0f} mm로 적용합니다."
         response.applied_width_mm = requested_width_mm
         self.get_logger().info(
             "manual gripper command accepted: "
