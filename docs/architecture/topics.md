@@ -27,7 +27,6 @@ typed request/response contract instead of a streamed topic.
 | --- | --- | --- | --- | --- |
 | `/robot_task_status` | `macgyvbot_interfaces/msg/RobotTaskStatus` | `macgyvbot_task` | `macgyvbot_command` if context is needed, `macgyvbot_ui`, `macgyvbot_perception` | Typed task status and originating command summary |
 | `/tool_drop_detected` | `macgyvbot_interfaces/msg/ToolDropEvent` | `macgyvbot_task` tool hold monitor | `macgyvbot_task` | Typed drop/monitor event converted into robot status for UI consumers |
-| `/manual_gripper_width` | `std_msgs/msg/Float32` | `macgyvbot_ui` `operator_ui_node` | `macgyvbot_task` `task_coordinator_node` | Idle/paused-only manual RG2 width request in millimeters; task coordinator rejects active task execution, unsafe gripper state, and out-of-range width values before touching hardware |
 
 ## Perception
 
@@ -50,6 +49,7 @@ typed request/response contract instead of a streamed topic.
 
 | Service | Type | Server | Client | Payload |
 | --- | --- | --- | --- | --- |
+| `/manual_gripper_control` | `macgyvbot_interfaces/srv/SetGripper` | `macgyvbot_task` `task_coordinator_node` | `macgyvbot_ui` `operator_ui_node` | Idle/paused-only manual RG2 width request from the GUI; server rejects active task execution, unknown/unsafe gripper state, and out-of-range width values |
 | `/vlm_grasp` | `macgyvbot_interfaces/srv/VLMGrasp` | `macgyvbot_perception` `vlm_grasp_service_node` | `macgyvbot_task` | Top-view VLM grasp inference using color image, bbox, label, target label, and mode; response returns grasp pixel, source, orientation/yaw, and error status |
 
 ## Contract Rules

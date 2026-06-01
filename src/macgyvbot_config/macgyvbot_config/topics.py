@@ -12,7 +12,7 @@ TOOL_DROP_TOPIC = "/tool_drop_detected"
 TASK_REQUEST_TOPIC = "/task_request"
 TASK_CONTROL_TOPIC = "/task_control"
 COMMAND_SHUTDOWN_TOPIC = "/command_shutdown"
-MANUAL_GRIPPER_WIDTH_TOPIC = "/manual_gripper_width"
+MANUAL_GRIPPER_SERVICE = "/manual_gripper_control"
 
 HAND_GRASP_TOPIC = "/human_grasped_tool"
 HAND_GRASP_IMAGE_TOPIC = "/hand_grasp_detection/annotated_image"
