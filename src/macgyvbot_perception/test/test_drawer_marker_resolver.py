@@ -4,7 +4,10 @@ import types
 import numpy as np
 
 
-cv2_module = types.ModuleType("cv2")
+try:
+    import cv2 as cv2_module
+except ImportError:
+    cv2_module = types.ModuleType("cv2")
 sys.modules.setdefault("cv2", cv2_module)
 
 import macgyvbot_perception.drawer_marker_resolver as drawer_marker_resolver

@@ -1,41 +1,21 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 
 import cv2
 import numpy as np
 
+from macgyvbot_domain.mask_models import (
+    LockedToolMask,
+    MaskContactResult,
+    MaskTrackValidation,
+    Rect,
+)
 from macgyvbot_perception.hand_tool_grasp.calculations import (
     point_to_rect_distance,
 )
 from macgyvbot_perception.model_paths import resolve_weight_path
-
-Rect = Tuple[int, int, int, int]
-
-
-@dataclass(frozen=True)
-class LockedToolMask:
-    roi: Rect
-    mask: np.ndarray
-    source: str
-
-
-@dataclass(frozen=True)
-class MaskContactResult:
-    mask_contact_count: int
-    mask_contact_confirmed: bool
-    mask_proximity_ok: bool
-    min_landmark_to_tool_distance: Optional[float]
-
-    @property
-    def near_or_contact(self) -> bool:
-        return bool(
-            self.mask_contact_confirmed
-            or self.mask_proximity_ok
-            or self.mask_contact_count > 0
-        )
 
 
 class BBoxPromptSegmenter:
@@ -159,6 +139,151 @@ def create_bbox_locked_mask(roi: Rect, frame_shape: tuple[int, int]) -> LockedTo
     return LockedToolMask(roi=(x1, y1, x2, y2), mask=mask, source="BBOX_LOCKED")
 
 
+def create_depth_locked_mask(
+    depth_mm: Optional[np.ndarray],
+    roi: Rect,
+    frame_shape: tuple[int, int],
+    tolerance_mm: float = 45.0,
+    margin: int = 12,
+    min_valid_ratio: float = 0.20,
+    min_area_ratio: float = 0.04,
+    max_area_ratio: float = 1.60,
+    source: str = "DEPTH_TRACKED",
+) -> Optional[LockedToolMask]:
+    """Create a tool mask from pixels near the bbox median depth."""
+    if depth_mm is None:
+        return None
+
+    height, width = frame_shape
+    x1, y1, x2, y2 = _clip_rect(roi, width, height)
+    if x2 <= x1 or y2 <= y1:
+        return None
+
+    bbox_depth = depth_mm[y1:y2, x1:x2]
+    valid_bbox_depth = bbox_depth[bbox_depth > 0]
+    bbox_area = max(1, (x2 - x1) * (y2 - y1))
+    if valid_bbox_depth.size / bbox_area < min_valid_ratio:
+        return None
+
+    target_depth = float(np.median(valid_bbox_depth))
+    rx1, ry1, rx2, ry2 = _clip_rect(_expand_rect((x1, y1, x2, y2), margin), width, height)
+    roi_depth = depth_mm[ry1:ry2, rx1:rx2]
+    valid = roi_depth > 0
+    close_depth = np.abs(roi_depth - target_depth) <= tolerance_mm
+
+    mask = np.zeros((height, width), dtype=np.uint8)
+    mask[ry1:ry2, rx1:rx2] = (valid & close_depth).astype(np.uint8)
+    mask = _clean_depth_mask(mask)
+
+    mask_bool = mask.astype(bool)
+    area = mask_area(mask_bool)
+    area_ratio = area / bbox_area
+    if area <= 0 or area_ratio < min_area_ratio or area_ratio > max_area_ratio:
+        return None
+
+    mask_roi = mask_to_roi(mask_bool)
+    if mask_roi is None:
+        return None
+    return LockedToolMask(roi=mask_roi, mask=mask_bool, source=source)
+
+
+def scale_locked_mask(
+    locked_tool: LockedToolMask,
+    frame_shape: tuple[int, int],
+    scale: float,
+    center: Optional[tuple[float, float]] = None,
+    source: str = "SCALED_LOCKED",
+) -> Optional[LockedToolMask]:
+    """Scale a locked mask around its center and optionally translate it."""
+    if scale <= 0:
+        return None
+
+    height, width = frame_shape
+    source_center = rect_center(locked_tool.roi)
+    target_center = center or source_center
+    matrix = np.array(
+        [
+            [scale, 0.0, target_center[0] - scale * source_center[0]],
+            [0.0, scale, target_center[1] - scale * source_center[1]],
+        ],
+        dtype=np.float32,
+    )
+    warped = cv2.warpAffine(
+        locked_tool.mask.astype(np.uint8),
+        matrix,
+        (width, height),
+        flags=cv2.INTER_NEAREST,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=0,
+    ).astype(bool)
+    roi = mask_to_roi(warped)
+    if roi is None:
+        return None
+    return LockedToolMask(roi=roi, mask=warped, source=source)
+
+
+def validate_tracked_mask(
+    previous: LockedToolMask,
+    tracked: LockedToolMask,
+    max_center_shift_px: float,
+    min_area_ratio: float,
+    max_area_ratio: float,
+) -> MaskTrackValidation:
+    previous_area = mask_area(previous.mask)
+    tracked_area = mask_area(tracked.mask)
+    if previous_area <= 0:
+        return MaskTrackValidation(False, "previous_mask_empty")
+    if tracked_area <= 0:
+        return MaskTrackValidation(False, "tracked_mask_empty")
+
+    area_ratio = tracked_area / previous_area
+    if area_ratio < min_area_ratio:
+        return MaskTrackValidation(False, "tracked_mask_too_small")
+    if area_ratio > max_area_ratio:
+        return MaskTrackValidation(False, "tracked_mask_too_large")
+
+    previous_center = rect_center(previous.roi)
+    tracked_center = rect_center(tracked.roi)
+    center_shift = float(
+        np.hypot(
+            tracked_center[0] - previous_center[0],
+            tracked_center[1] - previous_center[1],
+        )
+    )
+    if center_shift > max_center_shift_px:
+        return MaskTrackValidation(False, "tracked_mask_center_jump")
+
+    return MaskTrackValidation(True)
+
+
+def mask_area(mask: np.ndarray) -> int:
+    return int(mask.astype(bool).sum())
+
+
+def rect_area(rect: Rect) -> int:
+    x1, y1, x2, y2 = rect
+    return max(0, x2 - x1) * max(0, y2 - y1)
+
+
+def rect_center(rect: Rect) -> tuple[float, float]:
+    x1, y1, x2, y2 = rect
+    return ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
+
+
+def rect_iou(first: Rect, second: Rect) -> float:
+    x1 = max(first[0], second[0])
+    y1 = max(first[1], second[1])
+    x2 = min(first[2], second[2])
+    y2 = min(first[3], second[3])
+    intersection = rect_area((x1, y1, x2, y2))
+    if intersection <= 0:
+        return 0.0
+    union = rect_area(first) + rect_area(second) - intersection
+    if union <= 0:
+        return 0.0
+    return intersection / union
+
+
 def compute_mask_contact(
     hand_info: Optional[dict],
     locked_tool: Optional[LockedToolMask],
@@ -196,13 +321,45 @@ def compute_mask_contact(
     )
 
 
-def overlay_locked_mask(frame: np.ndarray, locked_tool: Optional[LockedToolMask]) -> None:
+def overlay_locked_mask(
+    frame: np.ndarray,
+    locked_tool: Optional[LockedToolMask],
+    color: tuple[int, int, int] = (0, 255, 0),
+    alpha: float = 0.35,
+) -> None:
     if locked_tool is None:
         return
-    green = np.zeros_like(frame)
-    green[:, :] = (0, 255, 0)
+    overlay = np.zeros_like(frame)
+    overlay[:, :] = color
     mask = locked_tool.mask.astype(bool)
-    frame[mask] = cv2.addWeighted(frame, 0.65, green, 0.35, 0)[mask]
+    frame[mask] = cv2.addWeighted(frame, 1.0 - alpha, overlay, alpha, 0)[mask]
+
+
+def overlay_depth_mask(
+    frame: np.ndarray,
+    depth_mm: Optional[np.ndarray],
+    locked_tool: Optional[LockedToolMask],
+    alpha: float = 0.55,
+) -> None:
+    if depth_mm is None or locked_tool is None:
+        return
+    mask = locked_tool.mask.astype(bool)
+    if not mask.any():
+        return
+
+    valid_depth = depth_mm[(depth_mm > 0) & mask]
+    if valid_depth.size == 0:
+        return
+
+    low = float(np.percentile(valid_depth, 5))
+    high = float(np.percentile(valid_depth, 95))
+    if high <= low:
+        high = low + 1.0
+
+    normalized = np.clip((depth_mm - low) / (high - low), 0.0, 1.0)
+    depth_u8 = (normalized * 255.0).astype(np.uint8)
+    color = cv2.applyColorMap(depth_u8, cv2.COLORMAP_JET)
+    frame[mask] = cv2.addWeighted(frame, 1.0 - alpha, color, alpha, 0)[mask]
 
 
 def resolve_checkpoint_path(checkpoint_path: str) -> Path:
@@ -242,3 +399,10 @@ def _largest_component(mask: np.ndarray) -> np.ndarray:
         return mask
     largest = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
     return labels == largest
+
+
+def _clean_depth_mask(mask: np.ndarray) -> np.ndarray:
+    kernel = np.ones((3, 3), np.uint8)
+    cleaned = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_OPEN, kernel)
+    cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, kernel)
+    return _largest_component(cleaned).astype(np.uint8)
