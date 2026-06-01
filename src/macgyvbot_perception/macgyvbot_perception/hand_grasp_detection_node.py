@@ -81,6 +81,7 @@ class HandGraspDetectionNode(Node):
         self.tool_mask_anchor: Optional[LockedToolMask] = None
         self.latest_tool_mask: Optional[LockedToolMask] = None
         self.mask_tracking_active = False
+        self.active_tool_label = ""
         self.frame_index = 0
 
         self.color_topic = self.declare_parameter(
@@ -302,8 +303,10 @@ class HandGraspDetectionNode(Node):
     def _robot_status_cb(self, msg: RobotTaskStatus) -> None:
         status = str(msg.status or "").strip().lower()
         self.robot_status = status
+        requested_tool_label = self._status_tool_label(msg)
 
         if status == self.lock_on_status:
+            self._set_active_tool_label(requested_tool_label)
             self.lock_requested = True
             self.mask_tracking_active = False
             self.locked_tool = None
@@ -312,22 +315,19 @@ class HandGraspDetectionNode(Node):
             self.get_logger().info("Robot grasp success received. Tool mask lock requested.")
             return
 
-        if status in {"accepted", "searching", "picking", "grasping"}:
-            if status == "accepted":
-                self.lock_requested = False
-                self.locked_tool = None
-                self.latest_tool_detection = None
-                self.tool_mask_anchor = None
-                self.latest_tool_mask = None
-            self.mask_tracking_active = True
+        if status in {"accepted", "opening_drawer", "observing_drawer"}:
+            self._set_active_tool_label(requested_tool_label)
+            self._reset_tool_mask_state(clear_active_label=False)
+            self.mask_tracking_active = False
+            return
+
+        if status in {"searching", "picking", "grasping"}:
+            self._set_active_tool_label(requested_tool_label)
+            self.mask_tracking_active = bool(self.active_tool_label)
             return
 
         if status in {"returned", "done", "failed", "cancelled"}:
-            self.lock_requested = False
-            self.locked_tool = None
-            self.latest_tool_detection = None
-            self.tool_mask_anchor = None
-            self.latest_tool_mask = None
+            self._reset_tool_mask_state()
             self.mask_tracking_active = False
             if self.ml_classifier is not None:
                 self.ml_classifier.reset()
@@ -350,7 +350,7 @@ class HandGraspDetectionNode(Node):
             return
 
         tool_detection = (
-            self.tool_detector.detect(frame)
+            self.tool_detector.detect(frame, target_label=self.active_tool_label)
             if self.tool_detector is not None
             else None
         )
@@ -477,6 +477,39 @@ class HandGraspDetectionNode(Node):
 
     def _uses_return_overlay(self) -> bool:
         return self.show_return_close_roi or "return" in self.robot_status
+
+    @staticmethod
+    def _normalize_tool_label(label) -> str:
+        return str(label or "").strip().lower()
+
+    def _status_tool_label(self, msg: RobotTaskStatus) -> str:
+        if str(msg.action or "").strip().lower() != "bring":
+            return ""
+        return self._normalize_tool_label(msg.tool_name)
+
+    def _set_active_tool_label(self, tool_label: str) -> None:
+        normalized = self._normalize_tool_label(tool_label)
+        if not normalized or normalized == "unknown":
+            return
+        if normalized == self.active_tool_label:
+            return
+
+        self.active_tool_label = normalized
+        self.latest_tool_detection = None
+        self.tool_mask_anchor = None
+        self.latest_tool_mask = None
+        self.get_logger().info(
+            f"Tool mask tracking target label set: {self.active_tool_label}"
+        )
+
+    def _reset_tool_mask_state(self, clear_active_label=True) -> None:
+        self.lock_requested = False
+        self.locked_tool = None
+        self.latest_tool_detection = None
+        self.tool_mask_anchor = None
+        self.latest_tool_mask = None
+        if clear_active_label:
+            self.active_tool_label = ""
 
     def _seed_prelock_tool_mask(
         self,

@@ -2,6 +2,7 @@ import numpy as np
 
 from macgyvbot_domain.mask_models import LockedToolMask
 from macgyvbot_perception.hand_tool_grasp.calculations import build_depth_grasp_info
+from macgyvbot_perception.hand_tool_grasp.tool_detector import ToolDetector
 from macgyvbot_perception.hand_tool_grasp.ml_grasp_classifier import (
     FEATURE_COUNT,
     extract_ml_features,
@@ -15,6 +16,32 @@ from macgyvbot_perception.hand_tool_grasp.visualization import (
 )
 
 
+class _FakeBox:
+    def __init__(self, label_id, confidence, xyxy):
+        self.cls = [label_id]
+        self.conf = [confidence]
+        self.xyxy = [np.array(xyxy, dtype=float)]
+
+
+class _FakeYoloModel:
+    def predict(self, **_kwargs):
+        result = type(
+            "Result",
+            (),
+            {
+                "names": {
+                    0: "hammer",
+                    1: "wrench",
+                },
+                "boxes": [
+                    _FakeBox(0, 0.95, (1, 2, 11, 12)),
+                    _FakeBox(1, 0.40, (20, 21, 30, 31)),
+                ],
+            },
+        )()
+        return [result]
+
+
 def test_extract_ml_features_returns_normalized_xyz_triplets():
     landmarks = {index: (index * 2, index) for index in range(21)}
     features = extract_ml_features({"landmarks": landmarks})
@@ -23,6 +50,20 @@ def test_extract_ml_features_returns_normalized_xyz_triplets():
     assert features[0:3] == [0.0, 0.0, 0.0]
     assert features[3] > 0.0
     assert features[4] > 0.0
+
+
+def test_tool_detector_filters_detection_to_requested_label():
+    detector = ToolDetector.__new__(ToolDetector)
+    detector.model = _FakeYoloModel()
+    detector.target_classes = {"hammer", "wrench"}
+    detector.confidence_threshold = 0.20
+    detector.image_size = 640
+
+    detection = detector.detect(np.zeros((32, 32, 3), dtype=np.uint8), "wrench")
+
+    assert detection is not None
+    assert detection.label == "wrench"
+    assert detection.roi == (20, 21, 30, 31)
 
 
 def test_compute_mask_contact_confirms_landmark_inside_locked_mask():
