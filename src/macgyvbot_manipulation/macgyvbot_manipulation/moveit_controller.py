@@ -126,10 +126,9 @@ def _format_joint_deltas(joint_names, current_positions, raw_positions, goal_pos
         )
     return "; ".join(parts)
 
-
 def _joint_delta_limit_mask(joint_names):
-    return np.array([name != WRIST_JOINT_NAME for name in joint_names], dtype=bool)
-
+    #return np.array([name != WRIST_JOINT_NAME for name in joint_names], dtype=bool)
+    return np.array([False, False, False, False, False, False], dtype=bool)
 
 def _pose_goal_to_near_current_state_goal(robot, pose_goal, logger):
     robot_model = robot.get_robot_model()
