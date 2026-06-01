@@ -69,6 +69,9 @@ from macgyvbot_perception.grasp_point.grasp_point_selector import (
     GraspPointSelector,
     normalize_grasp_point_mode,
 )
+from macgyvbot_perception.grasp_point.mask_image_for_grasp_detection import (
+    generate_mask_image_for_grasp_detection,
+)
 from macgyvbot_perception.pick_target_resolver import PickTargetResolver
 from macgyvbot_perception.yolo_detector import YoloDetector
 from macgyvbot_resources.calibration import resolve_calibration_file
@@ -292,6 +295,9 @@ class TaskCoordinatorNode(Node):
             self.state,
             self.tool_hold_monitor,
             refine_pick_target=self._refine_pick_target_after_centering,
+            generate_grasp_detection_mask_images=(
+                self._generate_grasp_detection_mask_images_after_vlm_observe
+            ),
             control_events=control_events,
             drawer_flow=self.drawer_flow,
         )
@@ -1146,6 +1152,51 @@ class TaskCoordinatorNode(Node):
             depth_image,
             intrinsics,
         )
+
+    def _generate_grasp_detection_mask_images_after_vlm_observe(self, target_label):
+        if not self.frame_processor.has_camera_state():
+            self.get_logger().warn(
+                "grasp detection mask image 생성을 위한 camera state가 없습니다."
+            )
+            return None
+
+        color_image = self.state.color_image.copy()
+        results = self.detector.detect(color_image)
+        matched_box = self.pick_target_resolver.matching_box(
+            results[0].boxes,
+            target_label,
+        )
+        if matched_box is None:
+            self.get_logger().warn(
+                f"{target_label} grasp detection mask image 생성을 위한 YOLO bbox가 없습니다."
+            )
+            return None
+
+        box, _label = matched_box
+        bbox_xyxy = box.xyxy[0].cpu().numpy().tolist()
+        binary_mask = self._binary_bbox_mask(color_image, bbox_xyxy)
+        images = generate_mask_image_for_grasp_detection(
+            color_image=color_image,
+            binary_mask_or_image=binary_mask,
+            bbox_xyxy=bbox_xyxy,
+            filename_prefix=f"pick_vlm_observe_{target_label}",
+        )
+        self.get_logger().info(
+            f"{target_label} VLM 관찰 위치 grasp detection mask image 저장 완료"
+        )
+        return images
+
+    @staticmethod
+    def _binary_bbox_mask(color_image, bbox_xyxy):
+        height, width = color_image.shape[:2]
+        x1 = max(0, min(width - 1, int(math.floor(float(bbox_xyxy[0])))))
+        y1 = max(0, min(height - 1, int(math.floor(float(bbox_xyxy[1])))))
+        x2 = max(0, min(width, int(math.ceil(float(bbox_xyxy[2])))))
+        y2 = max(0, min(height, int(math.ceil(float(bbox_xyxy[3])))))
+        binary_mask = np.zeros((height, width), dtype=np.uint8)
+        if x2 > x1 and y2 > y1:
+            binary_mask[y1:y2, x1:x2] = 255
+        return binary_mask
 
     def _motion_interrupted(self):
         return self.exit_req.is_set() or self.pause_req.is_set()

@@ -29,6 +29,7 @@ class PickSequenceRunner:
         state,
         tool_hold_monitor=None,
         refine_pick_target=None,
+        generate_grasp_detection_mask_images=None,
         control_events=None,
         drawer_flow=None,
     ):
@@ -38,6 +39,7 @@ class PickSequenceRunner:
         self.state = state
         self.tool_hold_monitor = tool_hold_monitor
         self.refine_pick_target = refine_pick_target
+        self.generate_grasp_detection_mask_images = generate_grasp_detection_mask_images
         self.control_events = control_events or {}
         self.drawer_flow = drawer_flow
         self.target_planner = PickTargetPlanner(robot)
@@ -279,7 +281,23 @@ class PickSequenceRunner:
             message=f"{self.state.target_label} VLM 관찰 위치에서 SAM 추적을 시작합니다.",
             command=self.state.current_command,
         )
+        self._generate_grasp_detection_mask_images()
         return True
+
+    def _generate_grasp_detection_mask_images(self):
+        if self.generate_grasp_detection_mask_images is None:
+            return
+
+        target_label = self.state.target_label
+        if not target_label:
+            return
+
+        try:
+            self.generate_grasp_detection_mask_images(target_label)
+        except Exception as exc:
+            self.state.logger().warn(
+                f"grasp detection mask image 생성 실패: {exc}"
+            )
 
     def _rotate_wrist(self, vlm_yaw_deg, context):
         log = self.state.logger()
