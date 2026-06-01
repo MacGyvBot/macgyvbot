@@ -714,6 +714,19 @@ class HandGraspDetectionNode(Node):
         frame,
         tool_detection: Optional[ToolDetection],
     ) -> Optional[LockedToolMask]:
+        if tool_detection is not None:
+            depth_mask = self._create_depth_tool_mask(
+                tool_detection,
+                frame.shape[:2],
+                source="DEPTH_LOCKED",
+            )
+            if depth_mask is not None:
+                self.get_logger().info(
+                    f"Locked depth tool mask: label={tool_detection.label}, "
+                    f"roi={depth_mask.roi}"
+                )
+                return depth_mask
+
         if (
             self.latest_tool_mask is not None
             and self.latest_tool_mask.source in {"SAM_TRACKED", "DEPTH_TRACKED"}
@@ -749,18 +762,6 @@ class HandGraspDetectionNode(Node):
                 "Tool mask lock requested, but no YOLO tool ROI is available."
             )
             return None
-
-        depth_mask = self._create_depth_tool_mask(
-            tool_detection,
-            frame.shape[:2],
-            source="DEPTH_LOCKED",
-        )
-        if depth_mask is not None:
-            self.get_logger().info(
-                f"Locked depth tool mask: label={tool_detection.label}, "
-                f"roi={depth_mask.roi}"
-            )
-            return depth_mask
 
         if self.sam_segmenter is not None and self.sam_reseed_from_yolo:
             mask = self.sam_segmenter.segment(frame, tool_detection.roi)
