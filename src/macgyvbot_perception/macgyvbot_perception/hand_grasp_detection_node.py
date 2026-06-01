@@ -56,6 +56,7 @@ from macgyvbot_perception.hand_tool_grasp.sam_tool_mask import (
     BBoxPromptSegmenter,
     compute_mask_contact,
     create_bbox_locked_mask,
+    create_depth_locked_mask,
     mask_to_roi,
     rect_area,
     rect_center,
@@ -187,6 +188,15 @@ class HandGraspDetectionNode(Node):
         )
         self.pre_grasp_mask_max_scale = float(
             self.declare_parameter("pre_grasp_mask_max_scale", 1.50).value
+        )
+        self.depth_tool_mask_enabled = self._as_bool(
+            self.declare_parameter("depth_tool_mask_enabled", True).value
+        )
+        self.depth_tool_mask_tolerance_mm = float(
+            self.declare_parameter("depth_tool_mask_tolerance_mm", 45.0).value
+        )
+        self.depth_tool_mask_margin = int(
+            self.declare_parameter("depth_tool_mask_margin", 12).value
         )
         self.allow_bbox_lock = self._as_bool(
             self.declare_parameter("allow_bbox_lock", True).value
@@ -456,6 +466,7 @@ class HandGraspDetectionNode(Node):
                     result=result,
                     locked_tool=self.locked_tool,
                     candidate_tool_mask=self.latest_tool_mask,
+                    depth_mm=self.latest_depth_mm,
                 )
             if self.annotated_pub is not None:
                 self.annotated_pub.publish(
@@ -600,6 +611,12 @@ class HandGraspDetectionNode(Node):
         if tool_detection is None:
             return
 
+        depth_mask = self._create_depth_tool_mask(tool_detection, frame.shape[:2])
+        if depth_mask is not None:
+            self.latest_tool_mask = depth_mask
+            self.tool_mask_anchor = depth_mask
+            return
+
         if self.sam_segmenter is None:
             self.latest_tool_mask = create_bbox_locked_mask(
                 tool_detection.roi,
@@ -699,22 +716,22 @@ class HandGraspDetectionNode(Node):
     ) -> Optional[LockedToolMask]:
         if (
             self.latest_tool_mask is not None
-            and self.latest_tool_mask.source == "SAM_TRACKED"
+            and self.latest_tool_mask.source in {"SAM_TRACKED", "DEPTH_TRACKED"}
         ):
             return LockedToolMask(
                 roi=self.latest_tool_mask.roi,
                 mask=self.latest_tool_mask.mask.copy(),
-                source="SAM_LOCKED",
+                source=self._locked_source(self.latest_tool_mask.source),
             )
 
         if (
             self.tool_mask_anchor is not None
-            and self.tool_mask_anchor.source == "SAM_TRACKED"
+            and self.tool_mask_anchor.source in {"SAM_TRACKED", "DEPTH_TRACKED"}
         ):
             return LockedToolMask(
                 roi=self.tool_mask_anchor.roi,
                 mask=self.tool_mask_anchor.mask.copy(),
-                source="SAM_LOCKED",
+                source=self._locked_source(self.tool_mask_anchor.source),
             )
 
         if tool_detection is None:
@@ -732,6 +749,18 @@ class HandGraspDetectionNode(Node):
                 "Tool mask lock requested, but no YOLO tool ROI is available."
             )
             return None
+
+        depth_mask = self._create_depth_tool_mask(
+            tool_detection,
+            frame.shape[:2],
+            source="DEPTH_LOCKED",
+        )
+        if depth_mask is not None:
+            self.get_logger().info(
+                f"Locked depth tool mask: label={tool_detection.label}, "
+                f"roi={depth_mask.roi}"
+            )
+            return depth_mask
 
         if self.sam_segmenter is not None and self.sam_reseed_from_yolo:
             mask = self.sam_segmenter.segment(frame, tool_detection.roi)
@@ -756,6 +785,31 @@ class HandGraspDetectionNode(Node):
             return locked
 
         return None
+
+    def _create_depth_tool_mask(
+        self,
+        tool_detection: ToolDetection,
+        frame_shape: tuple[int, int],
+        source="DEPTH_TRACKED",
+    ) -> Optional[LockedToolMask]:
+        if not self.depth_tool_mask_enabled:
+            return None
+        return create_depth_locked_mask(
+            self.latest_depth_mm,
+            tool_detection.roi,
+            frame_shape,
+            tolerance_mm=self.depth_tool_mask_tolerance_mm,
+            margin=self.depth_tool_mask_margin,
+            source=source,
+        )
+
+    @staticmethod
+    def _locked_source(source: str) -> str:
+        if source == "DEPTH_TRACKED":
+            return "DEPTH_LOCKED"
+        if source == "SAM_TRACKED":
+            return "SAM_LOCKED"
+        return source
 
     def _scaled_pre_grasp_tool_mask(
         self,

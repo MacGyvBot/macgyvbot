@@ -9,6 +9,8 @@ from macgyvbot_perception.hand_tool_grasp.ml_grasp_classifier import (
 )
 from macgyvbot_perception.hand_tool_grasp.sam_tool_mask import (
     compute_mask_contact,
+    create_depth_locked_mask,
+    scale_locked_mask,
     validate_tracked_mask,
 )
 from macgyvbot_perception.hand_tool_grasp.visualization import (
@@ -92,6 +94,45 @@ def test_compute_mask_contact_confirms_landmark_inside_locked_mask():
     assert result.mask_contact_count == 1
     assert result.mask_contact_confirmed is True
     assert result.near_or_contact is True
+
+
+def test_create_depth_locked_mask_extracts_depth_band_in_roi():
+    depth_mm = np.full((40, 40), 900.0, dtype=np.float32)
+    depth_mm[10:22, 10:22] = 520.0
+    depth_mm[14:18, 14:18] = 0.0
+
+    locked = create_depth_locked_mask(
+        depth_mm,
+        roi=(9, 9, 23, 23),
+        frame_shape=depth_mm.shape,
+        tolerance_mm=35.0,
+        margin=2,
+        min_valid_ratio=0.2,
+    )
+
+    assert locked is not None
+    assert locked.source == "DEPTH_TRACKED"
+    assert bool(locked.mask[11, 11]) is True
+    assert bool(locked.mask[2, 2]) is False
+
+
+def test_scale_locked_mask_scales_and_moves_mask_center():
+    mask = np.zeros((40, 40), dtype=bool)
+    mask[10:20, 10:20] = True
+    locked = LockedToolMask((10, 10, 20, 20), mask, "PRE_GRASP_LOCKED")
+
+    scaled = scale_locked_mask(
+        locked,
+        frame_shape=mask.shape,
+        scale=1.2,
+        center=(24.0, 24.0),
+    )
+
+    assert scaled is not None
+    cx = (scaled.roi[0] + scaled.roi[2]) / 2
+    cy = (scaled.roi[1] + scaled.roi[3]) / 2
+    assert abs(cx - 24.0) <= 1.0
+    assert abs(cy - 24.0) <= 1.0
 
 
 def test_build_depth_grasp_info_confirms_similar_hand_tool_depth():

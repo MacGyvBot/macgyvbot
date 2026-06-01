@@ -24,6 +24,7 @@ from macgyvbot_perception.hand_tool_grasp.calculations import (
     median_depth_in_rect,
 )
 from macgyvbot_perception.hand_tool_grasp.sam_tool_mask import (
+    overlay_depth_mask,
     overlay_locked_mask,
 )
 
@@ -68,6 +69,7 @@ def draw_pick_overlay(
     result: dict,
     locked_tool: Optional[LockedToolMask] = None,
     candidate_tool_mask: Optional[LockedToolMask] = None,
+    depth_mm: Optional[np.ndarray] = None,
 ) -> None:
     """Draw pick handoff state with SAM mask tracking/lock emphasis."""
     active_mask = locked_tool or candidate_tool_mask
@@ -77,8 +79,12 @@ def draw_pick_overlay(
 
     if candidate_tool_mask is not None and locked_tool is None:
         overlay_locked_mask(frame, candidate_tool_mask, color=(255, 220, 0), alpha=0.28)
+        if candidate_tool_mask.source.startswith("DEPTH"):
+            overlay_depth_mask(frame, depth_mm, candidate_tool_mask, alpha=0.55)
     if locked_tool is not None:
         overlay_locked_mask(frame, locked_tool, color=(0, 255, 0), alpha=0.42)
+        if locked_tool.source.startswith("DEPTH"):
+            overlay_depth_mask(frame, depth_mm, locked_tool, alpha=0.60)
 
     if active_tool_roi is not None:
         label = (

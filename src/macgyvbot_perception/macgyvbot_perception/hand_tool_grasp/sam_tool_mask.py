@@ -139,6 +139,54 @@ def create_bbox_locked_mask(roi: Rect, frame_shape: tuple[int, int]) -> LockedTo
     return LockedToolMask(roi=(x1, y1, x2, y2), mask=mask, source="BBOX_LOCKED")
 
 
+def create_depth_locked_mask(
+    depth_mm: Optional[np.ndarray],
+    roi: Rect,
+    frame_shape: tuple[int, int],
+    tolerance_mm: float = 45.0,
+    margin: int = 12,
+    min_valid_ratio: float = 0.20,
+    min_area_ratio: float = 0.04,
+    max_area_ratio: float = 1.60,
+    source: str = "DEPTH_TRACKED",
+) -> Optional[LockedToolMask]:
+    """Create a tool mask from pixels near the bbox median depth."""
+    if depth_mm is None:
+        return None
+
+    height, width = frame_shape
+    x1, y1, x2, y2 = _clip_rect(roi, width, height)
+    if x2 <= x1 or y2 <= y1:
+        return None
+
+    bbox_depth = depth_mm[y1:y2, x1:x2]
+    valid_bbox_depth = bbox_depth[bbox_depth > 0]
+    bbox_area = max(1, (x2 - x1) * (y2 - y1))
+    if valid_bbox_depth.size / bbox_area < min_valid_ratio:
+        return None
+
+    target_depth = float(np.median(valid_bbox_depth))
+    rx1, ry1, rx2, ry2 = _clip_rect(_expand_rect((x1, y1, x2, y2), margin), width, height)
+    roi_depth = depth_mm[ry1:ry2, rx1:rx2]
+    valid = roi_depth > 0
+    close_depth = np.abs(roi_depth - target_depth) <= tolerance_mm
+
+    mask = np.zeros((height, width), dtype=np.uint8)
+    mask[ry1:ry2, rx1:rx2] = (valid & close_depth).astype(np.uint8)
+    mask = _clean_depth_mask(mask)
+
+    mask_bool = mask.astype(bool)
+    area = mask_area(mask_bool)
+    area_ratio = area / bbox_area
+    if area <= 0 or area_ratio < min_area_ratio or area_ratio > max_area_ratio:
+        return None
+
+    mask_roi = mask_to_roi(mask_bool)
+    if mask_roi is None:
+        return None
+    return LockedToolMask(roi=mask_roi, mask=mask_bool, source=source)
+
+
 def scale_locked_mask(
     locked_tool: LockedToolMask,
     frame_shape: tuple[int, int],
@@ -287,6 +335,33 @@ def overlay_locked_mask(
     frame[mask] = cv2.addWeighted(frame, 1.0 - alpha, overlay, alpha, 0)[mask]
 
 
+def overlay_depth_mask(
+    frame: np.ndarray,
+    depth_mm: Optional[np.ndarray],
+    locked_tool: Optional[LockedToolMask],
+    alpha: float = 0.55,
+) -> None:
+    if depth_mm is None or locked_tool is None:
+        return
+    mask = locked_tool.mask.astype(bool)
+    if not mask.any():
+        return
+
+    valid_depth = depth_mm[(depth_mm > 0) & mask]
+    if valid_depth.size == 0:
+        return
+
+    low = float(np.percentile(valid_depth, 5))
+    high = float(np.percentile(valid_depth, 95))
+    if high <= low:
+        high = low + 1.0
+
+    normalized = np.clip((depth_mm - low) / (high - low), 0.0, 1.0)
+    depth_u8 = (normalized * 255.0).astype(np.uint8)
+    color = cv2.applyColorMap(depth_u8, cv2.COLORMAP_JET)
+    frame[mask] = cv2.addWeighted(frame, 1.0 - alpha, color, alpha, 0)[mask]
+
+
 def resolve_checkpoint_path(checkpoint_path: str) -> Path:
     return Path(resolve_weight_path(checkpoint_path))
 
@@ -324,3 +399,10 @@ def _largest_component(mask: np.ndarray) -> np.ndarray:
         return mask
     largest = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
     return labels == largest
+
+
+def _clean_depth_mask(mask: np.ndarray) -> np.ndarray:
+    kernel = np.ones((3, 3), np.uint8)
+    cleaned = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_OPEN, kernel)
+    cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, kernel)
+    return _largest_component(cleaned).astype(np.uint8)
