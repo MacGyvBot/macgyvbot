@@ -157,7 +157,7 @@ class HandGraspDetectionNode(Node):
             ).value
         )
         self.sam_enabled = self._as_bool(
-            self.declare_parameter("sam_enabled", False).value
+            self.declare_parameter("sam_enabled", True).value
         )
         self.sam_backend = str(self.declare_parameter("sam_backend", "mobile_sam").value)
         self.sam_checkpoint = str(
@@ -209,6 +209,15 @@ class HandGraspDetectionNode(Node):
         )
         self.depth_tool_mask_margin = int(
             self.declare_parameter("depth_tool_mask_margin", 12).value
+        )
+        self.sam_depth_tolerance_mm = float(
+            self.declare_parameter("sam_depth_tolerance_mm", 30.0).value
+        )
+        self.sam_depth_min_valid_ratio = float(
+            self.declare_parameter("sam_depth_min_valid_ratio", 0.03).value
+        )
+        self.sam_depth_expand_iterations = int(
+            self.declare_parameter("sam_depth_expand_iterations", 1).value
         )
         self.allow_bbox_lock = self._as_bool(
             self.declare_parameter("allow_bbox_lock", True).value
@@ -267,7 +276,7 @@ class HandGraspDetectionNode(Node):
             image_size=yolo_imgsz,
         )
         self.ml_classifier = self._create_ml_classifier()
-        self.sam_segmenter = None
+        self.sam_segmenter = self._create_sam_segmenter()
 
         self.result_pub = self.create_publisher(
             HumanGraspResult, self.result_topic, 10
@@ -427,7 +436,7 @@ class HandGraspDetectionNode(Node):
             self.last_yolo_seen_frame = self.frame_index
 
         if self.depth_lock_active:
-            self._update_depth_tool_lock(tool_detection or self.latest_tool_detection)
+            self._update_depth_tool_lock(frame, tool_detection or self.latest_tool_detection)
 
         detected_tool_roi = (
             self.locked_tool.roi
@@ -672,9 +681,22 @@ class HandGraspDetectionNode(Node):
 
     def _update_depth_tool_lock(
         self,
+        frame,
         _tool_detection: Optional[ToolDetection],
     ) -> None:
         if self.latest_depth_mm is None:
+            return
+
+        sam_depth_locked = self._create_sam_depth_tool_mask(frame, _tool_detection)
+        if sam_depth_locked is not None:
+            self.locked_tool = sam_depth_locked
+            self.depth_lock_active = False
+            self.depth_lock_preview_tool = None
+            self._publish_mask_lock_result(sam_depth_locked)
+            self.get_logger().info(
+                f"SAM+Depth tool mask ready: source={sam_depth_locked.source}, "
+                f"roi={sam_depth_locked.roi}"
+            )
             return
 
         if self.depth_lock_roi is None:
@@ -732,6 +754,64 @@ class HandGraspDetectionNode(Node):
 
         if self._depth_lock_elapsed_sec() >= self.depth_lock_duration_sec:
             self._publish_depth_tool_lock_failure("depth_lock_unstable")
+
+    def _create_sam_depth_tool_mask(
+        self,
+        frame,
+        tool_detection: Optional[ToolDetection],
+    ) -> Optional[LockedToolMask]:
+        if tool_detection is None or self.sam_segmenter is None:
+            return None
+
+        sam_mask = self.sam_segmenter.segment(frame, tool_detection.roi)
+        if sam_mask is None or int(sam_mask.sum()) <= 0:
+            return None
+
+        refined = self._refine_sam_mask_with_depth(sam_mask)
+        roi = mask_to_roi(refined)
+        if roi is None:
+            return None
+
+        self.depth_lock_preview_tool = LockedToolMask(
+            roi=roi,
+            mask=refined,
+            source="DEPTH_SAM_LOCKING",
+        )
+        return LockedToolMask(
+            roi=roi,
+            mask=refined,
+            source="DEPTH_SAM_LOCKED_TOOL",
+        )
+
+    def _refine_sam_mask_with_depth(self, sam_mask: np.ndarray) -> np.ndarray:
+        sam_bool = sam_mask.astype(bool)
+        if self.latest_depth_mm is None or not sam_bool.any():
+            return self._expand_binary_mask(
+                sam_bool.astype(np.uint8),
+                iterations=self.sam_depth_expand_iterations,
+            ).astype(bool)
+
+        valid = (self.latest_depth_mm > 0) & sam_bool
+        sam_area = max(1, int(sam_bool.sum()))
+        valid_ratio = int(valid.sum()) / sam_area
+        if valid_ratio < self.sam_depth_min_valid_ratio:
+            return self._expand_binary_mask(
+                sam_bool.astype(np.uint8),
+                iterations=self.sam_depth_expand_iterations,
+            ).astype(bool)
+
+        target_depth = float(np.median(self.latest_depth_mm[valid]))
+        close_depth = (
+            (self.latest_depth_mm > 0)
+            & (np.abs(self.latest_depth_mm - target_depth) <= self.sam_depth_tolerance_mm)
+        )
+        refined = sam_bool & (close_depth | ~valid)
+        if not refined.any():
+            refined = sam_bool
+        return self._expand_binary_mask(
+            refined.astype(np.uint8),
+            iterations=self.sam_depth_expand_iterations,
+        ).astype(bool)
 
     def _depth_lock_preview_from_accumulator(self) -> Optional[LockedToolMask]:
         if (
@@ -829,10 +909,10 @@ class HandGraspDetectionNode(Node):
         return max(0.0, time.monotonic() - self.depth_lock_started_sec)
 
     @staticmethod
-    def _expand_binary_mask(mask: np.ndarray) -> np.ndarray:
+    def _expand_binary_mask(mask: np.ndarray, iterations: int = 1) -> np.ndarray:
         kernel = np.ones((3, 3), np.uint8)
         expanded = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_CLOSE, kernel)
-        return cv2.dilate(expanded, kernel, iterations=1)
+        return cv2.dilate(expanded, kernel, iterations=max(0, int(iterations)))
 
     def _update_prelock_tool_mask(
         self,
