@@ -235,6 +235,11 @@ GUI의 `복귀` 버튼과 Home 복귀 표현은 `/tool_command`의 `action=home`
 종료하고 Home 복귀가 완료된 뒤
 GUI와 command node를 종료합니다.
 
+operator GUI의 Gripper Control 패널은 task coordinator가 제공하는 typed
+`/manual_gripper_control` service를 통해 RG2 width 명령을 요청합니다. GUI는
+slider release 또는 `적용` 버튼에서만 요청을 보내며, task coordinator는 작업
+실행 중이거나 그리퍼 상태가 안전하지 않으면 요청을 거부합니다.
+
 ## Task Coordinator
 
 `macgyvbot_task`는 command routing과 task execution을 분리합니다.

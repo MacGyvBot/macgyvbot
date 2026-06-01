@@ -29,6 +29,7 @@ from macgyvbot_interfaces.msg import (
     ToolDropEvent,
     ToolMaskLock,
 )
+from macgyvbot_interfaces.srv import SetGripper
 
 from macgyvbot_config.drawer import DRAWER_OBSERVATION_J6_DEG
 from macgyvbot_config.models import YOLO_MODEL_NAME
@@ -45,6 +46,7 @@ from macgyvbot_config.topics import (
     HAND_GRASP_IMAGE_TOPIC,
     HAND_GRASP_MASK_LOCK_TOPIC,
     HAND_GRASP_TOPIC,
+    MANUAL_GRIPPER_SERVICE,
     ROBOT_STATUS_TOPIC,
     TASK_CONTROL_TOPIC,
     TASK_REQUEST_TOPIC,
@@ -188,6 +190,7 @@ class TaskCoordinatorNode(Node):
         super().__init__("task_coordinator_node")
 
         self.declare_parameter("display_debug_windows", False)
+        self.declare_parameter("manual_gripper_service", MANUAL_GRIPPER_SERVICE)
         self.bridge = CvBridge()
         self.display_debug_windows = self._read_bool_parameter(
             "display_debug_windows",
@@ -207,6 +210,7 @@ class TaskCoordinatorNode(Node):
         self._suspended_task_name = None
         self._exit_home_thread = None
         self._vlm_preload_timer = None
+        self._manual_gripper_lock = threading.Lock()
 
         self.grasp_point_mode = self._read_grasp_point_mode()
         self.yolo_model = self._read_yolo_model()
@@ -354,6 +358,7 @@ class TaskCoordinatorNode(Node):
         )
 
         self._create_subscriptions()
+        self._create_services()
         self._log_startup()
         self._vlm_preload_timer = self.create_timer(
             3.0,
@@ -503,13 +508,158 @@ class TaskCoordinatorNode(Node):
         )
         self.create_subscription(ToolDropEvent, TOOL_DROP_TOPIC, self._tool_drop_cb, 10)
 
+    def _create_services(self):
+        self.manual_gripper_service_name = (
+            str(self.get_parameter("manual_gripper_service").value).strip()
+            or MANUAL_GRIPPER_SERVICE
+        )
+        self.create_service(
+            SetGripper,
+            self.manual_gripper_service_name,
+            self._manual_gripper_cb,
+        )
+
     def _log_startup(self):
         self.get_logger().info("task coordinator node 초기화 완료")
         self.get_logger().info(f"task request 토픽: {TASK_REQUEST_TOPIC}")
         self.get_logger().info(f"task control 토픽: {TASK_CONTROL_TOPIC}")
         self.get_logger().info(f"robot status 토픽: {ROBOT_STATUS_TOPIC}")
+        self.get_logger().info(
+            f"manual gripper service: {self.manual_gripper_service_name}"
+        )
         self.get_logger().info(f"YOLO model: {self.yolo_model}")
         self.get_logger().info(f"grasp point mode: {self.grasp_point_mode}")
+
+    def _manual_gripper_cb(self, request, response):
+        requested_width_mm = float(getattr(request, "width_mm", 0.0))
+        source = str(getattr(request, "source", "") or "unknown").strip()
+        response.requested_width_mm = requested_width_mm
+        response.applied_width_mm = 0.0
+
+        allowed, reason = self._manual_gripper_is_allowed()
+        if not allowed:
+            return self._reject_manual_gripper(
+                response,
+                reason,
+                "작업 실행 중에는 수동 그리퍼 조작을 사용할 수 없습니다.",
+                requested_width_mm,
+                source,
+            )
+
+        max_width_mm = self._manual_gripper_max_width_mm()
+        if requested_width_mm < 0.0 or requested_width_mm > max_width_mm:
+            return self._reject_manual_gripper(
+                response,
+                "width_out_of_range",
+                f"그리퍼 폭은 0-{max_width_mm:.0f} mm 범위에서 요청해야 합니다.",
+                requested_width_mm,
+                source,
+            )
+
+        status = self._safe_gripper_status()
+        if status is None:
+            return self._reject_manual_gripper(
+                response,
+                "gripper_status_unavailable",
+                "그리퍼 상태를 읽지 못해 수동 조작을 중단합니다.",
+                requested_width_mm,
+                source,
+            )
+        if status[0]:
+            return self._reject_manual_gripper(
+                response,
+                "gripper_busy",
+                "그리퍼가 이미 움직이는 중이라 새 명령을 보낼 수 없습니다.",
+                requested_width_mm,
+                source,
+            )
+        if any(status[2:]):
+            return self._reject_manual_gripper(
+                response,
+                "gripper_safety_error",
+                "그리퍼 안전 상태가 정상적이지 않아 수동 조작을 중단합니다.",
+                requested_width_mm,
+                source,
+            )
+
+        width_raw = int(round(requested_width_mm * 10.0))
+        with self._manual_gripper_lock:
+            try:
+                self.gripper.move_gripper(width_raw)
+            except Exception as exc:
+                self.get_logger().error(
+                    "manual gripper command failed: "
+                    f"source={source}, width_mm={requested_width_mm:.1f}, "
+                    f"error={type(exc).__name__}: {exc}"
+                )
+                return self._reject_manual_gripper(
+                    response,
+                    "gripper_command_failed",
+                    "그리퍼 명령 전송에 실패했습니다.",
+                    requested_width_mm,
+                    source,
+                )
+
+        response.success = True
+        response.status = "accepted"
+        response.message = f"그리퍼를 {requested_width_mm:.0f} mm로 적용합니다."
+        response.applied_width_mm = requested_width_mm
+        self.get_logger().info(
+            "manual gripper command accepted: "
+            f"source={source}, width_mm={requested_width_mm:.1f}, raw={width_raw}"
+        )
+        return response
+
+    def _manual_gripper_is_allowed(self):
+        with self._queue_lock:
+            active_step = self._current_step is not None or self._step_thread_alive()
+            queued = bool(self._queue)
+            paused = self.pause_req.is_set()
+
+        exit_home_running = (
+            self._exit_home_thread is not None
+            and self._exit_home_thread.is_alive()
+        )
+        if exit_home_running:
+            return False, "exit_home_running"
+        if active_step:
+            return False, "task_step_active"
+        if queued and not paused:
+            return False, "task_queue_active"
+        if self.state.picking and not paused:
+            return False, "task_active"
+        return True, "safe"
+
+    def _manual_gripper_max_width_mm(self):
+        return float(getattr(self.gripper, "max_width", 0) or 0) / 10.0
+
+    def _safe_gripper_status(self):
+        try:
+            return self.gripper.get_status()
+        except Exception as exc:
+            self.get_logger().warn(
+                f"manual gripper status read failed: {type(exc).__name__}: {exc}"
+            )
+            return None
+
+    def _reject_manual_gripper(
+        self,
+        response,
+        status,
+        message,
+        requested_width_mm,
+        source,
+    ):
+        response.success = False
+        response.status = status
+        response.message = message
+        response.applied_width_mm = 0.0
+        self.get_logger().warn(
+            "manual gripper command rejected: "
+            f"status={status}, source={source}, width_mm={requested_width_mm:.1f}, "
+            f"message={message}"
+        )
+        return response
 
     def _task_request_cb(self, msg):
         task = str(msg.task or "").strip().lower()

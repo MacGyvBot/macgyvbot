@@ -49,6 +49,7 @@ typed request/response contract instead of a streamed topic.
 
 | Service | Type | Server | Client | Payload |
 | --- | --- | --- | --- | --- |
+| `/manual_gripper_control` | `macgyvbot_interfaces/srv/SetGripper` | `macgyvbot_task` `task_coordinator_node` | `macgyvbot_ui` `operator_ui_node` | Idle/paused-only manual RG2 width request from the GUI; server rejects active task execution, unknown/unsafe gripper state, and out-of-range width values |
 | `/vlm_grasp` | `macgyvbot_interfaces/srv/VLMGrasp` | `macgyvbot_perception` `vlm_grasp_service_node` | `macgyvbot_task` | Top-view VLM grasp inference using color image, bbox, label, target label, and mode; response returns grasp pixel, source, orientation/yaw, and error status |
 
 ## Contract Rules
