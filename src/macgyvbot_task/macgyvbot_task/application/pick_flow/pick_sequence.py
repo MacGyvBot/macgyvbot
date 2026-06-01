@@ -398,24 +398,33 @@ class PickSequenceRunner:
             return False
 
         log.error("사용자 손 위치 확인 실패. 원래 공구 위치로 반환합니다.")
-        returned = self.handoff.return_tool_to_original_position(
-            plan.target_x,
-            plan.target_y,
-            plan.travel_z,
-            plan.grasp_z,
-            context["ori"],
+        returned, drawer_closed, home_ok = self._return_tool_close_drawer_home(
+            plan,
+            context,
             log,
-            safe_z_min=context["safe_z_min"],
+            lift_from_current=False,
         )
-        status = "returned" if returned else "failed"
+        status = "returned" if returned and drawer_closed and home_ok else "failed"
         self.state._publish_robot_status(
             status,
             message=(
-                "사용자 손 위치 확인 실패로 공구를 원래 위치에 반환했습니다."
+                "사용자 손 위치 확인 실패로 공구를 원래 위치에 반환하고 서랍을 닫았습니다."
+                if returned and drawer_closed and home_ok
+                else "사용자 손 위치 확인 실패 후 서랍을 닫았지만 Home 복귀에 실패했습니다."
+                if returned and drawer_closed
+                else "사용자 손 위치 확인 실패 후 공구를 반환했지만 서랍 닫기에 실패했습니다."
                 if returned
                 else "사용자 손 위치 확인 실패 후 원위치 반환에도 실패했습니다."
             ),
-            reason="handoff_pose_unavailable",
+            reason=(
+                "handoff_pose_unavailable"
+                if returned and drawer_closed and home_ok
+                else "handoff_pose_unavailable_home_after_recovery_failed"
+                if returned and drawer_closed
+                else "handoff_pose_unavailable_drawer_close_failed"
+                if returned
+                else "handoff_pose_unavailable"
+            ),
             command=self.state.current_command,
         )
         return False
@@ -435,6 +444,44 @@ class PickSequenceRunner:
             return False
 
         log.error("사용자 잡기 인식 실패. 원래 공구 위치로 반환합니다.")
+        returned, drawer_closed, home_ok = self._return_tool_close_drawer_home(
+            plan,
+            context,
+            log,
+        )
+        status = "returned" if returned and drawer_closed and home_ok else "failed"
+        self.state._publish_robot_status(
+            status,
+            message=(
+                "사용자 잡기 인식 실패로 공구를 원래 위치에 반환하고 서랍을 닫았습니다."
+                if returned and drawer_closed and home_ok
+                else "사용자 잡기 인식 실패 후 서랍을 닫았지만 Home 복귀에 실패했습니다."
+                if returned and drawer_closed
+                else "사용자 잡기 인식 실패 후 공구를 반환했지만 서랍 닫기에 실패했습니다."
+                if returned
+                else "사용자 잡기 인식 실패 후 원위치 반환에도 실패했습니다."
+            ),
+            reason=(
+                "handoff_timeout"
+                if returned and drawer_closed and home_ok
+                else "handoff_timeout_home_after_recovery_failed"
+                if returned and drawer_closed
+                else "handoff_timeout_drawer_close_failed"
+                if returned
+                else "handoff_timeout"
+            ),
+            command=self.state.current_command,
+        )
+        return False
+
+    def _return_tool_close_drawer_home(
+        self,
+        plan,
+        context,
+        log,
+        lift_from_current=True,
+    ):
+        drawer_id = context.get("drawer_id")
         returned = self.handoff.return_tool_to_original_position(
             plan.target_x,
             plan.target_y,
@@ -443,19 +490,37 @@ class PickSequenceRunner:
             context["ori"],
             log,
             safe_z_min=context["safe_z_min"],
+            drawer_id=drawer_id,
+            move_home=False,
+            lift_from_current=lift_from_current,
         )
-        status = "returned" if returned else "failed"
+        if not returned:
+            return False, False, False
+
+        if self.drawer_flow is None or drawer_id is None:
+            home_ok = self.handoff.move_home_after_handoff(
+                log,
+                publish_on_failure=False,
+            )
+            return True, True, home_ok
+
+        log.info(f"복구 반환 후 drawer {drawer_id}를 닫습니다.")
         self.state._publish_robot_status(
-            status,
-            message=(
-                "사용자 잡기 인식 실패로 공구를 원래 위치에 반환했습니다."
-                if returned
-                else "사용자 잡기 인식 실패 후 원위치 반환에도 실패했습니다."
-            ),
-            reason="handoff_timeout",
+            "closing_drawer",
+            tool_name=self.state.target_label,
+            action="bring",
+            message=f"{self.state.target_label}가 있던 서랍을 닫습니다.",
             command=self.state.current_command,
         )
-        return False
+        drawer_closed = self.drawer_flow.close_drawer(drawer_id, log)
+        if not drawer_closed:
+            return True, False, False
+
+        home_ok = self.handoff.move_home_after_handoff(
+            log,
+            publish_on_failure=False,
+        )
+        return True, True, home_ok
 
     def _release_to_human(self):
         self.state.logger().info("10단계: 사용자 잡기 확인 후 그리퍼 오픈(놓기)")
