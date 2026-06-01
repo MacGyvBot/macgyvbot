@@ -85,7 +85,7 @@ source합니다.
 src/macgyvbot_resources/calibration/T_gripper2camera.npy
 src/macgyvbot_resources/weights/yolov11_best.pt
 src/macgyvbot_resources/weights/hand_grasp_model.pkl
-src/macgyvbot_resources/weights/mobile_sam_FT.pt
+src/macgyvbot_resources/weights/mobile_sam.pt
 src/macgyvbot_resources/weights/vlm/
 ```
 
