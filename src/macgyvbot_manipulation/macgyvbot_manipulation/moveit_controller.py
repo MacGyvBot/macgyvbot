@@ -127,10 +127,15 @@ def _format_joint_deltas(joint_names, current_positions, raw_positions, goal_pos
     return "; ".join(parts)
 
 
+def _joint_delta_limit_mask(joint_names):
+    return np.array([name != WRIST_JOINT_NAME for name in joint_names], dtype=bool)
+
+
 def _pose_goal_to_near_current_state_goal(robot, pose_goal, logger):
     robot_model = robot.get_robot_model()
     jmg = robot_model.get_joint_model_group(GROUP_NAME)
     joint_names = list(jmg.active_joint_model_names)
+    delta_limit_mask = _joint_delta_limit_mask(joint_names)
 
     try:
         with robot.get_planning_scene_monitor().read_only() as scene:
@@ -215,11 +220,16 @@ def _pose_goal_to_near_current_state_goal(robot, pose_goal, logger):
 
         deltas = goal_positions - current_positions
         abs_deltas = np.abs(deltas)
-        max_delta = float(np.max(abs_deltas))
+        limited_abs_deltas = abs_deltas[delta_limit_mask]
+        max_limited_delta = (
+            float(np.max(limited_abs_deltas))
+            if len(limited_abs_deltas) > 0
+            else 0.0
+        )
         total_delta = float(np.sum(abs_deltas))
         candidates.append(
             (
-                max_delta,
+                max_limited_delta,
                 total_delta,
                 seed_index,
                 goal_state,
@@ -237,7 +247,7 @@ def _pose_goal_to_near_current_state_goal(robot, pose_goal, logger):
 
     candidates.sort(key=lambda candidate: (candidate[0], candidate[1]))
     (
-        max_delta,
+        max_limited_delta,
         total_delta,
         seed_index,
         goal_state,
@@ -248,7 +258,7 @@ def _pose_goal_to_near_current_state_goal(robot, pose_goal, logger):
     logger.info(
         "pose_goal IK best candidate: "
         f"seed={seed_index}, candidates={len(candidates)}, "
-        f"max_delta={math.degrees(max_delta):.1f}deg, "
+        f"max_limited_delta={math.degrees(max_limited_delta):.1f}deg, "
         f"total_delta={math.degrees(total_delta):.1f}deg"
     )
     logger.info(
@@ -261,11 +271,11 @@ def _pose_goal_to_near_current_state_goal(robot, pose_goal, logger):
         )
     )
 
-    if max_delta > POSE_GOAL_MAX_JOINT_DELTA_RAD:
+    if max_limited_delta > POSE_GOAL_MAX_JOINT_DELTA_RAD:
         logger.warn(
-            "pose_goal IK 후보의 최대 joint delta가 안전 한계를 초과해 "
+            "pose_goal IK 후보의 j1~j5 최대 joint delta가 안전 한계를 초과해 "
             "planning을 중단합니다: "
-            f"max_delta={math.degrees(max_delta):.1f}deg, "
+            f"max_limited_delta={math.degrees(max_limited_delta):.1f}deg, "
             f"limit={math.degrees(POSE_GOAL_MAX_JOINT_DELTA_RAD):.1f}deg"
         )
         return None
