@@ -1,4 +1,5 @@
 """Force-based robot motion helpers."""
+from macgyvbot_domain.logging import emit_structured_log
 
 import rclpy
 
@@ -32,11 +33,9 @@ class ForceReactionDetector:
             min_z=f"{SAFE_Z_MIN:.3f}",
             msg="Z force descent started",
         )
-        logger.info(
-            "Z force 하강 시작 "
+        emit_structured_log(logger, 'info', "log", "status", svc='manipulation', pipe='force', msg="Z force 하강 시작 "
             f"threshold={RETURN_HOME_FORCE_THRESHOLD_N:.1f}N, "
-            f"min_z={SAFE_Z_MIN:.3f}"
-        )
+            f"min_z={SAFE_Z_MIN:.3f}")
 
         while rclpy.ok():
             if self.interrupted():
@@ -47,7 +46,7 @@ class ForceReactionDetector:
                     reason="interrupted",
                     msg="Z force descent interrupted",
                 )
-                logger.info("Z force 하강을 stop/pause 요청으로 중단합니다.")
+                emit_structured_log(logger, 'info', "log", "status", svc='manipulation', pipe='force', msg="Z force 하강을 stop/pause 요청으로 중단합니다.")
                 return None
 
             force_z = self._latest_force_z()
@@ -61,10 +60,8 @@ class ForceReactionDetector:
                     z=f"{current_z:.3f}",
                     msg="Z force threshold reached",
                 )
-                logger.info(
-                    "Z 반대방향 힘 감지로 하강을 중단합니다: "
-                    f"force_z={force_z:.2f}N, z={current_z:.3f}"
-                )
+                emit_structured_log(logger, 'info', "log", "status", svc='manipulation', pipe='force', msg="Z 반대방향 힘 감지로 하강을 중단합니다: "
+                    f"force_z={force_z:.2f}N, z={current_z:.3f}")
                 return current_z
 
             if current_z <= SAFE_Z_MIN:
@@ -77,10 +74,8 @@ class ForceReactionDetector:
                     z=f"{current_z:.3f}",
                     msg="safe minimum Z reached before force threshold",
                 )
-                logger.warn(
-                    "Z 반력이 임계값에 도달하지 않았지만 안전 최소 Z까지 하강했습니다: "
-                    f"last_force_z={force_z}"
-                )
+                emit_structured_log(logger, 'warn', "log", "status", svc='manipulation', pipe='force', msg="Z 반력이 임계값에 도달하지 않았지만 안전 최소 Z까지 하강했습니다: "
+                    f"last_force_z={force_z}")
                 return current_z
 
             next_z = max(SAFE_Z_MIN, current_z - RETURN_HOME_DESCENT_STEP_M)
@@ -90,7 +85,7 @@ class ForceReactionDetector:
             )
             if not ok:
                 if self.interrupted():
-                    logger.info("Z force 하강 motion 중 stop/pause 요청을 확인했습니다.")
+                    emit_structured_log(logger, 'info', "log", "status", svc='manipulation', pipe='force', msg="Z force 하강 motion 중 stop/pause 요청을 확인했습니다.")
                     return None
 
                 logger.error(
@@ -101,7 +96,7 @@ class ForceReactionDetector:
                     z=f"{next_z:.3f}",
                     msg="Z force descent motion failed",
                 )
-                logger.error("Z force 하강 motion 계획/실행 실패")
+                emit_structured_log(logger, 'error', "log", "status", svc='manipulation', pipe='force', msg="Z force 하강 motion 계획/실행 실패")
                 return None
 
             current_z = next_z

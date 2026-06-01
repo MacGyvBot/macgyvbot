@@ -1,4 +1,5 @@
 """Shared robot gripper grasp verification policy."""
+from macgyvbot_domain.logging import emit_structured_log
 
 import time
 
@@ -32,10 +33,10 @@ class GraspVerifier:
                 msg="grasp attempt started",
             )
             if self.interrupted():
-                logger.info(f"{failure_prefix} 시도를 stop/pause 요청으로 중단합니다.")
+                emit_structured_log(logger, 'info', "log", "status", svc='manipulation', pipe='gripper', msg=f"{failure_prefix} 시도를 stop/pause 요청으로 중단합니다.")
                 return False
 
-            logger.info(f"{failure_prefix} 시도 {attempt}/{GRASP_RETRY_LIMIT}")
+            emit_structured_log(logger, 'info', "log", "status", svc='manipulation', pipe='gripper', msg=f"{failure_prefix} 시도 {attempt}/{GRASP_RETRY_LIMIT}")
             if publish_attempt is not None:
                 publish_attempt(attempt, GRASP_RETRY_LIMIT)
 
@@ -51,12 +52,10 @@ class GraspVerifier:
                 return True
 
             if self.interrupted():
-                logger.info(f"{failure_prefix} 확인을 stop/pause 요청으로 중단합니다.")
+                emit_structured_log(logger, 'info', "log", "status", svc='manipulation', pipe='gripper', msg=f"{failure_prefix} 확인을 stop/pause 요청으로 중단합니다.")
                 return False
 
-            logger.warn(
-                f"{failure_prefix} 실패. 재시도 준비 {attempt}/{GRASP_RETRY_LIMIT}"
-            )
+            emit_structured_log(logger, 'warn', "log", "status", svc='manipulation', pipe='gripper', msg=f"{failure_prefix} 실패. 재시도 준비 {attempt}/{GRASP_RETRY_LIMIT}")
             self.gripper.open_gripper()
             self.wait_fn(GRASP_RETRY_WAIT_SEC)
 
@@ -69,7 +68,7 @@ class GraspVerifier:
 
         while time.monotonic() - start_time < GRASP_VERIFY_TIMEOUT_SEC:
             if self.interrupted():
-                logger.info("그리퍼 grasp 확인을 stop/pause 요청으로 중단합니다.")
+                emit_structured_log(logger, 'info', "log", "status", svc='manipulation', pipe='gripper', msg="그리퍼 grasp 확인을 stop/pause 요청으로 중단합니다.")
                 return False
 
             try:
@@ -78,7 +77,7 @@ class GraspVerifier:
                     logger,
                 )
             except Exception as exc:
-                logger.warn(f"그리퍼 상태 읽기 실패: {exc}")
+                emit_structured_log(logger, 'warn', "log", "status", svc='manipulation', pipe='gripper', msg=f"그리퍼 상태 읽기 실패: {exc}")
                 return False
 
             last_status = {
@@ -106,7 +105,7 @@ class GraspVerifier:
             last_status=last_status,
             msg="grasp verification failed",
         )
-        logger.warn(f"그리퍼 grasp 확인 실패: status={last_status}")
+        emit_structured_log(logger, 'warn', "log", "status", svc='manipulation', pipe='gripper', msg=f"그리퍼 grasp 확인 실패: status={last_status}")
         return False
 
 
@@ -124,25 +123,19 @@ def read_grasp_confirmation(gripper, logger, log_success=True):
         return False, busy, status, width_mm
 
     if width_mm is None:
-        logger.warn(
-            "그리퍼 grip detected 신호가 있으나 폭을 확인하지 못해 "
-            "grasp 성공으로 처리하지 않습니다."
-        )
+        emit_structured_log(logger, 'warn', "log", "status", svc='manipulation', pipe='gripper', msg="그리퍼 grip detected 신호가 있으나 폭을 확인하지 못해 "
+            "grasp 성공으로 처리하지 않습니다.")
         return False, busy, status, width_mm
 
     if width_mm <= GRIPPER_CLOSED_WIDTH_THRESHOLD_MM:
-        logger.warn(
-            "그리퍼가 완전히 닫힌 상태로 판단되어 grasp 실패로 처리합니다: "
+        emit_structured_log(logger, 'warn', "log", "status", svc='manipulation', pipe='gripper', msg="그리퍼가 완전히 닫힌 상태로 판단되어 grasp 실패로 처리합니다: "
             f"width={width_mm:.1f}mm, "
-            f"threshold={GRIPPER_CLOSED_WIDTH_THRESHOLD_MM:.1f}mm"
-        )
+            f"threshold={GRIPPER_CLOSED_WIDTH_THRESHOLD_MM:.1f}mm")
         return False, busy, status, width_mm
 
     if log_success:
-        logger.info(
-            "그리퍼 grip detected 신호와 폭으로 grasp 성공을 확인했습니다: "
-            f"width={width_mm:.1f}mm"
-        )
+        emit_structured_log(logger, 'info', "log", "status", svc='manipulation', pipe='gripper', msg="그리퍼 grip detected 신호와 폭으로 grasp 성공을 확인했습니다: "
+            f"width={width_mm:.1f}mm")
     return True, busy, status, width_mm
 
 
@@ -150,5 +143,5 @@ def _read_width_mm(gripper, logger):
     try:
         return float(gripper.get_width())
     except Exception as exc:
-        logger.warn(f"그리퍼 폭 읽기 실패: {exc}")
+        emit_structured_log(logger, 'warn', "log", "status", svc='manipulation', pipe='gripper', msg=f"그리퍼 폭 읽기 실패: {exc}")
         return None

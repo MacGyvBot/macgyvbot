@@ -1,6 +1,7 @@
 """Pick target planning helpers."""
 
 from __future__ import annotations
+from macgyvbot_domain.logging import emit_structured_log
 
 from macgyvbot_config.pick import (
     APPROACH_Z_OFFSET,
@@ -33,26 +34,20 @@ class PickTargetPlanner:
         travel_z = SAFE_Z
 
         if approach_z < grasp_z:
-            logger.warn(
-                f"계산된 approach_z({approach_z:.3f})가 "
-                f"grasp_z({grasp_z:.3f})보다 낮아 grasp_z로 맞춥니다."
-            )
+            emit_structured_log(logger, 'warn', "log", "status", svc='task', pipe='pick', msg=f"계산된 approach_z({approach_z:.3f})가 "
+                f"grasp_z({grasp_z:.3f})보다 낮아 grasp_z로 맞춥니다.")
             approach_z = grasp_z
 
         if grasp_z < safe_z_min:
-            logger.warn(
-                f"계산된 grasp_z({grasp_z:.3f})가 "
+            emit_structured_log(logger, 'warn', "log", "status", svc='task', pipe='pick', msg=f"계산된 grasp_z({grasp_z:.3f})가 "
                 f"safe_z_min({safe_z_min:.3f})보다 낮아 "
-                "safe_z_min으로 맞춥니다."
-            )
+                "safe_z_min으로 맞춥니다.")
             grasp_z = safe_z_min
 
         if approach_z < safe_z_min:
-            logger.warn(
-                f"계산된 approach_z({approach_z:.3f})가 "
+            emit_structured_log(logger, 'warn', "log", "status", svc='task', pipe='pick', msg=f"계산된 approach_z({approach_z:.3f})가 "
                 f"safe_z_min({safe_z_min:.3f})보다 낮아 "
-                "safe_z_min으로 맞춥니다."
-            )
+                "safe_z_min으로 맞춥니다.")
             approach_z = safe_z_min
 
         return PickMotionPlan(

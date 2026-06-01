@@ -1,7 +1,8 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """ROS node that owns task queue execution and task-control handling."""
 
 from __future__ import annotations
+from macgyvbot_domain.logging import emit_structured_log
 
 from collections import deque
 import math
@@ -485,12 +486,12 @@ class TaskCoordinatorNode(Node):
         log.info("topic", "status", name="robot_status", topic=ROBOT_STATUS_TOPIC)
         log.info("model", "status", name="yolo", model=self.yolo_model)
         log.info("grasp_point", "status", mode=self.grasp_point_mode)
-        self.service_log.bind("legacy").info("task coordinator node 珥덇린???꾨즺")
-        self.service_log.bind("legacy").info(f"task request ?좏뵿: {TASK_REQUEST_TOPIC}")
-        self.service_log.bind("legacy").info(f"task control ?좏뵿: {TASK_CONTROL_TOPIC}")
-        self.service_log.bind("legacy").info(f"robot status ?좏뵿: {ROBOT_STATUS_TOPIC}")
-        self.service_log.bind("legacy").info(f"YOLO model: {self.yolo_model}")
-        self.service_log.bind("legacy").info(f"grasp point mode: {self.grasp_point_mode}")
+        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='task', pipe='system', msg="task coordinator node 珥덇린???꾨즺")
+        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='task', pipe='system', msg=f"task request ?좏뵿: {TASK_REQUEST_TOPIC}")
+        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='task', pipe='system', msg=f"task control ?좏뵿: {TASK_CONTROL_TOPIC}")
+        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='task', pipe='system', msg=f"robot status ?좏뵿: {ROBOT_STATUS_TOPIC}")
+        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='task', pipe='system', msg=f"YOLO model: {self.yolo_model}")
+        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='task', pipe='system', msg=f"grasp point mode: {self.grasp_point_mode}")
 
     def _task_request_cb(self, msg):
         task = str(msg.task or "").strip().lower()
@@ -515,7 +516,7 @@ class TaskCoordinatorNode(Node):
             reason="unsupported_task_request",
             msg="unsupported task request",
         )
-        self.service_log.bind("legacy").warn(f"吏?먰븯吏 ?딅뒗 task request: {task}")
+        emit_structured_log(self.service_log.bind("legacy"), 'warn', "log", "status", svc='task', pipe='system', msg=f"吏?먰븯吏 ?딅뒗 task request: {task}")
         self._publish_robot_status(
             "rejected",
             message="吏?먰븯吏 ?딅뒗 task request?낅땲??",
@@ -598,7 +599,7 @@ class TaskCoordinatorNode(Node):
             )
             return
 
-        self.service_log.bind("legacy").info("release task request ?섏떊: 洹몃━?쇰? ?쎈땲??")
+        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='task', pipe='system', msg="release task request ?섏떊: 洹몃━?쇰? ?쎈땲??")
         self.tool_hold_monitor.release_gripper()
         self._publish_robot_status(
             "done",
@@ -674,7 +675,7 @@ class TaskCoordinatorNode(Node):
             reason="unsupported_task_control",
             msg="unsupported task control action",
         )
-        self.service_log.bind("legacy").warn(f"吏?먰븯吏 ?딅뒗 task control action: {action}")
+        emit_structured_log(self.service_log.bind("legacy"), 'warn', "log", "status", svc='task', pipe='system', msg=f"吏?먰븯吏 ?딅뒗 task control action: {action}")
 
     def _handle_pause(self, reason):
         if self.exit_req.is_set():
@@ -686,7 +687,7 @@ class TaskCoordinatorNode(Node):
             reason=reason or "pause_requested",
             msg="task queue pause requested",
         )
-        self.service_log.bind("legacy").warn(f"task queue pause ?붿껌: reason={reason}")
+        emit_structured_log(self.service_log.bind("legacy"), 'warn', "log", "status", svc='task', pipe='system', msg=f"task queue pause ?붿껌: reason={reason}")
         self.pause_req.set()
         self.resume_req.clear()
         with self._queue_lock:
@@ -713,7 +714,7 @@ class TaskCoordinatorNode(Node):
             reason=reason or "resume_requested",
             msg="task queue resume requested",
         )
-        self.service_log.bind("legacy").info(f"task queue resume ?붿껌: reason={reason}")
+        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='task', pipe='system', msg=f"task queue resume ?붿껌: reason={reason}")
         with self._queue_lock:
             if self._suspended_step is not None:
                 self._queue.appendleft(
@@ -741,7 +742,7 @@ class TaskCoordinatorNode(Node):
             reason=reason or "cancel_requested",
             msg="task queue cancel requested",
         )
-        self.service_log.bind("legacy").warn(f"task queue cancel ?붿껌: reason={reason}")
+        emit_structured_log(self.service_log.bind("legacy"), 'warn', "log", "status", svc='task', pipe='system', msg=f"task queue cancel ?붿껌: reason={reason}")
         task_running = self.is_running() or self.state.picking
         self.exit_req.set()
         self.pause_req.clear()
@@ -778,7 +779,7 @@ class TaskCoordinatorNode(Node):
             action="exit",
             msg="task queue exit requested",
         )
-        self.service_log.bind("legacy").warn(f"task queue exit ?붿껌: reason={reason}")
+        emit_structured_log(self.service_log.bind("legacy"), 'warn', "log", "status", svc='task', pipe='system', msg=f"task queue exit ?붿껌: reason={reason}")
         self.exit_req.set()
         self.pause_req.clear()
         self.resume_req.clear()
@@ -900,15 +901,13 @@ class TaskCoordinatorNode(Node):
         if payload.get("event") != "tool_dropped":
             return
         reason = payload.get("reason") or "tool_dropped"
-        self.service_log.bind("legacy").warn(
-            "怨듦뎄 drop 媛먯?瑜?task exit?쇰줈 泥섎━?⑸땲?? "
-            f"reason={reason}, tool={payload.get('tool_name', 'unknown')}"
-        )
+        emit_structured_log(self.service_log.bind("legacy"), 'warn', "log", "status", svc='task', pipe='system', msg="怨듦뎄 drop 媛먯?瑜?task exit?쇰줈 泥섎━?⑸땲?? "
+            f"reason={reason}, tool={payload.get('tool_name', 'unknown')}")
         self._handle_exit(reason, publish_status=False)
 
     def start_pick_sequence(self, bx, by, bz, vlm_yaw_deg=None):
         if self.is_running() or self.state.picking:
-            self.service_log.bind("legacy").warn("?대? pick ?숈옉 以묒씠????pick ?붿껌??臾댁떆?⑸땲??")
+            emit_structured_log(self.service_log.bind("legacy"), 'warn', "log", "status", svc='task', pipe='system', msg="?대? pick ?숈옉 以묒씠????pick ?붿껌??臾댁떆?⑸땲??")
             self._publish_robot_status(
                 "busy",
                 tool_name=self.state.target_label,
@@ -943,7 +942,7 @@ class TaskCoordinatorNode(Node):
             )
             return False
 
-        self.service_log.bind("legacy").info(f"諛섎궔 ?쒗???쒖옉: tool={tool_name}")
+        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='task', pipe='system', msg=f"諛섎궔 ?쒗???쒖옉: tool={tool_name}")
         self.state.picking = True
         self.state.target_label = None
         self.state.current_command = command
@@ -960,9 +959,7 @@ class TaskCoordinatorNode(Node):
                     reason="task_queue_busy",
                     msg="task request ignored while queue is running",
                 )
-                self.service_log.bind("legacy").warn(
-                    f"?대? task coordinator媛 ?ㅽ뻾 以묒씠??{task_name} ?붿껌??臾댁떆?⑸땲??"
-                )
+                emit_structured_log(self.service_log.bind("legacy"), 'warn', "log", "status", svc='task', pipe='system', msg=f"?대? task coordinator媛 ?ㅽ뻾 以묒씠??{task_name} ?붿껌??臾댁떆?⑸땲??")
                 return False
             self.exit_req.clear()
             self.resume_req.clear()
@@ -975,9 +972,7 @@ class TaskCoordinatorNode(Node):
                 step_count=len(steps),
                 msg="task queue loaded",
             )
-            self.service_log.bind("legacy").info(
-                f"{task_name} task queue 濡쒕뵫 ?꾨즺: {len(steps)} steps"
-            )
+            emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='task', pipe='system', msg=f"{task_name} task queue 濡쒕뵫 ?꾨즺: {len(steps)} steps")
         self._dispatch_next()
         return True
 
@@ -1008,7 +1003,7 @@ class TaskCoordinatorNode(Node):
                 step_name=step.name,
                 msg="task step started",
             )
-            self.service_log.bind("legacy").info(f"task step ?쒖옉: {step.name}")
+            emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='task', pipe='system', msg=f"task step ?쒖옉: {step.name}")
             self._step_thread.start()
 
     def _execute_step(self, task_name, step):
@@ -1056,7 +1051,7 @@ class TaskCoordinatorNode(Node):
                     dur_ms=dur_ms,
                     msg="task step completed",
                 )
-                self.service_log.bind("legacy").info(f"task step ?꾨즺: {step.name}")
+                emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='task', pipe='system', msg=f"task step ?꾨즺: {step.name}")
             elif self.pause_req.is_set() and step.retry_on_pause:
                 self.service_log.info(
                     "step",
@@ -1067,7 +1062,7 @@ class TaskCoordinatorNode(Node):
                     dur_ms=dur_ms,
                     msg="task step suspended",
                 )
-                self.service_log.bind("legacy").info(f"task step ?쇱떆?뺤? 蹂닿?: {step.name}")
+                emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='task', pipe='system', msg=f"task step ?쇱떆?뺤? 蹂닿?: {step.name}")
                 if self._suspended_step is None:
                     self._suspended_step = step
                     self._suspended_task_name = task_name
@@ -1080,7 +1075,7 @@ class TaskCoordinatorNode(Node):
                     reason="exit_requested",
                     msg="task queue stopped by exit request",
                 )
-                self.service_log.bind("legacy").info(f"{task_name} task queue 醫낅즺 ?붿껌?쇰줈 以묐떒")
+                emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='task', pipe='system', msg=f"{task_name} task queue 醫낅즺 ?붿껌?쇰줈 以묐떒")
                 self._run_cleanup_callbacks()
                 self._clear_task_state()
                 return
@@ -1095,7 +1090,7 @@ class TaskCoordinatorNode(Node):
                     dur_ms=dur_ms,
                     msg="task step failed",
                 )
-                self.service_log.bind("legacy").error(f"task step ?ㅽ뙣: {step.name}")
+                emit_structured_log(self.service_log.bind("legacy"), 'error', "log", "status", svc='task', pipe='system', msg=f"task step ?ㅽ뙣: {step.name}")
                 self._run_cleanup_callbacks()
                 self._clear_task_state()
                 return
@@ -1108,7 +1103,7 @@ class TaskCoordinatorNode(Node):
             self._current_step = None
             self._current_task_name = None
             self._step_thread = None
-        self.service_log.bind("legacy").info(f"{task_name} task queue ?ㅽ뙣濡?醫낅즺")
+        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='task', pipe='system', msg=f"{task_name} task queue ?ㅽ뙣濡?醫낅즺")
         self.service_log.warn(
             "queue",
             "fail",
@@ -1126,7 +1121,7 @@ class TaskCoordinatorNode(Node):
             pipe=self._current_task_name or "task",
             msg="task queue completed",
         )
-        self.service_log.bind("legacy").info("task queue ?꾨즺")
+        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='task', pipe='system', msg="task queue ?꾨즺")
         self._step_thread = None
         self._run_cleanup_callbacks()
         self._clear_task_state()
@@ -1164,7 +1159,7 @@ class TaskCoordinatorNode(Node):
                 msg="task cleanup callback failed",
                 **fields,
             )
-            self.service_log.bind("legacy").warn(f"task cleanup callback ?ㅽ뙣: {exc}")
+            emit_structured_log(self.service_log.bind("legacy"), 'warn', "log", "status", svc='task', pipe='system', msg=f"task cleanup callback ?ㅽ뙣: {exc}")
 
     def _publish_task_exception_status(self, task_name, step_name, exc, reason):
         action = "bring" if task_name == "pick" else task_name
@@ -1238,9 +1233,7 @@ class TaskCoordinatorNode(Node):
     def _prepare_drawer_worker(self, target_label, drawer_id):
         try:
             log = self.service_log.bind("legacy")
-            log.info(
-                f"{target_label} ?먯깋 ??drawer {drawer_id}瑜??닿퀬 愿李??꾩튂濡??대룞?⑸땲??"
-            )
+            emit_structured_log(log, 'info', "log", "status", svc='task', pipe='system', msg=f"{target_label} ?먯깋 ??drawer {drawer_id}瑜??닿퀬 愿李??꾩튂濡??대룞?⑸땲??")
             ok = self.drawer_flow.open_drawer(drawer_id, log)
             if ok:
                 self._publish_robot_status(
@@ -1281,7 +1274,7 @@ class TaskCoordinatorNode(Node):
         if not self.pick_target_resolver.should_defer_vlm_until_top_view():
             return None
         if not self.frame_processor.has_camera_state():
-            self.service_log.bind("legacy").warn("?곷떒 view VLM 媛깆떊???꾪븳 camera state媛 ?놁뒿?덈떎.")
+            emit_structured_log(self.service_log.bind("legacy"), 'warn', "log", "status", svc='task', pipe='system', msg="?곷떒 view VLM 媛깆떊???꾪븳 camera state媛 ?놁뒿?덈떎.")
             return None
 
         color_image = self.state.color_image.copy()
@@ -1323,9 +1316,7 @@ class TaskCoordinatorNode(Node):
             interrupted=self._motion_interrupted,
         )
         if response is None:
-            self.service_log.bind("legacy").warn(
-                "Top-view VLM service refine failed. Keeping existing pick plan."
-            )
+            emit_structured_log(self.service_log.bind("legacy"), 'warn', "log", "status", svc='task', pipe='system', msg="Top-view VLM service refine failed. Keeping existing pick plan.")
             return PickTarget(
                 found=False,
                 label=target_label,
@@ -1368,7 +1359,7 @@ class TaskCoordinatorNode(Node):
         try:
             self.state.hand_grasp_image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
         except Exception as exc:
-            self.service_log.bind("legacy").warn(f"?↔린 ?몄떇 ?붾㈃ 蹂???ㅽ뙣: {exc}")
+            emit_structured_log(self.service_log.bind("legacy"), 'warn', "log", "status", svc='task', pipe='system', msg=f"?↔린 ?몄떇 ?붾㈃ 蹂???ㅽ뙣: {exc}")
 
     def _cam_info_cb(self, msg):
         self.state.intrinsics = {
@@ -1394,7 +1385,7 @@ class TaskCoordinatorNode(Node):
     def _process_frames(self):
         if self.state.home_xyz is None or self.state.home_ori is None:
             return
-        self.service_log.bind("legacy").info("task coordinator camera loop ?湲?以?..")
+        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='task', pipe='system', msg="task coordinator camera loop ?湲?以?..")
 
         while rclpy.ok():
             if not self.frame_processor.has_camera_state():

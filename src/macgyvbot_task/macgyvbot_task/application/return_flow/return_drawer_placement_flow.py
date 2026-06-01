@@ -1,6 +1,7 @@
 """Move a staged return tool into its drawer marker target."""
 
 from __future__ import annotations
+from macgyvbot_domain.logging import emit_structured_log
 
 from macgyvbot_config.drawer import (
     DRAWER_STORE_MARKER_CLEARANCE_Z_OFFSET_M,
@@ -177,13 +178,11 @@ class ReturnDrawerPlacementFlow:
             float(marker_z) + DRAWER_STORE_MARKER_RELEASE_Z_OFFSET_M,
         )
         ori = current_ee_orientation(self.robot)
-        logger.info(
-            "서랍 marker place 높이 계산: "
+        emit_structured_log(logger, 'info', "log", "status", svc='task', pipe='return', msg="서랍 marker place 높이 계산: "
             f"drawer={drawer_id}, marker_z={marker_z:.3f}, "
             f"safe_z_min={safe_z_min:.3f}, "
             f"clearance_z={clearance_z:.3f}, "
-            f"approach_z={approach_z:.3f}, release_z={release_z:.3f}"
-        )
+            f"approach_z={approach_z:.3f}, release_z={release_z:.3f}")
 
         self.reporter.publish(
             "placing_drawer_tool",
@@ -242,7 +241,7 @@ class ReturnDrawerPlacementFlow:
             return False
 
         if self.interrupted():
-            logger.info("서랍 내부 공구 release 전 stop/pause 요청으로 중단합니다.")
+            emit_structured_log(logger, 'info', "log", "status", svc='task', pipe='return', msg="서랍 내부 공구 release 전 stop/pause 요청으로 중단합니다.")
             return False
 
         if self.tool_hold_monitor is not None:
@@ -266,13 +265,11 @@ class ReturnDrawerPlacementFlow:
         exit_x = marker_x + DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M[0]
         exit_y = marker_y + DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M[1]
         exit_z = clearance_z + DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M[2]
-        logger.info(
-            "서랍 marker release 후 exit offset 이동: "
+        emit_structured_log(logger, 'info', "log", "status", svc='task', pipe='return', msg="서랍 marker release 후 exit offset 이동: "
             f"offset=({DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M[0]:.3f}, "
             f"{DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M[1]:.3f}, "
             f"{DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M[2]:.3f}), "
-            f"target=({exit_x:.3f}, {exit_y:.3f}, {exit_z:.3f})"
-        )
+            f"target=({exit_x:.3f}, {exit_y:.3f}, {exit_z:.3f})")
         return self._move_to_pose(
             exit_x,
             exit_y,
@@ -330,7 +327,7 @@ class ReturnDrawerPlacementFlow:
         failure_message,
     ):
         if self.interrupted():
-            logger.info("return drawer placement motion 전 stop/pause 요청으로 중단합니다.")
+            emit_structured_log(logger, 'info', "log", "status", svc='task', pipe='return', msg="return drawer placement motion 전 stop/pause 요청으로 중단합니다.")
             return False
 
         ok = self.motion.plan_and_execute(

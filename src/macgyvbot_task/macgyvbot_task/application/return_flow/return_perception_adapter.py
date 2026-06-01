@@ -1,6 +1,7 @@
 """Perception callbacks used by the return drawer-store flow."""
 
 from __future__ import annotations
+from macgyvbot_domain.logging import emit_structured_log
 
 from macgyvbot_config.drawer import DRAWER_ARUCO_MARKER_IDS
 from macgyvbot_perception.drawer_marker_resolver import DrawerMarkerResolver
@@ -48,9 +49,7 @@ class ReturnPerceptionAdapter:
 
     def resolve_store_tool_target(self, tool_name):
         if not self.frame_processor.has_camera_state():
-            self.logger.warn(
-                "임시 관찰 위치 공구 bbox 확인을 위한 camera state가 없습니다."
-            )
+            emit_structured_log(self.logger, 'warn', "log", "status", svc='task', pipe='return', msg="임시 관찰 위치 공구 bbox 확인을 위한 camera state가 없습니다.")
             return None
 
         color_image = self.state.color_image.copy()
@@ -71,13 +70,11 @@ class ReturnPerceptionAdapter:
     def resolve_drawer_marker_target(self, drawer_id):
         marker_id = DRAWER_ARUCO_MARKER_IDS.get(drawer_id)
         if marker_id is None:
-            self.logger.error(
-                f"drawer {drawer_id}에 매핑된 ArUco marker id가 없습니다."
-            )
+            emit_structured_log(self.logger, 'error', "log", "status", svc='task', pipe='return', msg=f"drawer {drawer_id}에 매핑된 ArUco marker id가 없습니다.")
             return None
 
         if not self.frame_processor.has_camera_state():
-            self.logger.warn("서랍 marker 확인을 위한 camera state가 없습니다.")
+            emit_structured_log(self.logger, 'warn', "log", "status", svc='task', pipe='return', msg="서랍 marker 확인을 위한 camera state가 없습니다.")
             return None
 
         return self.drawer_marker_resolver.resolve_marker_target(

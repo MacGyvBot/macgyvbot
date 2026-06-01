@@ -1,6 +1,7 @@
 """Place a returned tool at the drawer-store staging point."""
 
 from __future__ import annotations
+from macgyvbot_domain.logging import emit_structured_log
 
 from moveit.core.robot_state import RobotState
 
@@ -49,7 +50,7 @@ class ReturnStagingPlacementFlow:
 
     def place_at_store_observe_point(self, tool_name, command, logger):
         if self.interrupted():
-            logger.info("반납 임시 배치 시작 전 stop/pause 요청으로 중단합니다.")
+            emit_structured_log(logger, 'info', "log", "status", svc='task', pipe='return', msg="반납 임시 배치 시작 전 stop/pause 요청으로 중단합니다.")
             return False
 
         self.reporter.publish(
@@ -59,11 +60,11 @@ class ReturnStagingPlacementFlow:
             command,
         )
 
-        logger.info(f"반납 2단계: {tool_name} 임시 관찰 joint pose 이동")
+        emit_structured_log(logger, 'info', "log", "status", svc='task', pipe='return', msg=f"반납 2단계: {tool_name} 임시 관찰 joint pose 이동")
         ok = self.move_to_store_observe_point(logger)
         if not ok:
             if self.interrupted():
-                logger.info("반납 임시 관찰 위치 이동 중 stop/pause 요청으로 중단합니다.")
+                emit_structured_log(logger, 'info', "log", "status", svc='task', pipe='return', msg="반납 임시 관찰 위치 이동 중 stop/pause 요청으로 중단합니다.")
                 return False
 
             self.reporter.fail(
@@ -110,7 +111,7 @@ class ReturnStagingPlacementFlow:
         )
         if stop_z is None:
             if self.interrupted():
-                logger.info("반납 임시 관찰 위치 Z 하강 중 stop/pause 요청으로 중단합니다.")
+                emit_structured_log(logger, 'info', "log", "status", svc='task', pipe='return', msg="반납 임시 관찰 위치 Z 하강 중 stop/pause 요청으로 중단합니다.")
                 return False
 
             self.reporter.fail(
@@ -122,9 +123,9 @@ class ReturnStagingPlacementFlow:
             )
             return False
 
-        logger.info(f"반납 4단계: {tool_name} 임시 관찰 위치에 놓기")
+        emit_structured_log(logger, 'info', "log", "status", svc='task', pipe='return', msg=f"반납 4단계: {tool_name} 임시 관찰 위치에 놓기")
         if self.interrupted():
-            logger.info("반납 공구 놓기 전 stop/pause 요청으로 중단합니다.")
+            emit_structured_log(logger, 'info', "log", "status", svc='task', pipe='return', msg="반납 공구 놓기 전 stop/pause 요청으로 중단합니다.")
             return False
 
         if self.tool_hold_monitor is not None:
@@ -132,7 +133,7 @@ class ReturnStagingPlacementFlow:
         self.gripper.open_gripper()
         self.wait_fn(RETURN_TOOL_RELEASE_WAIT_SEC)
         if self.interrupted():
-            logger.info("반납 공구 놓기 후 stop/pause 요청으로 중단합니다.")
+            emit_structured_log(logger, 'info', "log", "status", svc='task', pipe='return', msg="반납 공구 놓기 후 stop/pause 요청으로 중단합니다.")
             return False
 
         return self.retreat_after_staging_release(
@@ -147,7 +148,7 @@ class ReturnStagingPlacementFlow:
 
     def move_to_store_observe_point(self, logger):
         if self.interrupted():
-            logger.info("임시 관찰 위치 이동 전 stop/pause 요청으로 중단합니다.")
+            emit_structured_log(logger, 'info', "log", "status", svc='task', pipe='return', msg="임시 관찰 위치 이동 전 stop/pause 요청으로 중단합니다.")
             return False
 
         state_goal = RobotState(self.robot.get_robot_model())
@@ -166,14 +167,12 @@ class ReturnStagingPlacementFlow:
         logger,
     ):
         if self.interrupted():
-            logger.info("반력 하강 시작 위치 이동 전 stop/pause 요청으로 중단합니다.")
+            emit_structured_log(logger, 'info', "log", "status", svc='task', pipe='return', msg="반력 하강 시작 위치 이동 전 stop/pause 요청으로 중단합니다.")
             return False
 
-        logger.info(
-            "반력 확인 하강 시작 위치 이동: "
+        emit_structured_log(logger, 'info', "log", "status", svc='task', pipe='return', msg="반력 확인 하강 시작 위치 이동: "
             f"z={descent_start_z:.3f} "
-            f"(SAFE_Z_MIN + {DRAWER_STORE_FORCE_DESCENT_START_Z_OFFSET_M:.3f})"
-        )
+            f"(SAFE_Z_MIN + {DRAWER_STORE_FORCE_DESCENT_START_Z_OFFSET_M:.3f})")
         ok = self.motion.plan_and_execute(
             logger,
             pose_goal=make_safe_pose(
@@ -210,17 +209,17 @@ class ReturnStagingPlacementFlow:
         logger,
     ):
         if self.interrupted():
-            logger.info("반납 후 복귀 시작 전 stop/pause 요청으로 중단합니다.")
+            emit_structured_log(logger, 'info', "log", "status", svc='task', pipe='return', msg="반납 후 복귀 시작 전 stop/pause 요청으로 중단합니다.")
             return False
 
-        logger.info("반납 5단계: 공구를 놓은 뒤 임시 관찰 안전 높이로 복귀")
+        emit_structured_log(logger, 'info', "log", "status", svc='task', pipe='return', msg="반납 5단계: 공구를 놓은 뒤 임시 관찰 안전 높이로 복귀")
         ok = self.motion.plan_and_execute(
             logger,
             pose_goal=make_safe_pose(target_x, target_y, approach_z, ori, logger),
         )
         if not ok:
             if self.interrupted():
-                logger.info("반납 후 안전 높이 복귀 중 stop/pause 요청으로 중단합니다.")
+                emit_structured_log(logger, 'info', "log", "status", svc='task', pipe='return', msg="반납 후 안전 높이 복귀 중 stop/pause 요청으로 중단합니다.")
                 return False
 
             self.reporter.fail(
@@ -232,11 +231,11 @@ class ReturnStagingPlacementFlow:
             )
             return False
 
-        logger.info("반납 6단계: 임시 관찰 joint pose로 복귀")
+        emit_structured_log(logger, 'info', "log", "status", svc='task', pipe='return', msg="반납 6단계: 임시 관찰 joint pose로 복귀")
         ok = self.move_to_store_observe_point(logger)
         if not ok:
             if self.interrupted():
-                logger.info("반납 후 임시 관찰 위치 복귀 중 stop/pause 요청으로 중단합니다.")
+                emit_structured_log(logger, 'info', "log", "status", svc='task', pipe='return', msg="반납 후 임시 관찰 위치 복귀 중 stop/pause 요청으로 중단합니다.")
                 return False
 
             self.reporter.fail(

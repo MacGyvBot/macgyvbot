@@ -1,4 +1,5 @@
 """Pick sequence step construction."""
+from macgyvbot_domain.logging import emit_structured_log
 
 import time
 
@@ -246,7 +247,7 @@ class PickSequenceRunner:
                 log.info("refine_target", "start", target=target_label)
                 refined_target = self.refine_pick_target(target_label)
             except Exception as exc:
-                log.warn(f"상단 view VLM target 갱신 실패: {exc}")
+                emit_structured_log(log, 'warn', "log", "status", svc='task', pipe='pick', msg=f"상단 view VLM target 갱신 실패: {exc}")
             finally:
                 log.info(
                     "refine_target",
@@ -266,21 +267,17 @@ class PickSequenceRunner:
                 safe_z_min=context["safe_z_min"],
             )
             plan = context["plan"]
-            log.info(
-                "상단 view VLM 결과로 pick target 갱신: "
+            emit_structured_log(log, 'info', "log", "status", svc='task', pipe='pick', msg="상단 view VLM 결과로 pick target 갱신: "
                 f"pixel={refined_target.pixel}, "
                 f"base=({plan.target_x:.3f}, {plan.target_y:.3f}, "
                 f"{bz:.3f}), "
                 f"depth={getattr(refined_target, 'depth_m', None)}, "
                 f"yaw={context['vlm_yaw_deg']}, "
-                f"safe_z_min={context['safe_z_min']:.3f}"
-            )
+                f"safe_z_min={context['safe_z_min']:.3f}")
         elif refined_target is not None:
             reason = getattr(refined_target, "reason", "unknown")
-            log.warn(
-                "상단 view VLM target을 얻지 못해 bbox center plan을 유지합니다. "
-                f"reason={reason}"
-            )
+            emit_structured_log(log, 'warn', "log", "status", svc='task', pipe='pick', msg="상단 view VLM target을 얻지 못해 bbox center plan을 유지합니다. "
+                f"reason={reason}")
 
         vlm_yaw_deg = context.get("vlm_yaw_deg")
         if vlm_yaw_deg is None:
@@ -298,7 +295,7 @@ class PickSequenceRunner:
         if self._interrupted():
             return False
 
-        log.error("J6 회전 실패. Pick 시퀀스 중단")
+        emit_structured_log(log, 'error', "log", "status", svc='task', pipe='pick', msg="J6 회전 실패. Pick 시퀀스 중단")
         self.state._publish_robot_status(
             "failed",
             message="J6 회전 실패",
@@ -309,7 +306,7 @@ class PickSequenceRunner:
 
     def _descend_to_grasp(self, plan, ori):
         if not plan.should_descend_to_grasp:
-            self.state.logger().info("4단계: approach_z와 grasp_z가 같아 추가 하강 생략")
+            emit_structured_log(self.state.logger(), 'info', "log", "status", svc='task', pipe='pick', msg="4단계: approach_z와 grasp_z가 같아 추가 하강 생략")
             return True
 
         return self._move_to_pose(
@@ -325,7 +322,7 @@ class PickSequenceRunner:
 
     def _grasp_tool(self):
         log = self.state.logger()
-        log.info("5단계: 공구 grasp 시도")
+        emit_structured_log(log, 'info', "log", "status", svc='task', pipe='pick', msg="5단계: 공구 grasp 시도")
         if self.grasp.try_robot_grasp(log):
             self.state._publish_robot_status(
                 "grasp_success",
@@ -343,7 +340,7 @@ class PickSequenceRunner:
         if self._interrupted():
             return False
 
-        log.error("공구 grasp 실패. Pick 시퀀스 중단")
+        emit_structured_log(log, 'error', "log", "status", svc='task', pipe='pick', msg="공구 grasp 실패. Pick 시퀀스 중단")
         self.state._publish_robot_status(
             "failed",
             message="공구 grasp에 실패했습니다.",
@@ -354,14 +351,14 @@ class PickSequenceRunner:
 
     def _wait_tool_mask_lock(self):
         log = self.state.logger()
-        log.info("6단계: 공구 mask lock 완료 대기")
+        emit_structured_log(log, 'info', "log", "status", svc='task', pipe='pick', msg="6단계: 공구 mask lock 완료 대기")
         if self.handoff.wait_for_tool_mask_lock(log):
             return True
 
         if self._interrupted():
             return False
 
-        log.error("공구 mask lock 실패. Lift 전에 pick 시퀀스를 중단합니다.")
+        emit_structured_log(log, 'error', "log", "status", svc='task', pipe='pick', msg="공구 mask lock 실패. Lift 전에 pick 시퀀스를 중단합니다.")
         self.state._publish_robot_status(
             "failed",
             message="공구 mask lock에 실패했습니다.",
@@ -379,7 +376,7 @@ class PickSequenceRunner:
         if self._interrupted():
             return False
 
-        log.error("사용자 손 위치 확인 실패. 원래 공구 위치로 반환합니다.")
+        emit_structured_log(log, 'error', "log", "status", svc='task', pipe='pick', msg="사용자 손 위치 확인 실패. 원래 공구 위치로 반환합니다.")
         returned = self.handoff.return_tool_to_original_position(
             plan.target_x,
             plan.target_y,
@@ -404,7 +401,7 @@ class PickSequenceRunner:
 
     def _wait_human_grasp(self, plan, context):
         log = self.state.logger()
-        log.info("9단계: 사용자 잡기 인식 대기")
+        emit_structured_log(log, 'info', "log", "status", svc='task', pipe='pick', msg="9단계: 사용자 잡기 인식 대기")
         self.state._publish_robot_status(
             "waiting_handoff",
             message="사용자 잡기 인식을 기다립니다.",
@@ -416,7 +413,7 @@ class PickSequenceRunner:
         if self._interrupted():
             return False
 
-        log.error("사용자 잡기 인식 실패. 원래 공구 위치로 반환합니다.")
+        emit_structured_log(log, 'error', "log", "status", svc='task', pipe='pick', msg="사용자 잡기 인식 실패. 원래 공구 위치로 반환합니다.")
         returned = self.handoff.return_tool_to_original_position(
             plan.target_x,
             plan.target_y,
@@ -440,7 +437,7 @@ class PickSequenceRunner:
         return False
 
     def _release_to_human(self):
-        self.state.logger().info("10단계: 사용자 잡기 확인 후 그리퍼 오픈(놓기)")
+        emit_structured_log(self.state.logger(), 'info', "log", "status", svc='task', pipe='pick', msg="10단계: 사용자 잡기 확인 후 그리퍼 오픈(놓기)")
         if self.tool_hold_monitor is not None:
             self.tool_hold_monitor.stop("handoff_release")
         self.gripper.open_gripper()
@@ -448,7 +445,7 @@ class PickSequenceRunner:
         return True
 
     def _home_after_handoff(self):
-        self.state.logger().info("11단계: 전달 후 Home 위치로 복귀")
+        emit_structured_log(self.state.logger(), 'info', "log", "status", svc='task', pipe='pick', msg="11단계: 전달 후 Home 위치로 복귀")
         return self.handoff.move_home_after_handoff(self.state.logger())
 
     def _close_drawer_after_handoff(self, context):
@@ -457,7 +454,7 @@ class PickSequenceRunner:
             return True
 
         log = self.state.logger()
-        log.info(f"사용자 전달 후 drawer {drawer_id}를 닫습니다.")
+        emit_structured_log(log, 'info', "log", "status", svc='task', pipe='pick', msg=f"사용자 전달 후 drawer {drawer_id}를 닫습니다.")
         self.state._publish_robot_status(
             "closing_drawer",
             tool_name=self.state.target_label,
@@ -468,7 +465,7 @@ class PickSequenceRunner:
         return self.drawer_flow.close_drawer(drawer_id, log)
 
     def _publish_done(self):
-        self.state.logger().info("Pick 시퀀스 완료")
+        emit_structured_log(self.state.logger(), 'info', "log", "status", svc='task', pipe='pick', msg="Pick 시퀀스 완료")
         self.state._publish_robot_status(
             "done",
             message="공구 전달 후 Home 복귀까지 완료되었습니다.",

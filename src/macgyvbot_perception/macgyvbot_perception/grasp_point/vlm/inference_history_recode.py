@@ -1,6 +1,7 @@
 """Record VLM inference inputs and outputs for offline review."""
 
 from __future__ import annotations
+from macgyvbot_domain.logging import emit_structured_log
 
 import csv
 from dataclasses import dataclass
@@ -116,7 +117,7 @@ class InferenceHistoryRecode:
                 )
         except Exception as exc:
             if self.logger is not None:
-                self.logger.warn(f"VLM inference history recording failed: {exc}")
+                emit_structured_log(self.logger, 'warn', "log", "status", svc='perception', pipe='vlm', msg=f"VLM inference history recording failed: {exc}")
 
     @staticmethod
     def _safe_name(value: str) -> str:

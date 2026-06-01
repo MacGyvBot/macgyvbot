@@ -41,7 +41,7 @@ def test_exception_log_fields_are_compact():
     assert fields["file"] == "test_logging.py"
 
 
-def test_logger_adapter_accepts_legacy_single_message_calls():
+def test_logger_adapter_normalizes_legacy_single_message_calls():
     class FakeLogger:
         def __init__(self):
             self.lines = []
@@ -53,5 +53,25 @@ def test_logger_adapter_accepts_legacy_single_message_calls():
     MacGyvbotLogger(fake, svc="task", pipe="pick").info("plain message")
 
     assert fake.lines == [
-        'svc=task pipe=pick step=log event=status msg="plain message"'
+        'svc=task pipe=pick step=pick_sequence event=status '
+        'msg="픽업 시퀀스 상태" detail="plain message"'
+    ]
+
+
+def test_logger_adapter_adds_reason_and_korean_msg_for_failures():
+    class FakeLogger:
+        def __init__(self):
+            self.lines = []
+
+        def error(self, message):
+            self.lines.append(message)
+
+    fake = FakeLogger()
+    MacGyvbotLogger(fake, svc="manipulation", pipe="moveit").error(
+        "pose_goal IK 후보를 찾지 못했습니다."
+    )
+
+    assert fake.lines == [
+        'svc=manipulation pipe=moveit step=pose_goal_ik event=failed '
+        'reason=ik_failed msg="pose_goal IK 후보를 찾지 못했습니다."'
     ]

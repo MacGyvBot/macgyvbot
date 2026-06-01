@@ -1,4 +1,4 @@
-﻿"""Operator-facing GUI node for MacGyvBot.
+"""Operator-facing GUI node for MacGyvBot.
 
 This node owns PyQt widgets and presentation logic only.  It communicates with
 the command, task, and perception packages through ROS topics.
@@ -118,7 +118,7 @@ class OperatorUiNode(Node):
             self._update_connection_status,
         )
 
-        self.service_log.bind("legacy").info('operator_ui_node 珥덇린???꾨즺')
+        self.service_log.bind("system").info("log", "status", msg='operator_ui_node 珥덇린???꾨즺')
         self.service_log.info("node", "done", pipe="startup", msg="operator UI initialized")
 
     def attach_window(self, window):
@@ -138,9 +138,9 @@ class OperatorUiNode(Node):
         msg.action = 'shutdown'
         msg.source = 'operator_ui'
         self._command_shutdown_pub.publish(msg)
-        self.service_log.bind("legacy").info('/command_shutdown 諛쒗뻾: command_input_node 醫낅즺 ?붿껌')
+        self.service_log.bind("system").info("log", "status", msg='/command_shutdown 諛쒗뻾: command_input_node 醫낅즺 ?붿껌')
 
-    def publish_user_text(self, text):
+    def _push_user_text(self, text):
         text = (text or '').strip()
         if not text:
             return
@@ -174,7 +174,7 @@ class OperatorUiNode(Node):
         if self._consume_if_self_published(text):
             return
 
-        self.service_log.bind("legacy").info(f'?몃? ?낅젰 ?섏떊: "{text}"')
+        self.service_log.bind("system").info("log", "status", msg=f'?몃? ?낅젰 ?섏떊: "{text}"')
         self._append_user(text, source='voice')
         self._set_status('?낅젰 ?섏떊')
 
@@ -408,7 +408,7 @@ class OperatorUiNode(Node):
             try:
                 self.window.set_detector_image(msg)
             except ValueError as exc:
-                self.service_log.bind("legacy").warn(f'detector image ?쒖떆 ?ㅽ뙣: {exc}')
+                self.service_log.bind("system").warn("log", "status", msg=f'detector image ?쒖떆 ?ㅽ뙣: {exc}')
 
     def _update_connection_status(self):
         if self.window is None:
@@ -755,7 +755,7 @@ class OperatorUiNode(Node):
         if not ros:
             return
 
-        logger = self.service_log.bind("legacy")
+        logger = self.service_log.bind("system")
         if level == 'error':
             self.service_log.error("gui_log", "status", pipe="ui", msg=message)
         elif level in ('warn', 'warning'):

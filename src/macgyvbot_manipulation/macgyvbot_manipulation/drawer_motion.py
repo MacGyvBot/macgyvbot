@@ -1,6 +1,7 @@
 """Reusable drawer open, observe, and close motions."""
 
 from __future__ import annotations
+from macgyvbot_domain.logging import emit_structured_log
 
 import math
 
@@ -58,7 +59,7 @@ class DrawerMotionFlow:
         handle_pose = get_ee_matrix(self.robot)
         handle_xyz = self._xyz_from_pose(handle_pose)
         handle_ori = current_ee_orientation(self.robot)
-        logger.info(f"drawer {drawer_id} handle xyz={self._format_xyz(handle_xyz)}")
+        emit_structured_log(logger, 'info', "log", "status", svc='manipulation', pipe='moveit', msg=f"drawer {drawer_id} handle xyz={self._format_xyz(handle_xyz)}")
 
         if not self._close_gripper("drawer/open/grip_handle", logger):
             return False
@@ -85,7 +86,7 @@ class DrawerMotionFlow:
         """Move from the opened handle pose to the drawer observation pose."""
         opened = self._opened_drawers.get(drawer_id)
         if opened is None:
-            logger.error(f"drawer {drawer_id} opened pose가 없어 관찰할 수 없습니다.")
+            emit_structured_log(logger, 'error', "log", "status", svc='manipulation', pipe='moveit', msg=f"drawer {drawer_id} opened pose가 없어 관찰할 수 없습니다.")
             return False
 
         observe_ori = self._observation_orientation(opened["ori"], logger)
@@ -101,7 +102,7 @@ class DrawerMotionFlow:
         """Move to the opened handle pose, grip it, push closed, then release."""
         opened = self._opened_drawers.get(drawer_id)
         if opened is None:
-            logger.error(f"drawer {drawer_id} opened pose가 없어 닫을 수 없습니다.")
+            emit_structured_log(logger, 'error', "log", "status", svc='manipulation', pipe='moveit', msg=f"drawer {drawer_id} opened pose가 없어 닫을 수 없습니다.")
             return False
 
         if not self._move_by_offset(
@@ -147,15 +148,21 @@ class DrawerMotionFlow:
     def _move_to_handle_joints(self, drawer_id, logger):
         joint_positions = self._joint_positions(drawer_id)
         if joint_positions is None:
-            logger.error(f"지원하지 않는 drawer id입니다: {drawer_id}")
+            emit_structured_log(logger, 'error', "log", "status", svc='manipulation', pipe='moveit', msg=f"지원하지 않는 drawer id입니다: {drawer_id}")
             return False
 
-        logger.info(
-            f"drawer {drawer_id} handle joint pose 이동: "
+        emit_structured_log(
+            logger,
+            'info',
+            "log",
+            "status",
+            svc='manipulation',
+            pipe='moveit',
+            msg=f"drawer {drawer_id} handle joint pose 이동: "
             + ", ".join(
                 f"{name}={value:.3f}rad"
                 for name, value in joint_positions.items()
-            )
+            ),
         )
         if self.dry_run:
             return True
@@ -171,11 +178,9 @@ class DrawerMotionFlow:
             float(base_xyz[1]) + float(offset_xyz[1]),
             float(base_xyz[2]) + float(offset_xyz[2]),
         ]
-        logger.info(
-            f"{label}: base={self._format_xyz(base_xyz)}, "
+        emit_structured_log(logger, 'info', "log", "status", svc='manipulation', pipe='moveit', msg=f"{label}: base={self._format_xyz(base_xyz)}, "
             f"offset={self._format_xyz(offset_xyz)}, "
-            f"target={self._format_xyz(target_xyz)}"
-        )
+            f"target={self._format_xyz(target_xyz)}")
         if self.dry_run:
             return True
 
@@ -196,36 +201,34 @@ class DrawerMotionFlow:
 
         observe_ori = self.observation_orientation_provider()
         if observe_ori is None:
-            logger.warn(
-                "drawer observe orientation이 없어 "
-                "handle orientation을 사용합니다."
-            )
+            emit_structured_log(logger, 'warn', "log", "status", svc='manipulation', pipe='moveit', msg="drawer observe orientation이 없어 "
+                "handle orientation을 사용합니다.")
             return fallback_ori
 
-        logger.info("drawer observe orientation: home/approach orientation 사용")
+        emit_structured_log(logger, 'info', "log", "status", svc='manipulation', pipe='moveit', msg="drawer observe orientation: home/approach orientation 사용")
         return observe_ori
 
     def _close_gripper(self, label, logger):
-        logger.info(f"{label}: 그리퍼 닫기")
+        emit_structured_log(logger, 'info', "log", "status", svc='manipulation', pipe='moveit', msg=f"{label}: 그리퍼 닫기")
         if self.dry_run:
             return True
         try:
             self.gripper.close_gripper()
             self.wait_fn(DRAWER_GRIPPER_SETTLE_SEC)
         except Exception as exc:
-            logger.error(f"그리퍼 닫기 실패: {exc}")
+            emit_structured_log(logger, 'error', "log", "status", svc='manipulation', pipe='moveit', msg=f"그리퍼 닫기 실패: {exc}")
             return False
         return True
 
     def _open_gripper(self, label, logger):
-        logger.info(f"{label}: 그리퍼 열기")
+        emit_structured_log(logger, 'info', "log", "status", svc='manipulation', pipe='moveit', msg=f"{label}: 그리퍼 열기")
         if self.dry_run:
             return True
         try:
             self.gripper.open_gripper()
             self.wait_fn(DRAWER_GRIPPER_SETTLE_SEC)
         except Exception as exc:
-            logger.error(f"그리퍼 열기 실패: {exc}")
+            emit_structured_log(logger, 'error', "log", "status", svc='manipulation', pipe='moveit', msg=f"그리퍼 열기 실패: {exc}")
             return False
         return True
 

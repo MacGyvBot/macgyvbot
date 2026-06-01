@@ -1,4 +1,4 @@
-﻿"""Headless command-input node for MacGyvBot.
+"""Headless command-input node for MacGyvBot.
 
 - 留덉씠??STT? `/stt_text` ?낅젰??紐낅졊 ?댁꽍 ?뚯씠?꾨씪?몄쑝濡??섏쭛?쒕떎.
 - LLM 以묒떖 parser瑜??ㅽ뻾?섍퀬 `/tool_command`, `/command_feedback`??諛쒗뻾?쒕떎.
@@ -6,6 +6,7 @@
 
 GUI ?쒖떆??`macgyvbot_ui/operator_ui_node`媛 ROS topic留?援щ룆?댁꽌 ?대떦?쒕떎.
 """
+from macgyvbot_domain.logging import emit_structured_log
 
 import rclpy
 from rclpy.node import Node
@@ -150,21 +151,17 @@ class CommandInputNode(Node):
                 phrase_time_limit_sec=f"{self._phrase_time_limit:.1f}",
                 msg="STT service ready",
             )
-            self.service_log.bind("legacy").info(
-                f'STT 以鍮??꾨즺: language={self._language}, '
+            emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg=f'STT 以鍮??꾨즺: language={self._language}, '
                 f'device_index={self._device_index}, '
-                f'phrase_time_limit={self._phrase_time_limit:.1f}s'
-            )
+                f'phrase_time_limit={self._phrase_time_limit:.1f}s')
         else:
-            self.service_log.bind("legacy").info('留덉씠??STT 鍮꾪솢?깊솕 紐⑤뱶濡??ㅽ뻾?⑸땲??')
+            emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg='留덉씠??STT 鍮꾪솢?깊솕 紐⑤뱶濡??ㅽ뻾?⑸땲??')
 
-        self.service_log.bind("legacy").info(f'?낅젰 topic: {stt_text_topic}')
-        self.service_log.bind("legacy").info(
-            f'異쒕젰 topic: {tool_command_topic}, {command_feedback_topic}'
-        )
-        self.service_log.bind("legacy").info(f'濡쒕큸 ?곹깭 topic: {robot_status_topic}')
+        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg=f'?낅젰 topic: {stt_text_topic}')
+        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg=f'異쒕젰 topic: {tool_command_topic}, {command_feedback_topic}')
+        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg=f'濡쒕큸 ?곹깭 topic: {robot_status_topic}')
         if self._tts_service.enabled:
-            self.service_log.bind("legacy").info('TTS 紐⑤뱶 ?쒖꽦?? MacGyvBot ?묐떟???뚯꽦?쇰줈 異쒕젰?⑸땲??')
+            emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg='TTS 紐⑤뱶 ?쒖꽦?? MacGyvBot ?묐떟???뚯꽦?쇰줈 異쒕젰?⑸땲??')
 
     def _log_stt(self, level, message):
         logger = self.service_log.bind("stt")
@@ -214,7 +211,7 @@ class CommandInputNode(Node):
             msg="STT recognized text",
         )
 
-        self.service_log.bind("legacy").info(f'STT ?몄떇 寃곌낵: "{text}"')
+        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg=f'STT ?몄떇 寃곌낵: "{text}"')
 
     def _text_cb(self, msg):
         text = (msg.text or '').strip()
@@ -222,10 +219,10 @@ class CommandInputNode(Node):
             return
 
         if self._is_recent_bot_echo(text):
-            self.service_log.bind("legacy").info(f'TTS echo濡?蹂댁씠???낅젰??臾댁떆?⑸땲?? "{text}"')
+            emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg=f'TTS echo濡?蹂댁씠???낅젰??臾댁떆?⑸땲?? "{text}"')
             return
 
-        self.service_log.bind("legacy").info(f'紐낅졊 ?댁꽍 ?붿껌: "{text}"')
+        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg=f'紐낅졊 ?댁꽍 ?붿껌: "{text}"')
         self._handle_text(text)
 
     def _handle_text(self, text):
@@ -235,21 +232,17 @@ class CommandInputNode(Node):
         if command is not None:
             action = command.get('action')
             if action in ('pause', 'resume', 'cancel'):
-                self.service_log.bind("legacy").info(
-                    f'?묒뾽 ?쒖뼱 紐낅졊 ?댁꽍: action={action}, raw_text="{text}"'
-                )
+                emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg=f'?묒뾽 ?쒖뼱 紐낅졊 ?댁꽍: action={action}, raw_text="{text}"')
                 for payload in result.get('feedbacks', []):
                     self._publish_feedback_payload(payload)
                 self._send_task_control_request(action=action, reason=text)
                 return
             if action == 'exit':
                 if self._exit_pending:
-                    self.service_log.bind("legacy").warn('?대? 醫낅즺 ?붿껌??泥섎━ 以묒엯?덈떎.')
+                    emit_structured_log(self.service_log.bind("legacy"), 'warn', "log", "status", svc='command', pipe='command', msg='?대? 醫낅즺 ?붿껌??泥섎━ 以묒엯?덈떎.')
                     return
                 self._exit_pending = True
-                self.service_log.bind("legacy").info(
-                    f'醫낅즺 ?쒖뼱 紐낅졊 ?댁꽍: action={action}, raw_text="{text}"'
-                )
+                emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg=f'醫낅즺 ?쒖뼱 紐낅졊 ?댁꽍: action={action}, raw_text="{text}"')
                 for payload in result.get('feedbacks', []):
                     self._publish_feedback_payload(payload)
                 self._send_task_control_request(action=action, reason=text)
@@ -272,11 +265,9 @@ class CommandInputNode(Node):
             topic=TOOL_COMMAND_TOPIC,
             msg="tool command published",
         )
-        self.service_log.bind("legacy").info(
-            '/tool_command 諛쒗뻾: '
+        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg='/tool_command 諛쒗뻾: '
             f'action={command.get("action", "unknown")}, '
-            f'tool={command.get("tool_name", "unknown")}'
-        )
+            f'tool={command.get("tool_name", "unknown")}')
 
     def _publish_feedback_payload(self, payload):
         msg = CommandFeedback()
@@ -302,15 +293,13 @@ class CommandInputNode(Node):
             topic=TASK_CONTROL_TOPIC,
             msg="task control request published",
         )
-        self.service_log.bind("legacy").info(
-            f'{TASK_CONTROL_TOPIC} 諛쒗뻾: action={action}, reason={reason}'
-        )
+        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg=f'{TASK_CONTROL_TOPIC} 諛쒗뻾: action={action}, reason={reason}')
 
     def _shutdown_cb(self, msg):
         if msg.action != 'shutdown':
             return
 
-        self.service_log.bind("legacy").info('operator UI 醫낅즺 ?좏샇 ?섏떊: command_input_node瑜?醫낅즺?⑸땲??')
+        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg='operator UI 醫낅즺 ?좏샇 ?섏떊: command_input_node瑜?醫낅즺?⑸땲??')
         if rclpy.ok():
             rclpy.shutdown()
 
@@ -336,16 +325,12 @@ class CommandInputNode(Node):
         if self._exit_pending and str(status.get('action', '')).lower() == 'exit':
             if state in ('done', 'completed', 'success'):
                 self._exit_pending = False
-                self.service_log.bind("legacy").info(
-                    '醫낅즺 ?꾨즺 ?곹깭 ?뺤씤: command_input_node瑜?醫낅즺?⑸땲??'
-                )
+                emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg='醫낅즺 ?꾨즺 ?곹깭 ?뺤씤: command_input_node瑜?醫낅즺?⑸땲??')
                 if rclpy.ok():
                     rclpy.shutdown()
             elif state in ('failed', 'error', 'rejected'):
                 self._exit_pending = False
-                self.service_log.bind("legacy").warn(
-                    '醫낅즺 泥섎━媛 ?ㅽ뙣?섏뿬 command_input_node瑜??좎??⑸땲??'
-                )
+                emit_structured_log(self.service_log.bind("legacy"), 'warn', "log", "status", svc='command', pipe='command', msg='醫낅즺 泥섎━媛 ?ㅽ뙣?섏뿬 command_input_node瑜??좎??⑸땲??')
 
     @staticmethod
     def _tool_command_message(command):

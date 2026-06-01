@@ -1,6 +1,7 @@
 """Application-level command routing for robot tasks."""
 
 from __future__ import annotations
+from macgyvbot_domain.logging import emit_structured_log
 
 from macgyvbot_config.topics import TOOL_COMMAND_TOPIC
 
@@ -44,9 +45,7 @@ class ToolCommandController:
             return False
 
         if self.is_busy():
-            self.logger.warn(
-                f"현재 pick 동작 중이라 새 타겟 '{val}' 입력은 무시합니다."
-            )
+            emit_structured_log(self.logger, 'warn', "log", "status", svc='task', pipe='command', msg=f"현재 pick 동작 중이라 새 타겟 '{val}' 입력은 무시합니다.")
             self.status.publish(
                 "busy",
                 tool_name=val,
@@ -58,7 +57,7 @@ class ToolCommandController:
 
         self.set_target(val, command)
         self.reset_search_status()
-        self.logger.info(f"타겟 객체 설정: {val} ({source})")
+        emit_structured_log(self.logger, 'info', "log", "status", svc='task', pipe='command', msg=f"타겟 객체 설정: {val} ({source})")
         self.status.publish(
             "accepted",
             tool_name=val,
@@ -96,7 +95,7 @@ class ToolCommandController:
             self._handle_home(tool_name, action, command)
             return
 
-        self.logger.warn(f"지원하지 않는 action: {action}")
+        emit_structured_log(self.logger, 'warn', "log", "status", svc='task', pipe='command', msg=f"지원하지 않는 action: {action}")
         self.status.publish(
             "rejected",
             tool_name=tool_name,
@@ -108,7 +107,7 @@ class ToolCommandController:
 
     def _handle_release(self, tool_name, action, command):
         if self.is_busy():
-            self.logger.warn("pick 동작 중 release 명령은 수동 실행하지 않습니다.")
+            emit_structured_log(self.logger, 'warn', "log", "status", svc='task', pipe='command', msg="pick 동작 중 release 명령은 수동 실행하지 않습니다.")
             self.status.publish(
                 "busy",
                 tool_name=tool_name,
@@ -119,7 +118,7 @@ class ToolCommandController:
             )
             return
 
-        self.logger.info("release 명령 수신: 그리퍼를 엽니다.")
+        emit_structured_log(self.logger, 'info', "log", "status", svc='task', pipe='command', msg="release 명령 수신: 그리퍼를 엽니다.")
         self.release_gripper()
         self.status.publish(
             "done",
@@ -131,7 +130,7 @@ class ToolCommandController:
 
     def _handle_home(self, tool_name, action, command):
         if self.is_busy():
-            self.logger.warn("로봇 동작 중 home 명령은 즉시 실행하지 않습니다.")
+            emit_structured_log(self.logger, 'warn', "log", "status", svc='task', pipe='command', msg="로봇 동작 중 home 명령은 즉시 실행하지 않습니다.")
             self.status.publish(
                 "busy",
                 tool_name=tool_name,
@@ -142,7 +141,7 @@ class ToolCommandController:
             )
             return
 
-        self.logger.info("home 명령 수신: Home 위치로 복귀합니다.")
+        emit_structured_log(self.logger, 'info', "log", "status", svc='task', pipe='command', msg="home 명령 수신: Home 위치로 복귀합니다.")
         self.status.publish(
             "returning_home",
             tool_name=tool_name,
@@ -172,7 +171,7 @@ class ToolCommandController:
         )
 
     def _handle_stop(self, tool_name, action, command):
-        self.logger.warn("pause 명령 수신")
+        emit_structured_log(self.logger, 'warn', "log", "status", svc='task', pipe='command', msg="pause 명령 수신")
         if self.is_busy():
             self.status.publish(
                 "busy",

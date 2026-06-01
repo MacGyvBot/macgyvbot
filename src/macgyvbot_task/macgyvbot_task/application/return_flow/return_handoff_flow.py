@@ -1,6 +1,7 @@
 """Receive a user-held return tool."""
 
 from __future__ import annotations
+from macgyvbot_domain.logging import emit_structured_log
 
 import time
 
@@ -76,12 +77,10 @@ class ReturnHandoffFlow:
             z_offset_m=HANDOVER_HAND_Z_OFFSET_M,
             should_interrupt=self.interrupted,
         )
-        logger.info(
-            "감지된 사용자 손 위치로 수령 이동: "
+        emit_structured_log(logger, 'info', "log", "status", svc='task', pipe='return', msg="감지된 사용자 손 위치로 수령 이동: "
             f"source={candidate.source}, frame={candidate.frame_id}, "
             f"raw=({candidate.x:.3f},{candidate.y:.3f},{candidate.z:.3f}), "
-            f"safe=({final_pose.x:.3f},{final_pose.y:.3f},{final_pose.z:.3f})"
-        )
+            f"safe=({final_pose.x:.3f},{final_pose.y:.3f},{final_pose.z:.3f})")
         self.reporter.publish(
             "moving_return_detected_pose",
             tool_name,
@@ -119,10 +118,8 @@ class ReturnHandoffFlow:
             )
             return None, "return_close_roi_timeout"
 
-        logger.info(
-            "사용자 손 위치에 접근했습니다. "
-            "반납 공구 grasp를 시도합니다."
-        )
+        emit_structured_log(logger, 'info', "log", "status", svc='task', pipe='return', msg="사용자 손 위치에 접근했습니다. "
+            "반납 공구 grasp를 시도합니다.")
         if not self.try_robot_grasp(tool_name, command, logger):
             self.reporter.fail(
                 tool_name,
@@ -152,18 +149,14 @@ class ReturnHandoffFlow:
             tool_depth_mm = result.get("tool_depth_mm")
             image_shape = self._color_image_shape()
             if self.close_policy.matches(image_shape, tool_roi, tool_depth_mm):
-                logger.info(
-                    "그리퍼 close ROI/depth 범위 안에서 공구 확인: "
-                    f"tool_roi={tool_roi}, tool_depth_mm={tool_depth_mm}"
-                )
+                emit_structured_log(logger, 'info', "log", "status", svc='task', pipe='return', msg="그리퍼 close ROI/depth 범위 안에서 공구 확인: "
+                    f"tool_roi={tool_roi}, tool_depth_mm={tool_depth_mm}")
                 return True
 
             if time.monotonic() - start_time >= RETURN_HAND_CLOSE_ROI_TIMEOUT_SEC:
-                logger.warn(
-                    "그리퍼 close ROI/depth 범위 안에서 "
+                emit_structured_log(logger, 'warn', "log", "status", svc='task', pipe='return', msg="그리퍼 close ROI/depth 범위 안에서 "
                     "공구를 확인하지 못했습니다: "
-                    f"timeout={RETURN_HAND_CLOSE_ROI_TIMEOUT_SEC:.1f}s"
-                )
+                    f"timeout={RETURN_HAND_CLOSE_ROI_TIMEOUT_SEC:.1f}s")
                 return False
 
             self.wait_fn(RETURN_HAND_CLOSE_ROI_POLL_SEC)
