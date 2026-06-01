@@ -169,32 +169,32 @@ class CommandInputNode(Node):
     def _log_stt(self, level, message):
         logger = self.service_log.bind("stt")
         if level == 'warn':
-            logger.warn(message)
+            logger.warn("runtime", "status", msg=message)
             return
         if level == 'error':
-            logger.error(message)
+            logger.error("runtime", "status", msg=message)
             return
-        logger.info(message)
+        logger.info("runtime", "status", msg=message)
 
     def _log_parser(self, level, message):
         logger = self.service_log.bind("parser")
         if level == 'warn':
-            logger.warn(message)
+            logger.warn("runtime", "status", msg=message)
             return
         if level == 'error':
-            logger.error(message)
+            logger.error("runtime", "status", msg=message)
             return
-        logger.info(message)
+        logger.info("runtime", "status", msg=message)
 
     def _log_tts(self, level, message):
         logger = self.service_log.bind("tts")
         if level == 'warn':
-            logger.warn(message)
+            logger.warn("runtime", "status", msg=message)
             return
         if level == 'error':
-            logger.error(message)
+            logger.error("runtime", "status", msg=message)
             return
-        logger.info(message)
+        logger.info("runtime", "status", msg=message)
 
     def _on_stt_text(self, text):
         text = (text or '').strip()

@@ -828,7 +828,12 @@ class TaskCoordinatorNode(Node):
             return
 
         self.exit_req.clear()
-        log.info("醫낅즺 ?붿껌 ??Home ?꾩튂濡?蹂듦??⑸땲??")
+        log.info(
+            "exit_home",
+            "start",
+            action="exit",
+            reason=reason or "exit_requested",
+        )
         self._publish_robot_status(
             "returning_home",
             action="exit",
@@ -851,7 +856,13 @@ class TaskCoordinatorNode(Node):
         try:
             self.tool_hold_monitor.release_gripper("exit_home_completed")
         except Exception as exc:
-            log.warn(f"exit Home 蹂듦? ??洹몃━???닿린 ?ㅽ뙣: {exc}")
+            log.warn(
+                "exit_home",
+                "fail",
+                action="exit",
+                reason="exit_gripper_release_failed",
+                **exception_log_fields(exc),
+            )
             self._publish_robot_status(
                 "failed",
                 action="exit",
@@ -874,7 +885,13 @@ class TaskCoordinatorNode(Node):
         while self.is_running() and time.monotonic() < deadline:
             time.sleep(TASK_QUEUE_STOP_POLL_SEC)
         if self.is_running():
-            logger.warn("exit ?붿껌 ??task queue 醫낅즺 ?湲??쒓컙??珥덇낵?섏뿀?듬땲??")
+            logger.warn(
+                "queue",
+                "timeout",
+                action="exit",
+                reason="exit_queue_shutdown_timeout",
+                timeout_sec=timeout_sec,
+            )
             return False
         return True
 

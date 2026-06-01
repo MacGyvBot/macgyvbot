@@ -142,6 +142,50 @@ class MacGyvbotLogger:
             self._logger.info(text)
 
 
+def emit_structured_log(
+    logger,
+    level: str,
+    step: str,
+    event: str,
+    *,
+    svc: str = "system",
+    pipe: str = "system",
+    **fields,
+) -> None:
+    """Emit a structured log through either MacGyvbotLogger or a plain logger."""
+
+    method_name = "warn" if level == "warning" else level
+    method = getattr(logger, method_name, None)
+    if method is None and method_name == "warn":
+        method = getattr(logger, "warning", None)
+    if method is None:
+        method = getattr(logger, "info", None)
+    if method is None:
+        return
+
+    try:
+        method(step, event, **fields)
+        return
+    except TypeError:
+        pass
+
+    event_fields = {
+        name: fields.pop(name, None)
+        for name in ("target", "reason", "dur_ms", "file", "msg")
+    }
+    text = format_log_event(
+        LogEvent(
+            svc=svc,
+            pipe=fields.pop("pipe", pipe),
+            step=step,
+            event=event,
+            fields=fields,
+            **event_fields,
+        )
+    )
+    method(text)
+
+
 def _format_value(value: Any, value_limit: int) -> str:
     text = _single_line(str(value))
     if len(text) > value_limit:

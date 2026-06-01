@@ -5,6 +5,7 @@ import time
 import rclpy
 
 from macgyvbot_config.pick import OBSERVE_X_OFFSET_M
+from macgyvbot_domain.logging import exception_log_fields
 
 from macgyvbot_manipulation.robot_pose import (
     current_ee_orientation,
@@ -82,12 +83,17 @@ class PickSequenceRunner:
         }
 
         log.info(
-            f"시퀀스 시작: Target({plan.target_x:.3f}, {plan.target_y:.3f}), "
-            f"safe_z_min={safe_z_min:.3f}, raw_bz={bz:.3f}, "
-            f"corrected_bz={plan.corrected_bz:.3f}, "
-            f"travel_z={plan.travel_z:.3f}, "
-            f"approach_z={plan.approach_z:.3f}, "
-            f"grasp_z={plan.grasp_z:.3f}"
+            "plan",
+            "done",
+            target=self.state.target_label,
+            target_x=f"{plan.target_x:.3f}",
+            target_y=f"{plan.target_y:.3f}",
+            safe_z_min=f"{safe_z_min:.3f}",
+            raw_bz=f"{bz:.3f}",
+            corrected_bz=f"{plan.corrected_bz:.3f}",
+            travel_z=f"{plan.travel_z:.3f}",
+            approach_z=f"{plan.approach_z:.3f}",
+            grasp_z=f"{plan.grasp_z:.3f}",
         )
 
         steps = [
@@ -192,7 +198,16 @@ class PickSequenceRunner:
         failure_reason,
     ):
         log = self.state.logger()
-        log.info(log_message)
+        motion_step = failure_reason.removesuffix("_failed")
+        log.info(
+            "motion",
+            "start",
+            target=self.state.target_label,
+            step_name=motion_step,
+            x=f"{x:.3f}",
+            y=f"{y:.3f}",
+            z=f"{z:.3f}",
+        )
         ok = self.motion.plan_and_execute(
             log,
             pose_goal=make_safe_pose(x, y, z, ori, log),
@@ -203,7 +218,14 @@ class PickSequenceRunner:
         if self._interrupted():
             return False
 
-        log.error(error_log)
+        log.error(
+            "motion",
+            "fail",
+            target=self.state.target_label,
+            step_name=motion_step,
+            reason=failure_reason,
+            msg=error_log,
+        )
         self.state._publish_robot_status(
             "failed",
             message=failure_message,
@@ -221,17 +243,16 @@ class PickSequenceRunner:
         if self.refine_pick_target is not None and target_label:
             cooperative_wait(0.2)
             try:
-                log.info(
-                    "pick/refine_target_and_apply_vlm_yaw started: "
-                    f"target={target_label}"
-                )
+                log.info("refine_target", "start", target=target_label)
                 refined_target = self.refine_pick_target(target_label)
             except Exception as exc:
                 log.warn(f"상단 view VLM target 갱신 실패: {exc}")
             finally:
                 log.info(
-                    "pick/refine_target_and_apply_vlm_yaw completed: "
-                    f"elapsed_sec={time.monotonic() - refine_started:.3f}"
+                    "refine_target",
+                    "done",
+                    target=target_label,
+                    dur_ms=int((time.monotonic() - refine_started) * 1000),
                 )
 
         if refined_target is not None and refined_target.found:

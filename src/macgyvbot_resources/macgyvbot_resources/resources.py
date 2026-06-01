@@ -62,10 +62,6 @@ def resolve_weight_file(model_name, default_model_name=None):
         for base in [*shares, cwd, root]:
             corrected_path = base / "weights" / default_model_name
             if corrected_path.exists():
-                print(
-                    "WARNING: yolo11_best.pt not found. "
-                    f"Using {default_model_name}."
-                )
                 return corrected_path
 
     return model_name

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from macgyvbot_domain.logging import emit_structured_log
 from macgyvbot_domain.target_models import PickTarget
 
 try:
@@ -69,7 +70,16 @@ class DrawerMarkerResolver:
 
     def _detect_marker_center(self, color_image, marker_id):
         if cv2 is None or not hasattr(cv2, "aruco"):
-            self.logger.error("OpenCV aruco 모듈을 사용할 수 없습니다.")
+            emit_structured_log(
+                self.logger,
+                "error",
+                "detect",
+                "fail",
+                svc="perception",
+                pipe="drawer_marker",
+                target=f"drawer_marker_{marker_id}",
+                reason="opencv_aruco_unavailable",
+            )
             return None
 
         corners, ids = self._detect_markers(color_image)
