@@ -63,6 +63,7 @@ class PickHandoffFlow:
         safe_z_min=SAFE_Z_MIN,
         drawer_id=None,
         move_home=True,
+        lift_from_current=True,
     ):
         clearance_z = travel_z
         if drawer_id is not None:
@@ -76,27 +77,32 @@ class PickHandoffFlow:
             )
             grasp_z = safe_z_min
 
-        current_pose = get_ee_matrix(self.robot)
-        current_x = float(current_pose[0, 3])
-        current_y = float(current_pose[1, 3])
+        if lift_from_current:
+            current_pose = get_ee_matrix(self.robot)
+            current_x = float(current_pose[0, 3])
+            current_y = float(current_pose[1, 3])
 
-        logger.info("반환 1단계: 현재 위치에서 서랍 접근 안전 높이로 상승")
-        ok = self.motion.plan_and_execute(
-            logger,
-            pose_goal=make_safe_pose(
-                current_x,
-                current_y,
-                clearance_z,
-                ori,
+            logger.info("반환 1단계: 현재 위치에서 서랍 접근 안전 높이로 상승")
+            ok = self.motion.plan_and_execute(
                 logger,
-            ),
-        )
-        if not ok:
-            logger.error(
-                "서랍 접근 안전 높이 상승 실패. "
-                "공구를 잡은 상태로 중단합니다."
+                pose_goal=make_safe_pose(
+                    current_x,
+                    current_y,
+                    clearance_z,
+                    ori,
+                    logger,
+                ),
             )
-            return False
+            if not ok:
+                logger.error(
+                    "서랍 접근 안전 높이 상승 실패. "
+                    "공구를 잡은 상태로 중단합니다."
+                )
+                return False
+        else:
+            logger.info(
+                "반환 1단계: 관찰 위치 fallback으로 현재 위치 상승을 생략합니다."
+            )
 
         logger.info("반환 2단계: 서랍 접근 안전 높이에서 원래 공구 위치 XY로 이동")
         ok = self.motion.plan_and_execute(

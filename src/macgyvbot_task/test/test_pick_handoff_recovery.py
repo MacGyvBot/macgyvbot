@@ -148,11 +148,16 @@ class FakeHandoff:
         safe_z_min,
         drawer_id=None,
         move_home=True,
+        lift_from_current=True,
     ):
         self.returned_drawer_id = drawer_id
+        self.lift_from_current = lift_from_current
         self.events.append("return")
         assert not move_home
         return True
+
+    def move_to_handoff_pose(self, ori, logger):
+        return None, None, None
 
     def move_home_after_handoff(self, logger, publish_on_failure=True):
         self.events.append("home")
@@ -247,6 +252,7 @@ def test_handoff_timeout_return_closes_drawer():
     assert not runner._wait_human_grasp(plan, context)
 
     assert runner.handoff.returned_drawer_id == 1
+    assert runner.handoff.lift_from_current is True
     assert runner.drawer_flow.closed == [1]
     assert runner.handoff.events == ["return", "close", "home"]
     assert runner.state.statuses[-1][0] == "returned"
@@ -278,3 +284,31 @@ def test_handoff_timeout_reports_drawer_close_failure():
     assert runner.state.statuses[-1][1]["reason"] == (
         "handoff_timeout_drawer_close_failed"
     )
+
+
+def test_handoff_search_failure_returns_directly_to_target_clearance():
+    runner = PickSequenceRunner.__new__(PickSequenceRunner)
+    runner.handoff = FakeHandoff()
+    runner.drawer_flow = FakeDrawerFlow(events=runner.handoff.events)
+    runner.state = FakeState()
+    runner.control_events = {}
+    plan = types.SimpleNamespace(
+        target_x=0.30,
+        target_y=0.10,
+        travel_z=0.40,
+        grasp_z=0.25,
+    )
+    context = {
+        "drawer_id": 1,
+        "safe_z_min": safe_z_min_for_drawer(1),
+        "ori": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+    }
+
+    assert not runner._move_to_handoff(plan, context)
+
+    assert runner.handoff.returned_drawer_id == 1
+    assert runner.handoff.lift_from_current is False
+    assert runner.drawer_flow.closed == [1]
+    assert runner.handoff.events == ["return", "close", "home"]
+    assert runner.state.statuses[-1][0] == "returned"
+    assert runner.state.statuses[-1][1]["reason"] == "handoff_pose_unavailable"

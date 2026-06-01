@@ -363,6 +363,7 @@ class PickSequenceRunner:
             plan,
             context,
             log,
+            lift_from_current=False,
         )
         status = "returned" if returned and drawer_closed and home_ok else "failed"
         self.state._publish_robot_status(
@@ -434,7 +435,13 @@ class PickSequenceRunner:
         )
         return False
 
-    def _return_tool_close_drawer_home(self, plan, context, log):
+    def _return_tool_close_drawer_home(
+        self,
+        plan,
+        context,
+        log,
+        lift_from_current=True,
+    ):
         drawer_id = context.get("drawer_id")
         returned = self.handoff.return_tool_to_original_position(
             plan.target_x,
@@ -446,6 +453,7 @@ class PickSequenceRunner:
             safe_z_min=context["safe_z_min"],
             drawer_id=drawer_id,
             move_home=False,
+            lift_from_current=lift_from_current,
         )
         if not returned:
             return False, False, False
