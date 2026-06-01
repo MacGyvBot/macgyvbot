@@ -127,6 +127,10 @@ class PickSequenceRunner:
                 ),
             ),
             TaskStep(
+                "pick/pre_grasp_mask_lock",
+                self._request_pre_grasp_mask_lock,
+            ),
+            TaskStep(
                 "pick/grasp_descent",
                 lambda: self._descend_to_grasp(
                     context["plan"],
@@ -281,6 +285,18 @@ class PickSequenceRunner:
         )
         return True
 
+    def _request_pre_grasp_mask_lock(self):
+        self.state.logger().info("4단계: Z 하강 전 임시 공구 mask lock 요청")
+        self.state._publish_robot_status(
+            "pre_grasp_mask_lock",
+            tool_name=self.state.target_label,
+            action="bring",
+            message=f"{self.state.target_label} Z 하강 전 임시 mask를 고정합니다.",
+            command=self.state.current_command,
+        )
+        cooperative_wait(0.25)
+        return True
+
     def _rotate_wrist(self, vlm_yaw_deg, context):
         log = self.state.logger()
         ok = self.motion.rotate_wrist_by_yaw_deg(vlm_yaw_deg, log)
@@ -301,6 +317,13 @@ class PickSequenceRunner:
         return False
 
     def _descend_to_grasp(self, plan, ori):
+        self.state._publish_robot_status(
+            "grasping",
+            tool_name=self.state.target_label,
+            action="bring",
+            message=f"{self.state.target_label} 파지를 위해 Z 하강합니다.",
+            command=self.state.current_command,
+        )
         if not plan.should_descend_to_grasp:
             self.state.logger().info("4단계: approach_z와 grasp_z가 같아 추가 하강 생략")
             return True

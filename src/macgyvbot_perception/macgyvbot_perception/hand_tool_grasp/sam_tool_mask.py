@@ -139,6 +139,41 @@ def create_bbox_locked_mask(roi: Rect, frame_shape: tuple[int, int]) -> LockedTo
     return LockedToolMask(roi=(x1, y1, x2, y2), mask=mask, source="BBOX_LOCKED")
 
 
+def scale_locked_mask(
+    locked_tool: LockedToolMask,
+    frame_shape: tuple[int, int],
+    scale: float,
+    center: Optional[tuple[float, float]] = None,
+    source: str = "SCALED_LOCKED",
+) -> Optional[LockedToolMask]:
+    """Scale a locked mask around its center and optionally translate it."""
+    if scale <= 0:
+        return None
+
+    height, width = frame_shape
+    source_center = rect_center(locked_tool.roi)
+    target_center = center or source_center
+    matrix = np.array(
+        [
+            [scale, 0.0, target_center[0] - scale * source_center[0]],
+            [0.0, scale, target_center[1] - scale * source_center[1]],
+        ],
+        dtype=np.float32,
+    )
+    warped = cv2.warpAffine(
+        locked_tool.mask.astype(np.uint8),
+        matrix,
+        (width, height),
+        flags=cv2.INTER_NEAREST,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=0,
+    ).astype(bool)
+    roi = mask_to_roi(warped)
+    if roi is None:
+        return None
+    return LockedToolMask(roi=roi, mask=warped, source=source)
+
+
 def validate_tracked_mask(
     previous: LockedToolMask,
     tracked: LockedToolMask,
@@ -185,6 +220,20 @@ def rect_area(rect: Rect) -> int:
 def rect_center(rect: Rect) -> tuple[float, float]:
     x1, y1, x2, y2 = rect
     return ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
+
+
+def rect_iou(first: Rect, second: Rect) -> float:
+    x1 = max(first[0], second[0])
+    y1 = max(first[1], second[1])
+    x2 = min(first[2], second[2])
+    y2 = min(first[3], second[3])
+    intersection = rect_area((x1, y1, x2, y2))
+    if intersection <= 0:
+        return 0.0
+    union = rect_area(first) + rect_area(second) - intersection
+    if union <= 0:
+        return 0.0
+    return intersection / union
 
 
 def compute_mask_contact(

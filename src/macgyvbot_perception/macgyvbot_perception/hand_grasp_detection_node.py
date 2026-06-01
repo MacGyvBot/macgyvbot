@@ -57,6 +57,10 @@ from macgyvbot_perception.hand_tool_grasp.sam_tool_mask import (
     compute_mask_contact,
     create_bbox_locked_mask,
     mask_to_roi,
+    rect_area,
+    rect_center,
+    rect_iou,
+    scale_locked_mask,
     validate_tracked_mask,
 )
 from macgyvbot_perception.hand_tool_grasp.visualization import (
@@ -82,6 +86,11 @@ class HandGraspDetectionNode(Node):
         self.latest_tool_mask: Optional[LockedToolMask] = None
         self.mask_tracking_active = False
         self.active_tool_label = ""
+        self.last_yolo_seen_frame = 0
+        self.pre_grasp_lock_requested = False
+        self.pre_grasp_tool_mask: Optional[LockedToolMask] = None
+        self.pre_grasp_tool_roi = None
+        self.pre_grasp_tool_depth_mm = None
         self.frame_index = 0
 
         self.color_topic = self.declare_parameter(
@@ -163,6 +172,21 @@ class HandGraspDetectionNode(Node):
         )
         self.sam_track_max_area_ratio = float(
             self.declare_parameter("sam_track_max_area_ratio", 2.5).value
+        )
+        self.sam_yolo_missing_grace_frames = int(
+            self.declare_parameter("sam_yolo_missing_grace_frames", 5).value
+        )
+        self.sam_yolo_min_iou = float(
+            self.declare_parameter("sam_yolo_min_iou", 0.20).value
+        )
+        self.sam_yolo_max_center_shift_px = float(
+            self.declare_parameter("sam_yolo_max_center_shift_px", 45.0).value
+        )
+        self.pre_grasp_mask_min_scale = float(
+            self.declare_parameter("pre_grasp_mask_min_scale", 0.70).value
+        )
+        self.pre_grasp_mask_max_scale = float(
+            self.declare_parameter("pre_grasp_mask_max_scale", 1.50).value
         )
         self.allow_bbox_lock = self._as_bool(
             self.declare_parameter("allow_bbox_lock", True).value
@@ -326,6 +350,12 @@ class HandGraspDetectionNode(Node):
             self.mask_tracking_active = bool(self.active_tool_label)
             return
 
+        if status == "pre_grasp_mask_lock":
+            self._set_active_tool_label(requested_tool_label)
+            self.pre_grasp_lock_requested = True
+            self.mask_tracking_active = bool(self.active_tool_label)
+            return
+
         if status in {"returned", "done", "failed", "cancelled"}:
             self._reset_tool_mask_state()
             self.mask_tracking_active = False
@@ -356,12 +386,16 @@ class HandGraspDetectionNode(Node):
         )
         if tool_detection is not None:
             self.latest_tool_detection = tool_detection
+            self.last_yolo_seen_frame = self.frame_index
 
         if self.mask_tracking_active:
-            if self.latest_tool_mask is None:
-                self._seed_prelock_tool_mask(frame, tool_detection)
-            else:
-                self._track_prelock_tool_mask(frame)
+            self._update_prelock_tool_mask(frame, tool_detection)
+
+        if self.pre_grasp_lock_requested:
+            self._capture_pre_grasp_tool_mask(
+                frame,
+                tool_detection or self.latest_tool_detection,
+            )
 
         if self.lock_requested and self.locked_tool is None:
             self.locked_tool = self._lock_tool_mask(
@@ -508,10 +542,15 @@ class HandGraspDetectionNode(Node):
         self.latest_tool_detection = None
         self.tool_mask_anchor = None
         self.latest_tool_mask = None
+        self.last_yolo_seen_frame = 0
+        self.pre_grasp_lock_requested = False
+        self.pre_grasp_tool_mask = None
+        self.pre_grasp_tool_roi = None
+        self.pre_grasp_tool_depth_mm = None
         if clear_active_label:
             self.active_tool_label = ""
 
-    def _seed_prelock_tool_mask(
+    def _update_prelock_tool_mask(
         self,
         frame,
         tool_detection: Optional[ToolDetection],
@@ -519,6 +558,45 @@ class HandGraspDetectionNode(Node):
         if self.locked_tool is not None:
             return
 
+        if tool_detection is not None:
+            self._update_mask_from_yolo_anchor(frame, tool_detection)
+            return
+
+        if self.latest_tool_mask is None:
+            return
+
+        if not self._recent_yolo_available():
+            self.get_logger().warn(
+                "Clearing SAM candidate mask because requested YOLO target "
+                "has not been seen recently."
+            )
+            self.latest_tool_mask = None
+            self.tool_mask_anchor = None
+            return
+
+        self._track_prelock_tool_mask(frame)
+
+    def _update_mask_from_yolo_anchor(
+        self,
+        frame,
+        tool_detection: ToolDetection,
+    ) -> None:
+        if self.latest_tool_mask is None:
+            self._seed_prelock_tool_mask(frame, tool_detection)
+            return
+
+        if not self._mask_agrees_with_yolo(self.latest_tool_mask, tool_detection.roi):
+            self._seed_prelock_tool_mask(frame, tool_detection, force=True)
+            return
+
+        self._track_prelock_tool_mask(frame)
+
+    def _seed_prelock_tool_mask(
+        self,
+        frame,
+        tool_detection: Optional[ToolDetection],
+        force=False,
+    ) -> None:
         if tool_detection is None:
             return
 
@@ -530,7 +608,7 @@ class HandGraspDetectionNode(Node):
             self.tool_mask_anchor = self.latest_tool_mask
             return
 
-        if self.frame_index % max(1, self.sam_track_interval) != 0:
+        if not force and self.frame_index % max(1, self.sam_track_interval) != 0:
             return
 
         mask = self.sam_segmenter.segment(frame, tool_detection.roi)
@@ -577,7 +655,44 @@ class HandGraspDetectionNode(Node):
 
         self.latest_tool_mask = tracked
 
+    def _capture_pre_grasp_tool_mask(
+        self,
+        frame,
+        tool_detection: Optional[ToolDetection],
+    ) -> None:
+        self.pre_grasp_lock_requested = False
+        locked = self._lock_from_yolo_or_candidate(frame, tool_detection)
+        if locked is None:
+            self.get_logger().warn("Pre-grasp tool mask lock failed.")
+            return
+
+        self.pre_grasp_tool_mask = LockedToolMask(
+            roi=locked.roi,
+            mask=locked.mask.copy(),
+            source="PRE_GRASP_LOCKED",
+        )
+        self.pre_grasp_tool_roi = tool_detection.roi if tool_detection else locked.roi
+        self.pre_grasp_tool_depth_mm = self._tool_depth_mm(self.pre_grasp_tool_roi)
+        self.latest_tool_mask = self.pre_grasp_tool_mask
+        self.tool_mask_anchor = self.pre_grasp_tool_mask
+        self.get_logger().info(
+            "Pre-grasp tool mask locked: "
+            f"source={locked.source}, roi={locked.roi}, "
+            f"depth_mm={self.pre_grasp_tool_depth_mm}"
+        )
+
     def _lock_tool_mask(
+        self,
+        frame,
+        tool_detection: Optional[ToolDetection],
+    ) -> Optional[LockedToolMask]:
+        scaled = self._scaled_pre_grasp_tool_mask(frame, tool_detection)
+        if scaled is not None:
+            return scaled
+
+        return self._lock_from_yolo_or_candidate(frame, tool_detection)
+
+    def _lock_from_yolo_or_candidate(
         self,
         frame,
         tool_detection: Optional[ToolDetection],
@@ -641,6 +756,95 @@ class HandGraspDetectionNode(Node):
             return locked
 
         return None
+
+    def _scaled_pre_grasp_tool_mask(
+        self,
+        frame,
+        tool_detection: Optional[ToolDetection],
+    ) -> Optional[LockedToolMask]:
+        if self.pre_grasp_tool_mask is None:
+            return None
+
+        scale = self._pre_grasp_scale(tool_detection)
+        center = rect_center(tool_detection.roi) if tool_detection else None
+        scaled = scale_locked_mask(
+            self.pre_grasp_tool_mask,
+            frame.shape[:2],
+            scale,
+            center=center,
+            source="PRE_GRASP_SCALED_LOCKED",
+        )
+        if scaled is None:
+            return None
+
+        if tool_detection is not None and not self._mask_agrees_with_yolo(
+            scaled,
+            tool_detection.roi,
+        ):
+            self.get_logger().warn(
+                "Rejected scaled pre-grasp mask because it disagrees with YOLO: "
+                f"mask_roi={scaled.roi}, yolo_roi={tool_detection.roi}"
+            )
+            return None
+
+        self.get_logger().info(
+            "Using scaled pre-grasp mask for final lock: "
+            f"scale={scale:.3f}, roi={scaled.roi}"
+        )
+        return scaled
+
+    def _pre_grasp_scale(self, tool_detection: Optional[ToolDetection]) -> float:
+        scale = None
+        if tool_detection is not None and self.pre_grasp_tool_roi is not None:
+            previous_area = rect_area(self.pre_grasp_tool_roi)
+            current_area = rect_area(tool_detection.roi)
+            if previous_area > 0 and current_area > 0:
+                scale = (current_area / previous_area) ** 0.5
+
+        if scale is None:
+            current_depth = self._tool_depth_mm(
+                tool_detection.roi
+                if tool_detection is not None
+                else self.pre_grasp_tool_mask.roi
+            )
+            if (
+                self.pre_grasp_tool_depth_mm is not None
+                and current_depth is not None
+                and current_depth > 0
+            ):
+                scale = self.pre_grasp_tool_depth_mm / current_depth
+
+        if scale is None:
+            scale = 1.0
+
+        return max(
+            self.pre_grasp_mask_min_scale,
+            min(self.pre_grasp_mask_max_scale, float(scale)),
+        )
+
+    def _tool_depth_mm(self, roi):
+        if self.latest_depth_mm is None or roi is None:
+            return None
+        return median_depth_in_rect(self.latest_depth_mm, roi)
+
+    def _recent_yolo_available(self) -> bool:
+        return (
+            self.last_yolo_seen_frame > 0
+            and self.frame_index - self.last_yolo_seen_frame
+            <= self.sam_yolo_missing_grace_frames
+        )
+
+    def _mask_agrees_with_yolo(self, mask: LockedToolMask, yolo_roi) -> bool:
+        if rect_iou(mask.roi, yolo_roi) >= self.sam_yolo_min_iou:
+            return True
+
+        mask_center = rect_center(mask.roi)
+        yolo_center = rect_center(yolo_roi)
+        center_shift = float(
+            ((mask_center[0] - yolo_center[0]) ** 2 + (mask_center[1] - yolo_center[1]) ** 2)
+            ** 0.5
+        )
+        return center_shift <= self.sam_yolo_max_center_shift_px
 
     def _publish_mask_lock_result(self, locked_tool: Optional[LockedToolMask]) -> None:
         payload = {
