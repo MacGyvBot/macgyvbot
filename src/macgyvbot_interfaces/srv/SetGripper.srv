@@ -1,8 +1,0 @@
-float32 width_mm
-string source
----
-bool success
-string status
-string message
-float32 requested_width_mm
-float32 applied_width_mm
