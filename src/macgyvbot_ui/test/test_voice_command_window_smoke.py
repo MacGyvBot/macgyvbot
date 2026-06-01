@@ -73,6 +73,9 @@ class VoiceCommandWindowSmokeTest(unittest.TestCase):
         self.assertEqual(self.published_texts, ["재개"])
         self.assertGreaterEqual(self.window._chat_layout.count(), 5)
 
+    def test_chat_timestamp_includes_seconds(self):
+        self.assertRegex(self.window._timestamp(), r"^\d{2}:\d{2}:\d{2}$")
+
 
 if __name__ == "__main__":
     unittest.main()

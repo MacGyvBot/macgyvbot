@@ -670,7 +670,7 @@ else:
 
         @staticmethod
         def _timestamp():
-            return datetime.now().strftime('%H:%M')
+            return datetime.now().strftime('%H:%M:%S')
 
         @staticmethod
         def _action_label(action):
