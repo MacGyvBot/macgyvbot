@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -101,6 +102,7 @@ class HandGraspDetectionNode(Node):
         self.depth_lock_delta_stable_count = None
         self.depth_lock_pair_valid_count = None
         self.depth_lock_frame_count = 0
+        self.depth_lock_started_sec = None
         self.depth_lock_preview_tool: Optional[LockedToolMask] = None
         self.frame_index = 0
 
@@ -242,8 +244,8 @@ class HandGraspDetectionNode(Node):
         self.depth_lock_min_frames = int(
             self.declare_parameter("depth_lock_min_frames", 5).value
         )
-        self.depth_lock_max_frames = int(
-            self.declare_parameter("depth_lock_max_frames", 20).value
+        self.depth_lock_duration_sec = float(
+            self.declare_parameter("depth_lock_duration_sec", 3.0).value
         )
         self.depth_lock_stability_mm = float(
             self.declare_parameter("depth_lock_stability_mm", 20.0).value
@@ -650,6 +652,7 @@ class HandGraspDetectionNode(Node):
     def _start_depth_tool_lock(self) -> None:
         self._reset_depth_tool_lock(clear_locked_tool=True)
         self.depth_lock_active = True
+        self.depth_lock_started_sec = time.monotonic()
         self.get_logger().info("Depth locked tool mask accumulation started.")
 
     def _reset_depth_tool_lock(self, clear_locked_tool=True) -> None:
@@ -662,6 +665,7 @@ class HandGraspDetectionNode(Node):
         self.depth_lock_delta_stable_count = None
         self.depth_lock_pair_valid_count = None
         self.depth_lock_frame_count = 0
+        self.depth_lock_started_sec = None
         self.depth_lock_preview_tool = None
         if clear_locked_tool:
             self.locked_tool = None
@@ -695,6 +699,7 @@ class HandGraspDetectionNode(Node):
             self.depth_lock_prev = crop
             self.depth_lock_prev_valid = valid
             self.depth_lock_frame_count += 1
+            self.depth_lock_preview_tool = self._depth_lock_preview_from_accumulator()
             return
 
         pair_valid = valid & self.depth_lock_prev_valid
@@ -725,7 +730,7 @@ class HandGraspDetectionNode(Node):
             )
             return
 
-        if self.depth_lock_frame_count >= self.depth_lock_max_frames:
+        if self._depth_lock_elapsed_sec() >= self.depth_lock_duration_sec:
             self._publish_depth_tool_lock_failure("depth_lock_unstable")
 
     def _depth_lock_preview_from_accumulator(self) -> Optional[LockedToolMask]:
@@ -752,13 +757,16 @@ class HandGraspDetectionNode(Node):
         x1, y1, x2, y2 = self.depth_lock_roi
         full_mask = np.zeros(self.latest_depth_mm.shape[:2], dtype=np.uint8)
         full_mask[y1:y2, x1:x2] = preview.astype(np.uint8)
+        full_mask = self._expand_binary_mask(full_mask).astype(bool)
         roi = mask_to_roi(full_mask)
         if roi is None:
             return None
-        return LockedToolMask(roi=roi, mask=full_mask.astype(bool), source="DEPTH_LOCKING")
+        return LockedToolMask(roi=roi, mask=full_mask, source="DEPTH_LOCKING")
 
     def _depth_locked_tool_from_accumulator(self) -> Optional[LockedToolMask]:
         if self.depth_lock_frame_count < self.depth_lock_min_frames:
+            return None
+        if self._depth_lock_elapsed_sec() < self.depth_lock_duration_sec:
             return None
         if (
             self.depth_lock_delta_stable_count is None
@@ -789,7 +797,7 @@ class HandGraspDetectionNode(Node):
 
         full_mask = np.zeros(self.latest_depth_mm.shape[:2], dtype=np.uint8)
         full_mask[y1:y2, x1:x2] = stable.astype(np.uint8)
-        full_mask = self._clean_binary_mask(full_mask).astype(bool)
+        full_mask = self._expand_binary_mask(full_mask).astype(bool)
         roi = mask_to_roi(full_mask)
         if roi is None:
             return None
@@ -797,7 +805,7 @@ class HandGraspDetectionNode(Node):
 
     def _handle_depth_lock_no_sample(self) -> None:
         self.depth_lock_frame_count += 1
-        if self.depth_lock_frame_count >= self.depth_lock_max_frames:
+        if self._depth_lock_elapsed_sec() >= self.depth_lock_duration_sec:
             self._publish_depth_tool_lock_failure("depth_lock_no_valid_depth")
 
     def _publish_depth_tool_lock_failure(self, reason: str) -> None:
@@ -815,16 +823,16 @@ class HandGraspDetectionNode(Node):
         msg.reason = reason
         self.mask_lock_pub.publish(msg)
 
+    def _depth_lock_elapsed_sec(self) -> float:
+        if self.depth_lock_started_sec is None:
+            return 0.0
+        return max(0.0, time.monotonic() - self.depth_lock_started_sec)
+
     @staticmethod
-    def _clean_binary_mask(mask: np.ndarray) -> np.ndarray:
+    def _expand_binary_mask(mask: np.ndarray) -> np.ndarray:
         kernel = np.ones((3, 3), np.uint8)
-        cleaned = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_OPEN, kernel)
-        cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, kernel)
-        count, labels, stats, _ = cv2.connectedComponentsWithStats(cleaned, 8)
-        if count <= 1:
-            return cleaned
-        largest = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
-        return (labels == largest).astype(np.uint8)
+        expanded = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_CLOSE, kernel)
+        return cv2.dilate(expanded, kernel, iterations=1)
 
     def _update_prelock_tool_mask(
         self,
