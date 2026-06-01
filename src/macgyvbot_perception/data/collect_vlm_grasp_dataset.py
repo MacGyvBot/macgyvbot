@@ -28,7 +28,7 @@ DEFAULT_MODEL_NAME = "yolov11_best.pt"
 DEFAULT_WIDTH = 640
 DEFAULT_HEIGHT = 480
 DEFAULT_FPS = 30
-DEFAULT_SAM_CHECKPOINT = "mobile_sam.pt"
+DEFAULT_SAM_CHECKPOINT = "mobile_sam_FT.pt"
 DATA_ROOT = Path(__file__).resolve().parent / "grasp_dataset"
 
 

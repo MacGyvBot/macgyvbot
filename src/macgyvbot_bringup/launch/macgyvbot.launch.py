@@ -7,6 +7,7 @@ from launch.substitutions import LaunchConfiguration
 from launch.substitutions import PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+from macgyvbot_config.models import HAND_GRASP_SAM_CHECKPOINT_NAME
 from macgyvbot_config.topics import (
     CAMERA_COLOR_TOPIC,
     CAMERA_DEPTH_TOPIC,
@@ -31,7 +32,7 @@ def generate_launch_description():
         [resources_share, "weights", "hand_grasp_model.pkl"]
     )
     default_sam_checkpoint = PathJoinSubstitution(
-        [resources_share, "weights", "mobile_sam.pt"]
+        [resources_share, "weights", HAND_GRASP_SAM_CHECKPOINT_NAME]
     )
 
     use_voice_command = LaunchConfiguration("use_voice_command")
