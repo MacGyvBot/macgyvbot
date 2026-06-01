@@ -5,6 +5,9 @@ from macgyvbot_perception.grasp_point.mask_image_for_grasp_detection import (
     generate_mask_image_for_grasp_detection,
     generate_sam_depth_mask_image_for_grasp_detection,
 )
+from macgyvbot_perception.grasp_point.grasp_method import (
+    estimate_yaw_from_binary_crop,
+)
 
 
 class FakeSegmenter:
@@ -89,3 +92,14 @@ def test_generate_sam_depth_mask_image_for_grasp_detection_refines_and_crops(
 
     yaw_pca_path = tmp_path / "yaw_pca" / "20260101_000000_000001_sam_depth.jpg"
     assert yaw_pca_path.exists()
+
+
+def test_estimate_yaw_from_binary_crop_uses_white_mask_pixels():
+    crop = np.zeros((20, 30, 3), dtype=np.uint8)
+    crop[8:12, 4:26] = 255
+
+    yaw_deg, debug = estimate_yaw_from_binary_crop(crop)
+
+    assert debug["success"]
+    assert debug["num_pixels"] == 88
+    assert yaw_deg == -90.0

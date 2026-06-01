@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from collections import deque
+from dataclasses import replace
 import math
 from pathlib import Path
 import threading
@@ -51,6 +52,7 @@ from macgyvbot_config.topics import (
 )
 from macgyvbot_config.vlm import (
     DEFAULT_GRASP_POINT_MODE,
+    GRASP_POINT_MODE_CENTER,
     GRASP_POINT_MODE_VLM,
     VLM_GRASP_SERVICE_NAME,
     VLM_ONLY_MODES,
@@ -68,6 +70,9 @@ from macgyvbot_perception.depth_projection import DepthProjector
 from macgyvbot_perception.grasp_point.grasp_point_selector import (
     GraspPointSelector,
     normalize_grasp_point_mode,
+)
+from macgyvbot_perception.grasp_point.grasp_method import (
+    estimate_yaw_from_binary_crop,
 )
 from macgyvbot_perception.grasp_point.mask_image_for_grasp_detection import (
     generate_sam_depth_mask_image_for_grasp_detection,
@@ -1044,6 +1049,8 @@ class TaskCoordinatorNode(Node):
         self.state.current_command = None
         self.state.drawer_prepared_tool = None
         self.state.drawer_preparing_tool = None
+        self.state.grasp_detection_mask_images = None
+        self.state.grasp_detection_mask_target = None
 
     def _run_cleanup_callbacks(self):
         try:
@@ -1160,13 +1167,16 @@ class TaskCoordinatorNode(Node):
         intrinsics = dict(self.state.intrinsics)
         results = self.detector.detect(color_image)
         if self.grasp_point_mode not in (GRASP_POINT_MODE_VLM, *VLM_ONLY_MODES):
-            return self.pick_target_resolver.target_from_boxes(
+            target = self.pick_target_resolver.target_from_boxes(
                 results[0].boxes,
                 target_label,
                 color_image,
                 depth_image,
                 intrinsics,
             )
+            if self.grasp_point_mode != GRASP_POINT_MODE_CENTER:
+                return target
+            return self._target_with_mask_pca_yaw(target, target_label)
 
         matched_box = self.pick_target_resolver.matching_box(
             results[0].boxes,
@@ -1207,6 +1217,11 @@ class TaskCoordinatorNode(Node):
                 reason="vlm_service_failed",
             )
 
+        orientation_rpy_deg = list(response.orientation_rpy_deg) or None
+        pca_yaw_deg = self._mask_pca_yaw_for_target(target_label)
+        if pca_yaw_deg is not None:
+            orientation_rpy_deg = [0.0, 0.0, float(pca_yaw_deg)]
+
         return self.pick_target_resolver.target_from_selected_grasp(
             label,
             target_label,
@@ -1214,11 +1229,41 @@ class TaskCoordinatorNode(Node):
                 int(response.pixel_u),
                 int(response.pixel_v),
                 str(response.source or self.grasp_point_mode),
-                list(response.orientation_rpy_deg) or None,
+                orientation_rpy_deg,
             ),
             depth_image,
             intrinsics,
         )
+
+    def _target_with_mask_pca_yaw(self, target, target_label):
+        if target is None or not target.found:
+            return target
+        pca_yaw_deg = self._mask_pca_yaw_for_target(target_label)
+        if pca_yaw_deg is None:
+            return target
+        return replace(target, yaw_deg=float(pca_yaw_deg))
+
+    def _mask_pca_yaw_for_target(self, target_label):
+        if self.state.grasp_detection_mask_target != target_label:
+            return None
+        images = self.state.grasp_detection_mask_images or []
+        if not images:
+            return None
+
+        yaw_deg, debug = estimate_yaw_from_binary_crop(images[0])
+        if yaw_deg is None:
+            self.get_logger().warn(
+                "grasp detection binary crop PCA yaw failed: "
+                f"reason={debug.get('reason')}, pixels={debug.get('num_pixels')}"
+            )
+            return None
+
+        self.get_logger().info(
+            "grasp detection binary crop PCA yaw applied: "
+            f"target={target_label}, yaw={yaw_deg:.1f}deg, "
+            f"pixels={debug.get('num_pixels')}"
+        )
+        return yaw_deg
 
     def _generate_grasp_detection_mask_images_after_vlm_observe(self, target_label):
         if not self.frame_processor.has_camera_state():
@@ -1263,8 +1308,12 @@ class TaskCoordinatorNode(Node):
             self.get_logger().warn(
                 f"{target_label} VLM 관찰 위치 SAM+Depth mask 생성 실패"
             )
+            self.state.grasp_detection_mask_images = None
+            self.state.grasp_detection_mask_target = None
             return None
 
+        self.state.grasp_detection_mask_images = images
+        self.state.grasp_detection_mask_target = target_label
         self.get_logger().info(
             f"{target_label} VLM 관찰 위치 SAM+Depth grasp detection mask image 저장 완료: "
             "src/macgyvbot_perception/data/yaw_pca"
