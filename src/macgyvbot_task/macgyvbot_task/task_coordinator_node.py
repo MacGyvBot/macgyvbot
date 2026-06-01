@@ -1037,18 +1037,9 @@ class TaskCoordinatorNode(Node):
         try:
             log = self.get_logger()
             log.info(
-                f"{target_label} 탐색 전 drawer {drawer_id}를 열고 관찰 위치로 이동합니다."
+                f"{target_label} 탐색 전 drawer {drawer_id}를 엽니다."
             )
             ok = self.drawer_flow.open_drawer(drawer_id, log)
-            if ok:
-                self._publish_robot_status(
-                    "observing_drawer",
-                    tool_name=target_label,
-                    action="bring",
-                    message=f"{target_label} 탐색을 위해 서랍 내부를 관찰합니다.",
-                    command=self.state.current_command,
-                )
-                ok = self.drawer_flow.observe_drawer(drawer_id, log)
 
             if ok:
                 self.state.target_label = target_label

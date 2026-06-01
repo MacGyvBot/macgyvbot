@@ -321,7 +321,7 @@ class HandGraspDetectionNode(Node):
             self.mask_tracking_active = False
             return
 
-        if status in {"searching", "picking", "grasping"}:
+        if status in {"observing_pick_target", "grasping"}:
             self._set_active_tool_label(requested_tool_label)
             self.mask_tracking_active = bool(self.active_tool_label)
             return

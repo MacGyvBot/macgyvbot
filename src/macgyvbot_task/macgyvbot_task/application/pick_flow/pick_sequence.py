@@ -107,16 +107,7 @@ class PickSequenceRunner:
             ),
             TaskStep(
                 "pick/xy_move",
-                lambda: self._move_to_pose(
-                    "2단계: 안전 높이에서 XY 수평 이동",
-                    context["plan"].target_x-OBSERVE_X_OFFSET_M,
-                    context["plan"].target_y,
-                    context["plan"].travel_z,
-                    context["ori"],
-                    "XY 이동 실패. Pick 시퀀스 중단",
-                    "XY 이동 실패",
-                    "xy_move_failed",
-                ),
+                lambda: self._move_to_vlm_observe_pose(context),
             ),
             TaskStep(
                 "pick/refine_target_and_apply_vlm_yaw",
@@ -266,6 +257,29 @@ class PickSequenceRunner:
             return True
 
         return self._rotate_wrist(vlm_yaw_deg, context)
+
+    def _move_to_vlm_observe_pose(self, context):
+        ok = self._move_to_pose(
+            "2단계: 안전 높이에서 XY 수평 이동",
+            context["plan"].target_x - OBSERVE_X_OFFSET_M,
+            context["plan"].target_y,
+            context["plan"].travel_z,
+            context["ori"],
+            "XY 이동 실패. Pick 시퀀스 중단",
+            "XY 이동 실패",
+            "xy_move_failed",
+        )
+        if not ok:
+            return False
+
+        self.state._publish_robot_status(
+            "observing_pick_target",
+            tool_name=self.state.target_label,
+            action="bring",
+            message=f"{self.state.target_label} VLM 관찰 위치에서 SAM 추적을 시작합니다.",
+            command=self.state.current_command,
+        )
+        return True
 
     def _rotate_wrist(self, vlm_yaw_deg, context):
         log = self.state.logger()
