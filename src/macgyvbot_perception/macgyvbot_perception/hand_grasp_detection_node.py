@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 import cv2
+import numpy as np
 import rclpy
 from cv_bridge import CvBridge
 from rclpy.node import Node
@@ -54,7 +55,6 @@ from macgyvbot_perception.hand_tool_grasp.ml_grasp_classifier import (
 )
 from macgyvbot_perception.hand_tool_grasp.sam_tool_mask import (
     BBoxPromptSegmenter,
-    compute_mask_contact,
     create_bbox_locked_mask,
     create_depth_locked_mask,
     mask_to_roi,
@@ -92,6 +92,15 @@ class HandGraspDetectionNode(Node):
         self.pre_grasp_tool_mask: Optional[LockedToolMask] = None
         self.pre_grasp_tool_roi = None
         self.pre_grasp_tool_depth_mm = None
+        self.depth_lock_active = False
+        self.depth_lock_published = False
+        self.depth_lock_failed = False
+        self.depth_lock_roi = None
+        self.depth_lock_min = None
+        self.depth_lock_max = None
+        self.depth_lock_valid_count = None
+        self.depth_lock_frame_count = 0
+        self.depth_lock_preview_tool: Optional[LockedToolMask] = None
         self.frame_index = 0
 
         self.color_topic = self.declare_parameter(
@@ -229,7 +238,24 @@ class HandGraspDetectionNode(Node):
         self.depth_min_contact_landmarks = int(
             self.declare_parameter("depth_min_contact_landmarks", 2).value
         )
-
+        self.depth_lock_min_frames = int(
+            self.declare_parameter("depth_lock_min_frames", 5).value
+        )
+        self.depth_lock_max_frames = int(
+            self.declare_parameter("depth_lock_max_frames", 20).value
+        )
+        self.depth_lock_stability_mm = float(
+            self.declare_parameter("depth_lock_stability_mm", 35.0).value
+        )
+        self.depth_lock_min_valid_ratio = float(
+            self.declare_parameter("depth_lock_min_valid_ratio", 0.6).value
+        )
+        self.depth_lock_min_area_ratio = float(
+            self.declare_parameter("depth_lock_min_area_ratio", 0.04).value
+        )
+        self.depth_lock_max_area_ratio = float(
+            self.declare_parameter("depth_lock_max_area_ratio", 1.5).value
+        )
         self.hand_detector = HandDetector(max_num_hands=max_hands)
         self.tool_detector = self._create_tool_detector(
             model_path=yolo_model,
@@ -238,7 +264,7 @@ class HandGraspDetectionNode(Node):
             image_size=yolo_imgsz,
         )
         self.ml_classifier = self._create_ml_classifier()
-        self.sam_segmenter = self._create_sam_segmenter()
+        self.sam_segmenter = None
 
         self.result_pub = self.create_publisher(
             HumanGraspResult, self.result_topic, 10
@@ -341,7 +367,7 @@ class HandGraspDetectionNode(Node):
 
         if status == self.lock_on_status:
             self._set_active_tool_label(requested_tool_label)
-            self.lock_requested = True
+            self._start_depth_tool_lock()
             self.mask_tracking_active = False
             self.locked_tool = None
             if self.ml_classifier is not None:
@@ -362,8 +388,7 @@ class HandGraspDetectionNode(Node):
 
         if status == "pre_grasp_mask_lock":
             self._set_active_tool_label(requested_tool_label)
-            self.pre_grasp_lock_requested = True
-            self.mask_tracking_active = bool(self.active_tool_label)
+            self.mask_tracking_active = False
             return
 
         if status in {"returned", "done", "failed", "cancelled"}:
@@ -398,21 +423,8 @@ class HandGraspDetectionNode(Node):
             self.latest_tool_detection = tool_detection
             self.last_yolo_seen_frame = self.frame_index
 
-        if self.mask_tracking_active:
-            self._update_prelock_tool_mask(frame, tool_detection)
-
-        if self.pre_grasp_lock_requested:
-            self._capture_pre_grasp_tool_mask(
-                frame,
-                tool_detection or self.latest_tool_detection,
-            )
-
-        if self.lock_requested and self.locked_tool is None:
-            self.locked_tool = self._lock_tool_mask(
-                frame,
-                tool_detection or self.latest_tool_detection,
-            )
-            self._publish_mask_lock_result(self.locked_tool)
+        if self.depth_lock_active:
+            self._update_depth_tool_lock(tool_detection or self.latest_tool_detection)
 
         detected_tool_roi = (
             self.locked_tool.roi
@@ -426,21 +438,17 @@ class HandGraspDetectionNode(Node):
         hand_for_state = active_hand if active_hand is not None else (
             hand_infos[0] if hand_infos else None
         )
-        observation_roi = self._observation_roi(detected_tool_roi, active_hand)
-        depth_info = self._build_depth_info(hand_for_state, observation_roi)
-        mask_result = compute_mask_contact(
-            hand_info=hand_for_state,
-            locked_tool=self.locked_tool,
-            contact_radius=self.mask_contact_radius,
-            min_contact_landmarks=self.mask_min_contact_landmarks,
-            proximity_threshold=self.mask_proximity_threshold,
+        observation_roi = detected_tool_roi
+        depth_info = (
+            self._build_locked_tool_depth_info(hand_for_state)
+            if self.locked_tool is not None
+            else self._build_depth_info(hand_for_state, observation_roi)
         )
         ml_result = self._update_ml_grasp(hand_for_state)
         result = self._compose_result(
             hand_info=hand_for_state,
             tool_roi=observation_roi,
             depth_info=depth_info,
-            mask_result=mask_result,
             ml_result=ml_result,
         )
 
@@ -465,7 +473,7 @@ class HandGraspDetectionNode(Node):
                     tool_detection=tool_detection,
                     result=result,
                     locked_tool=self.locked_tool,
-                    candidate_tool_mask=self.latest_tool_mask,
+                    candidate_tool_mask=self.depth_lock_preview_tool,
                     depth_mm=self.latest_depth_mm,
                 )
             if self.annotated_pub is not None:
@@ -479,8 +487,8 @@ class HandGraspDetectionNode(Node):
         if result["state"] != self.last_state:
             self.get_logger().info(
                 "grasp state={state}, human_grasped_tool={human_grasped_tool}, "
-                "ml={ml_stable_state}/{ml_raw_state}, mask={mask_source}, "
-                "mask_contact_count={mask_contact_count}".format(
+                "ml={ml_stable_state}/{ml_raw_state}, "
+                "depth_contact_count={depth_contact_count}".format(
                     **result
                 )
             )
@@ -508,6 +516,82 @@ class HandGraspDetectionNode(Node):
             depth_diff_threshold_mm=self.depth_diff_threshold_mm,
             min_depth_contact_landmarks=self.depth_min_contact_landmarks,
         )
+
+    def _build_locked_tool_depth_info(self, hand_info: Optional[dict]):
+        if not self.use_depth or self.latest_depth_mm is None:
+            return None
+        if self.locked_tool is None:
+            return None
+
+        mask = self.locked_tool.mask.astype(bool)
+        tool_values = self.latest_depth_mm[(self.latest_depth_mm > 0) & mask]
+        tool_depth = float(np.median(tool_values)) if tool_values.size else None
+        if tool_depth is None:
+            return {
+                "depth_available": False,
+                "tool_depth_mm": None,
+                "min_hand_tool_depth_diff_mm": None,
+                "depth_contact_count": 0,
+                "depth_grasp_confirmed": False,
+            }
+
+        if hand_info is None:
+            return {
+                "depth_available": True,
+                "tool_depth_mm": tool_depth,
+                "min_hand_tool_depth_diff_mm": None,
+                "depth_contact_count": 0,
+                "depth_grasp_confirmed": False,
+            }
+
+        contact_mask = self._dilated_locked_tool_mask()
+        valid_diffs = []
+        depth_contact_count = 0
+        height, width = self.latest_depth_mm.shape[:2]
+        for x, y in hand_info["landmarks"].values():
+            if not (0 <= x < width and 0 <= y < height):
+                continue
+            if not contact_mask[y, x]:
+                continue
+            hand_depth = self._median_depth_at_point((x, y))
+            if hand_depth is None:
+                continue
+            diff = abs(hand_depth - tool_depth)
+            valid_diffs.append(diff)
+            if diff <= self.depth_diff_threshold_mm:
+                depth_contact_count += 1
+
+        min_depth_diff = min(valid_diffs) if valid_diffs else None
+        return {
+            "depth_available": True,
+            "tool_depth_mm": tool_depth,
+            "min_hand_tool_depth_diff_mm": min_depth_diff,
+            "depth_contact_count": depth_contact_count,
+            "depth_grasp_confirmed": (
+                depth_contact_count >= self.depth_min_contact_landmarks
+            ),
+        }
+
+    def _dilated_locked_tool_mask(self):
+        mask = self.locked_tool.mask.astype(np.uint8)
+        radius = max(1, int(self.mask_contact_radius))
+        kernel = np.ones((radius * 2 + 1, radius * 2 + 1), np.uint8)
+        return cv2.dilate(mask, kernel).astype(bool)
+
+    def _median_depth_at_point(self, point, radius=3):
+        x, y = point
+        height, width = self.latest_depth_mm.shape[:2]
+        x1 = max(0, min(width, int(x) - radius))
+        y1 = max(0, min(height, int(y) - radius))
+        x2 = max(0, min(width, int(x) + radius + 1))
+        y2 = max(0, min(height, int(y) + radius + 1))
+        if x2 <= x1 or y2 <= y1:
+            return None
+        values = self.latest_depth_mm[y1:y2, x1:x2]
+        values = values[values > 0]
+        if values.size == 0:
+            return None
+        return float(np.median(values))
 
     @staticmethod
     def _observation_roi(
@@ -558,8 +642,186 @@ class HandGraspDetectionNode(Node):
         self.pre_grasp_tool_mask = None
         self.pre_grasp_tool_roi = None
         self.pre_grasp_tool_depth_mm = None
+        self._reset_depth_tool_lock(clear_locked_tool=False)
         if clear_active_label:
             self.active_tool_label = ""
+
+    def _start_depth_tool_lock(self) -> None:
+        self._reset_depth_tool_lock(clear_locked_tool=True)
+        self.depth_lock_active = True
+        self.get_logger().info("Depth locked tool mask accumulation started.")
+
+    def _reset_depth_tool_lock(self, clear_locked_tool=True) -> None:
+        self.depth_lock_active = False
+        self.depth_lock_published = False
+        self.depth_lock_failed = False
+        self.depth_lock_roi = None
+        self.depth_lock_min = None
+        self.depth_lock_max = None
+        self.depth_lock_valid_count = None
+        self.depth_lock_frame_count = 0
+        self.depth_lock_preview_tool = None
+        if clear_locked_tool:
+            self.locked_tool = None
+
+    def _update_depth_tool_lock(
+        self,
+        _tool_detection: Optional[ToolDetection],
+    ) -> None:
+        if self.latest_depth_mm is None:
+            return
+
+        if self.depth_lock_roi is None:
+            height, width = self.latest_depth_mm.shape[:2]
+            self.depth_lock_roi = (0, 0, width, height)
+            self.get_logger().info(
+                f"Depth lock ROI initialized from full depth frame: roi={self.depth_lock_roi}"
+            )
+
+        x1, y1, x2, y2 = self.depth_lock_roi
+        if x2 <= x1 or y2 <= y1:
+            self._publish_depth_tool_lock_failure("invalid_depth_lock_roi")
+            return
+
+        crop = self.latest_depth_mm[y1:y2, x1:x2].astype(np.float32)
+        valid = crop > 0
+        if not valid.any():
+            self._handle_depth_lock_no_sample()
+            return
+
+        if self.depth_lock_min is None:
+            self.depth_lock_min = np.where(valid, crop, np.inf)
+            self.depth_lock_max = np.where(valid, crop, -np.inf)
+            self.depth_lock_valid_count = valid.astype(np.int32)
+        else:
+            self.depth_lock_min = np.where(
+                valid,
+                np.minimum(self.depth_lock_min, crop),
+                self.depth_lock_min,
+            )
+            self.depth_lock_max = np.where(
+                valid,
+                np.maximum(self.depth_lock_max, crop),
+                self.depth_lock_max,
+            )
+            self.depth_lock_valid_count += valid.astype(np.int32)
+
+        self.depth_lock_frame_count += 1
+        self.depth_lock_preview_tool = self._depth_lock_preview_from_accumulator()
+        locked = self._depth_locked_tool_from_accumulator()
+        if locked is not None:
+            self.locked_tool = locked
+            self.depth_lock_active = False
+            self.depth_lock_preview_tool = None
+            self._publish_mask_lock_result(locked)
+            self.get_logger().info(
+                f"Depth locked tool mask ready: frames={self.depth_lock_frame_count}, "
+                f"roi={locked.roi}"
+            )
+            return
+
+        if self.depth_lock_frame_count >= self.depth_lock_max_frames:
+            self._publish_depth_tool_lock_failure("depth_lock_unstable")
+
+    def _depth_lock_preview_from_accumulator(self) -> Optional[LockedToolMask]:
+        if (
+            self.depth_lock_roi is None
+            or self.depth_lock_valid_count is None
+            or self.latest_depth_mm is None
+        ):
+            return None
+
+        required_valid_count = max(
+            1,
+            int(round(self.depth_lock_frame_count * self.depth_lock_min_valid_ratio)),
+        )
+        preview = (
+            (self.depth_lock_valid_count >= required_valid_count)
+            & np.isfinite(self.depth_lock_min)
+            & np.isfinite(self.depth_lock_max)
+        )
+        stable = preview & (
+            (self.depth_lock_max - self.depth_lock_min) <= self.depth_lock_stability_mm
+        )
+        if stable.any():
+            preview = stable
+        if not preview.any():
+            return None
+
+        x1, y1, x2, y2 = self.depth_lock_roi
+        full_mask = np.zeros(self.latest_depth_mm.shape[:2], dtype=np.uint8)
+        full_mask[y1:y2, x1:x2] = preview.astype(np.uint8)
+        roi = mask_to_roi(full_mask)
+        if roi is None:
+            return None
+        return LockedToolMask(roi=roi, mask=full_mask.astype(bool), source="DEPTH_LOCKING")
+
+    def _depth_locked_tool_from_accumulator(self) -> Optional[LockedToolMask]:
+        if self.depth_lock_frame_count < self.depth_lock_min_frames:
+            return None
+        if self.depth_lock_min is None or self.depth_lock_valid_count is None:
+            return None
+
+        required_valid_count = max(
+            1,
+            int(round(self.depth_lock_frame_count * self.depth_lock_min_valid_ratio)),
+        )
+        stable = (
+            (self.depth_lock_valid_count >= required_valid_count)
+            & np.isfinite(self.depth_lock_min)
+            & np.isfinite(self.depth_lock_max)
+            & ((self.depth_lock_max - self.depth_lock_min) <= self.depth_lock_stability_mm)
+        )
+
+        x1, y1, x2, y2 = self.depth_lock_roi
+        bbox_area = max(1, (x2 - x1) * (y2 - y1))
+        mask_area = int(stable.sum())
+        area_ratio = mask_area / bbox_area
+        if (
+            mask_area <= 0
+            or area_ratio < self.depth_lock_min_area_ratio
+            or area_ratio > self.depth_lock_max_area_ratio
+        ):
+            return None
+
+        full_mask = np.zeros(self.latest_depth_mm.shape[:2], dtype=np.uint8)
+        full_mask[y1:y2, x1:x2] = stable.astype(np.uint8)
+        full_mask = self._clean_binary_mask(full_mask).astype(bool)
+        roi = mask_to_roi(full_mask)
+        if roi is None:
+            return None
+        return LockedToolMask(roi=roi, mask=full_mask, source="DEPTH_LOCKED_TOOL")
+
+    def _handle_depth_lock_no_sample(self) -> None:
+        self.depth_lock_frame_count += 1
+        if self.depth_lock_frame_count >= self.depth_lock_max_frames:
+            self._publish_depth_tool_lock_failure("depth_lock_no_valid_depth")
+
+    def _publish_depth_tool_lock_failure(self, reason: str) -> None:
+        if self.depth_lock_failed:
+            return
+        self.depth_lock_active = False
+        self.depth_lock_failed = True
+        self.depth_lock_preview_tool = None
+        msg = ToolMaskLock()
+        msg.locked = False
+        msg.mask_source = "DEPTH_LOCKED_TOOL"
+        msg.has_tool_roi = False
+        msg.tool_roi = [0, 0, 0, 0]
+        msg.has_reason = True
+        msg.reason = reason
+        self.mask_lock_pub.publish(msg)
+
+    @staticmethod
+    def _clean_binary_mask(mask: np.ndarray) -> np.ndarray:
+        kernel = np.ones((3, 3), np.uint8)
+        cleaned = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_OPEN, kernel)
+        cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, kernel)
+        count, labels, stats, _ = cv2.connectedComponentsWithStats(cleaned, 8)
+        if count <= 1:
+            return cleaned
+        largest = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+        return (labels == largest).astype(np.uint8)
 
     def _update_prelock_tool_mask(
         self,
@@ -1004,7 +1266,6 @@ class HandGraspDetectionNode(Node):
         hand_info: Optional[dict],
         tool_roi,
         depth_info: Optional[dict],
-        mask_result,
         ml_result: MLGraspResult,
     ) -> dict:
         confidence_ok = (
@@ -1014,16 +1275,12 @@ class HandGraspDetectionNode(Node):
                 or ml_result.confidence >= self.ml_min_confidence
             )
         )
-        mask_available = self.locked_tool is not None
-        mask_near_or_contact = mask_result.near_or_contact if mask_available else False
-        locked_mask_grasp_ok = bool(mask_available and mask_result.mask_contact_confirmed)
         depth_info = depth_info or {}
         depth_grasp_ok = bool(depth_info.get("depth_grasp_confirmed", False))
         human_grasped_tool = bool(
             ml_result.is_grasp
             and confidence_ok
             and depth_grasp_ok
-            and locked_mask_grasp_ok
         )
 
         result = {
@@ -1033,7 +1290,6 @@ class HandGraspDetectionNode(Node):
                 ml_result=ml_result,
                 confidence_ok=confidence_ok,
                 depth_grasp_ok=depth_grasp_ok,
-                locked_mask_grasp_ok=locked_mask_grasp_ok,
                 human_grasped_tool=human_grasped_tool,
             ),
             "hand_present": hand_info is not None,
@@ -1045,7 +1301,7 @@ class HandGraspDetectionNode(Node):
             "min_hand_tool_depth_diff_mm": depth_info.get("min_hand_tool_depth_diff_mm"),
             "depth_contact_count": depth_info.get("depth_contact_count", 0),
             "depth_grasp_confirmed": depth_info.get("depth_grasp_confirmed", False),
-            "min_landmark_to_tool_distance": mask_result.min_landmark_to_tool_distance,
+            "min_landmark_to_tool_distance": None,
         }
         result["tool_roi"] = tool_roi
         result["ml_raw_state"] = ml_result.raw_state
@@ -1056,13 +1312,15 @@ class HandGraspDetectionNode(Node):
         result["ml_required"] = True
         result["depth_required"] = True
         result["depth_grasp_ok"] = depth_grasp_ok
-        result["mask_source"] = self.locked_tool.source if self.locked_tool else "NONE"
-        result["mask_locked"] = mask_available
-        result["mask_contact_count"] = mask_result.mask_contact_count
-        result["mask_contact_confirmed"] = mask_result.mask_contact_confirmed
-        result["mask_proximity_ok"] = mask_result.mask_proximity_ok
-        result["mask_near_or_contact"] = mask_near_or_contact
-        result["locked_mask_grasp_ok"] = locked_mask_grasp_ok
+        result["mask_source"] = (
+            self.locked_tool.source if self.locked_tool is not None else "DEPTH_GRASP_CHECK"
+        )
+        result["mask_locked"] = self.locked_tool is not None
+        result["mask_contact_count"] = 0
+        result["mask_contact_confirmed"] = False
+        result["mask_proximity_ok"] = False
+        result["mask_near_or_contact"] = False
+        result["locked_mask_grasp_ok"] = depth_grasp_ok
 
         return result
 
@@ -1073,7 +1331,6 @@ class HandGraspDetectionNode(Node):
         ml_result: MLGraspResult,
         confidence_ok: bool,
         depth_grasp_ok: bool,
-        locked_mask_grasp_ok: bool,
         human_grasped_tool: bool,
     ) -> str:
         if human_grasped_tool:
@@ -1094,8 +1351,6 @@ class HandGraspDetectionNode(Node):
             return "ML_NOT_GRASP"
         if not depth_grasp_ok:
             return "DEPTH_GRASP_NOT_CONFIRMED"
-        if not locked_mask_grasp_ok:
-            return "LOCKED_MASK_GRASP_NOT_CONFIRMED"
         if ml_result.stable_state == "grasp":
             return "ML_GRASP_BUFFER_NOT_RAW"
         return "ML_NOT_GRASP"

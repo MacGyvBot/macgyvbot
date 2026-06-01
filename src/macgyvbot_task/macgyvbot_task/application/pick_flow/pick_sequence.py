@@ -127,10 +127,6 @@ class PickSequenceRunner:
                 ),
             ),
             TaskStep(
-                "pick/pre_grasp_mask_lock",
-                self._request_pre_grasp_mask_lock,
-            ),
-            TaskStep(
                 "pick/grasp_descent",
                 lambda: self._descend_to_grasp(
                     context["plan"],
@@ -138,7 +134,6 @@ class PickSequenceRunner:
                 ),
             ),
             TaskStep("pick/grasp_tool", self._grasp_tool),
-            TaskStep("pick/wait_tool_mask_lock", self._wait_tool_mask_lock),
             TaskStep(
                 "pick/lift",
                 lambda: self._move_to_pose(
@@ -156,6 +151,7 @@ class PickSequenceRunner:
                 "pick/move_to_handoff",
                 lambda: self._move_to_handoff(context["plan"], context),
             ),
+            TaskStep("pick/wait_tool_mask_lock", self._wait_tool_mask_lock),
             TaskStep(
                 "pick/wait_human_grasp",
                 lambda: self._wait_human_grasp(context["plan"], context),
@@ -285,18 +281,6 @@ class PickSequenceRunner:
         )
         return True
 
-    def _request_pre_grasp_mask_lock(self):
-        self.state.logger().info("4단계: Z 하강 전 임시 공구 mask lock 요청")
-        self.state._publish_robot_status(
-            "pre_grasp_mask_lock",
-            tool_name=self.state.target_label,
-            action="bring",
-            message=f"{self.state.target_label} Z 하강 전 임시 mask를 고정합니다.",
-            command=self.state.current_command,
-        )
-        cooperative_wait(0.25)
-        return True
-
     def _rotate_wrist(self, vlm_yaw_deg, context):
         log = self.state.logger()
         ok = self.motion.rotate_wrist_by_yaw_deg(vlm_yaw_deg, log)
@@ -370,14 +354,14 @@ class PickSequenceRunner:
 
     def _wait_tool_mask_lock(self):
         log = self.state.logger()
-        log.info("6단계: 공구 mask lock 완료 대기")
+        log.info("handoff 위치 이동 후 depth locked tool mask 완료 대기")
         if self.handoff.wait_for_tool_mask_lock(log):
             return True
 
         if self._interrupted():
             return False
 
-        log.error("공구 mask lock 실패. Lift 전에 pick 시퀀스를 중단합니다.")
+        log.error("공구 mask lock 실패. 사용자 잡기 대기 전에 pick 시퀀스를 중단합니다.")
         self.state._publish_robot_status(
             "failed",
             message="공구 mask lock에 실패했습니다.",
