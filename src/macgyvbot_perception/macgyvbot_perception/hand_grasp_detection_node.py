@@ -96,9 +96,10 @@ class HandGraspDetectionNode(Node):
         self.depth_lock_published = False
         self.depth_lock_failed = False
         self.depth_lock_roi = None
-        self.depth_lock_min = None
-        self.depth_lock_max = None
-        self.depth_lock_valid_count = None
+        self.depth_lock_prev = None
+        self.depth_lock_prev_valid = None
+        self.depth_lock_delta_stable_count = None
+        self.depth_lock_pair_valid_count = None
         self.depth_lock_frame_count = 0
         self.depth_lock_preview_tool: Optional[LockedToolMask] = None
         self.frame_index = 0
@@ -245,13 +246,13 @@ class HandGraspDetectionNode(Node):
             self.declare_parameter("depth_lock_max_frames", 20).value
         )
         self.depth_lock_stability_mm = float(
-            self.declare_parameter("depth_lock_stability_mm", 35.0).value
+            self.declare_parameter("depth_lock_stability_mm", 20.0).value
         )
         self.depth_lock_min_valid_ratio = float(
-            self.declare_parameter("depth_lock_min_valid_ratio", 0.6).value
+            self.declare_parameter("depth_lock_min_valid_ratio", 0.5).value
         )
         self.depth_lock_min_area_ratio = float(
-            self.declare_parameter("depth_lock_min_area_ratio", 0.04).value
+            self.declare_parameter("depth_lock_min_area_ratio", 0.001).value
         )
         self.depth_lock_max_area_ratio = float(
             self.declare_parameter("depth_lock_max_area_ratio", 1.5).value
@@ -656,9 +657,10 @@ class HandGraspDetectionNode(Node):
         self.depth_lock_published = False
         self.depth_lock_failed = False
         self.depth_lock_roi = None
-        self.depth_lock_min = None
-        self.depth_lock_max = None
-        self.depth_lock_valid_count = None
+        self.depth_lock_prev = None
+        self.depth_lock_prev_valid = None
+        self.depth_lock_delta_stable_count = None
+        self.depth_lock_pair_valid_count = None
         self.depth_lock_frame_count = 0
         self.depth_lock_preview_tool = None
         if clear_locked_tool:
@@ -689,22 +691,25 @@ class HandGraspDetectionNode(Node):
             self._handle_depth_lock_no_sample()
             return
 
-        if self.depth_lock_min is None:
-            self.depth_lock_min = np.where(valid, crop, np.inf)
-            self.depth_lock_max = np.where(valid, crop, -np.inf)
-            self.depth_lock_valid_count = valid.astype(np.int32)
+        if self.depth_lock_prev is None:
+            self.depth_lock_prev = crop
+            self.depth_lock_prev_valid = valid
+            self.depth_lock_frame_count += 1
+            return
+
+        pair_valid = valid & self.depth_lock_prev_valid
+        stable_delta = (
+            pair_valid
+            & (np.abs(crop - self.depth_lock_prev) <= self.depth_lock_stability_mm)
+        )
+        if self.depth_lock_delta_stable_count is None:
+            self.depth_lock_delta_stable_count = stable_delta.astype(np.int32)
+            self.depth_lock_pair_valid_count = pair_valid.astype(np.int32)
         else:
-            self.depth_lock_min = np.where(
-                valid,
-                np.minimum(self.depth_lock_min, crop),
-                self.depth_lock_min,
-            )
-            self.depth_lock_max = np.where(
-                valid,
-                np.maximum(self.depth_lock_max, crop),
-                self.depth_lock_max,
-            )
-            self.depth_lock_valid_count += valid.astype(np.int32)
+            self.depth_lock_delta_stable_count += stable_delta.astype(np.int32)
+            self.depth_lock_pair_valid_count += pair_valid.astype(np.int32)
+        self.depth_lock_prev = crop
+        self.depth_lock_prev_valid = valid
 
         self.depth_lock_frame_count += 1
         self.depth_lock_preview_tool = self._depth_lock_preview_from_accumulator()
@@ -726,25 +731,21 @@ class HandGraspDetectionNode(Node):
     def _depth_lock_preview_from_accumulator(self) -> Optional[LockedToolMask]:
         if (
             self.depth_lock_roi is None
-            or self.depth_lock_valid_count is None
+            or self.depth_lock_delta_stable_count is None
+            or self.depth_lock_pair_valid_count is None
             or self.latest_depth_mm is None
         ):
             return None
 
+        pair_frame_count = max(1, self.depth_lock_frame_count - 1)
         required_valid_count = max(
             1,
-            int(round(self.depth_lock_frame_count * self.depth_lock_min_valid_ratio)),
+            int(round(pair_frame_count * self.depth_lock_min_valid_ratio)),
         )
         preview = (
-            (self.depth_lock_valid_count >= required_valid_count)
-            & np.isfinite(self.depth_lock_min)
-            & np.isfinite(self.depth_lock_max)
+            (self.depth_lock_pair_valid_count >= required_valid_count)
+            & (self.depth_lock_delta_stable_count >= required_valid_count)
         )
-        stable = preview & (
-            (self.depth_lock_max - self.depth_lock_min) <= self.depth_lock_stability_mm
-        )
-        if stable.any():
-            preview = stable
         if not preview.any():
             return None
 
@@ -759,18 +760,20 @@ class HandGraspDetectionNode(Node):
     def _depth_locked_tool_from_accumulator(self) -> Optional[LockedToolMask]:
         if self.depth_lock_frame_count < self.depth_lock_min_frames:
             return None
-        if self.depth_lock_min is None or self.depth_lock_valid_count is None:
+        if (
+            self.depth_lock_delta_stable_count is None
+            or self.depth_lock_pair_valid_count is None
+        ):
             return None
 
+        pair_frame_count = max(1, self.depth_lock_frame_count - 1)
         required_valid_count = max(
             1,
-            int(round(self.depth_lock_frame_count * self.depth_lock_min_valid_ratio)),
+            int(round(pair_frame_count * self.depth_lock_min_valid_ratio)),
         )
         stable = (
-            (self.depth_lock_valid_count >= required_valid_count)
-            & np.isfinite(self.depth_lock_min)
-            & np.isfinite(self.depth_lock_max)
-            & ((self.depth_lock_max - self.depth_lock_min) <= self.depth_lock_stability_mm)
+            (self.depth_lock_pair_valid_count >= required_valid_count)
+            & (self.depth_lock_delta_stable_count >= required_valid_count)
         )
 
         x1, y1, x2, y2 = self.depth_lock_roi
