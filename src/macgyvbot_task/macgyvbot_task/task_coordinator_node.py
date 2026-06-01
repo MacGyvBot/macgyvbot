@@ -31,7 +31,7 @@ from macgyvbot_interfaces.msg import (
 from macgyvbot_interfaces.srv import SetGripper
 
 from macgyvbot_config.drawer import DRAWER_OBSERVATION_J6_DEG
-from macgyvbot_config.models import YOLO_MODEL_NAME
+from macgyvbot_config.models import HAND_GRASP_SAM_CHECKPOINT_NAME, YOLO_MODEL_NAME
 from macgyvbot_config.robot import GROUP_NAME, HOME_JOINTS, WRIST_JOINT_NAME
 from macgyvbot_config.timing import (
     CAMERA_LOOP_IDLE_SLEEP_SEC,
@@ -70,6 +70,15 @@ from macgyvbot_perception.depth_projection import DepthProjector
 from macgyvbot_perception.grasp_point.grasp_point_selector import (
     GraspPointSelector,
     normalize_grasp_point_mode,
+)
+from macgyvbot_perception.grasp_point.mask_image_for_grasp_detection import (
+    generate_sam_depth_mask_image_for_grasp_detection,
+)
+from macgyvbot_perception.hand_tool_grasp.calculations import (
+    depth_to_mm,
+)
+from macgyvbot_perception.hand_tool_grasp.sam_tool_mask import (
+    BBoxPromptSegmenter,
 )
 from macgyvbot_perception.pick_target_resolver import PickTargetResolver
 from macgyvbot_perception.yolo_detector import YoloDetector
@@ -203,6 +212,9 @@ class TaskCoordinatorNode(Node):
             **self._read_grasp_point_api_config(),
             **self._read_vlm_sam_config(),
         )
+        self.grasp_detection_sam_config = self._read_grasp_detection_sam_config()
+        self.grasp_detection_sam_segmenter = None
+        self.grasp_detection_sam_init_attempted = False
         self.vlm_service_client = VLMGraspServiceClient(
             self,
             self.bridge,
@@ -296,6 +308,9 @@ class TaskCoordinatorNode(Node):
             self.state,
             self.tool_hold_monitor,
             refine_pick_target=self._refine_pick_target_after_centering,
+            generate_grasp_detection_mask_images=(
+                self._generate_grasp_detection_mask_images_after_vlm_observe
+            ),
             control_events=control_events,
             drawer_flow=self.drawer_flow,
         )
@@ -374,7 +389,10 @@ class TaskCoordinatorNode(Node):
 
     def _read_vlm_sam_config(self):
         self.declare_parameter("sam_enabled", True)
-        self.declare_parameter("sam_checkpoint", str(Path("weights") / "mobile_sam.pt"))
+        self.declare_parameter(
+            "sam_checkpoint",
+            str(Path("weights") / HAND_GRASP_SAM_CHECKPOINT_NAME),
+        )
         self.declare_parameter("sam_backend", "mobile_sam")
         self.declare_parameter("sam_model_type", "vit_t")
         self.declare_parameter("sam_device", "cuda")
@@ -385,6 +403,61 @@ class TaskCoordinatorNode(Node):
             "sam_model_type": str(self.get_parameter("sam_model_type").value).strip(),
             "sam_device": str(self.get_parameter("sam_device").value).strip(),
         }
+
+    def _read_grasp_detection_sam_config(self):
+        self.declare_parameter("sam_depth_tolerance_mm", 30.0)
+        self.declare_parameter("sam_depth_min_valid_ratio", 0.03)
+        self.declare_parameter("sam_depth_expand_iterations", 1)
+        return {
+            "sam_enabled": self._read_bool_parameter("sam_enabled", True),
+            "sam_checkpoint": str(self.get_parameter("sam_checkpoint").value).strip(),
+            "sam_backend": str(self.get_parameter("sam_backend").value).strip(),
+            "sam_model_type": str(self.get_parameter("sam_model_type").value).strip(),
+            "sam_device": str(self.get_parameter("sam_device").value).strip(),
+            "sam_depth_tolerance_mm": float(
+                self.get_parameter("sam_depth_tolerance_mm").value
+            ),
+            "sam_depth_min_valid_ratio": float(
+                self.get_parameter("sam_depth_min_valid_ratio").value
+            ),
+            "sam_depth_expand_iterations": int(
+                self.get_parameter("sam_depth_expand_iterations").value
+            ),
+        }
+
+    def _create_grasp_detection_sam_segmenter(self, config):
+        if not bool(config["sam_enabled"]):
+            self.get_logger().info(
+                "VLM 관찰 위치 grasp detection SAM mask 저장 비활성화"
+            )
+            return None
+
+        try:
+            return BBoxPromptSegmenter(
+                backend=config["sam_backend"],
+                checkpoint_path=config["sam_checkpoint"],
+                model_type=config["sam_model_type"],
+                device=config["sam_device"],
+            )
+        except Exception as exc:
+            self.get_logger().warn(
+                f"VLM 관찰 위치 grasp detection SAM 초기화 실패: {exc}"
+            )
+            return None
+
+    def _grasp_detection_sam(self):
+        if self.grasp_detection_sam_segmenter is not None:
+            return self.grasp_detection_sam_segmenter
+        if self.grasp_detection_sam_init_attempted:
+            return None
+
+        self.grasp_detection_sam_init_attempted = True
+        self.grasp_detection_sam_segmenter = (
+            self._create_grasp_detection_sam_segmenter(
+                self.grasp_detection_sam_config,
+            )
+        )
+        return self.grasp_detection_sam_segmenter
 
     def _read_vlm_service_config(self):
         self.declare_parameter("vlm_service_name", VLM_GRASP_SERVICE_NAME)
@@ -1296,6 +1369,57 @@ class TaskCoordinatorNode(Node):
             depth_image,
             intrinsics,
         )
+
+    def _generate_grasp_detection_mask_images_after_vlm_observe(self, target_label):
+        if not self.frame_processor.has_camera_state():
+            self.get_logger().warn(
+                "grasp detection mask image 생성을 위한 camera state가 없습니다."
+            )
+            return None
+
+        color_image = self.state.color_image.copy()
+        results = self.detector.detect(color_image)
+        matched_box = self.pick_target_resolver.matching_box(
+            results[0].boxes,
+            target_label,
+        )
+        if matched_box is None:
+            self.get_logger().warn(
+                f"{target_label} grasp detection mask image 생성을 위한 YOLO bbox가 없습니다."
+            )
+            return None
+
+        box, _label = matched_box
+        bbox_xyxy = box.xyxy[0].cpu().numpy().tolist()
+        depth_mm = depth_to_mm(self.state.depth_image.copy(), "passthrough")
+        images = generate_sam_depth_mask_image_for_grasp_detection(
+            color_image=color_image,
+            depth_mm=depth_mm,
+            bbox_xyxy=bbox_xyxy,
+            sam_segmenter=self._grasp_detection_sam(),
+            data_root=Path("src/macgyvbot_perception/data"),
+            filename_prefix=f"pick_vlm_observe_{target_label}",
+            sam_depth_tolerance_mm=(
+                self.grasp_detection_sam_config["sam_depth_tolerance_mm"]
+            ),
+            sam_depth_min_valid_ratio=(
+                self.grasp_detection_sam_config["sam_depth_min_valid_ratio"]
+            ),
+            sam_depth_expand_iterations=(
+                self.grasp_detection_sam_config["sam_depth_expand_iterations"]
+            ),
+        )
+        if images is None:
+            self.get_logger().warn(
+                f"{target_label} VLM 관찰 위치 SAM+Depth mask 생성 실패"
+            )
+            return None
+
+        self.get_logger().info(
+            f"{target_label} VLM 관찰 위치 SAM+Depth grasp detection mask image 저장 완료: "
+            "src/macgyvbot_perception/data/yaw_pca"
+        )
+        return images
 
     def _motion_interrupted(self):
         return self.exit_req.is_set() or self.pause_req.is_set()

@@ -29,6 +29,7 @@ class PickSequenceRunner:
         state,
         tool_hold_monitor=None,
         refine_pick_target=None,
+        generate_grasp_detection_mask_images=None,
         control_events=None,
         drawer_flow=None,
     ):
@@ -38,6 +39,7 @@ class PickSequenceRunner:
         self.state = state
         self.tool_hold_monitor = tool_hold_monitor
         self.refine_pick_target = refine_pick_target
+        self.generate_grasp_detection_mask_images = generate_grasp_detection_mask_images
         self.control_events = control_events or {}
         self.drawer_flow = drawer_flow
         self.target_planner = PickTargetPlanner(robot)
@@ -107,16 +109,7 @@ class PickSequenceRunner:
             ),
             TaskStep(
                 "pick/xy_move",
-                lambda: self._move_to_pose(
-                    "2단계: 안전 높이에서 XY 수평 이동",
-                    context["plan"].target_x-OBSERVE_X_OFFSET_M,
-                    context["plan"].target_y,
-                    context["plan"].travel_z,
-                    context["ori"],
-                    "XY 이동 실패. Pick 시퀀스 중단",
-                    "XY 이동 실패",
-                    "xy_move_failed",
-                ),
+                lambda: self._move_to_vlm_observe_pose(context),
             ),
             TaskStep(
                 "pick/refine_target_and_apply_vlm_yaw",
@@ -143,7 +136,6 @@ class PickSequenceRunner:
                 ),
             ),
             TaskStep("pick/grasp_tool", self._grasp_tool),
-            TaskStep("pick/wait_tool_mask_lock", self._wait_tool_mask_lock),
             TaskStep(
                 "pick/lift",
                 lambda: self._move_to_pose(
@@ -161,6 +153,7 @@ class PickSequenceRunner:
                 "pick/move_to_handoff",
                 lambda: self._move_to_handoff(context["plan"], context),
             ),
+            TaskStep("pick/wait_tool_mask_lock", self._wait_tool_mask_lock),
             TaskStep(
                 "pick/wait_human_grasp",
                 lambda: self._wait_human_grasp(context["plan"], context),
@@ -267,6 +260,45 @@ class PickSequenceRunner:
 
         return self._rotate_wrist(vlm_yaw_deg, context)
 
+    def _move_to_vlm_observe_pose(self, context):
+        ok = self._move_to_pose(
+            "2단계: 안전 높이에서 XY 수평 이동",
+            context["plan"].target_x - OBSERVE_X_OFFSET_M,
+            context["plan"].target_y,
+            context["plan"].travel_z,
+            context["ori"],
+            "XY 이동 실패. Pick 시퀀스 중단",
+            "XY 이동 실패",
+            "xy_move_failed",
+        )
+        if not ok:
+            return False
+
+        self.state._publish_robot_status(
+            "observing_pick_target",
+            tool_name=self.state.target_label,
+            action="bring",
+            message=f"{self.state.target_label} VLM 관찰 위치에서 SAM 추적을 시작합니다.",
+            command=self.state.current_command,
+        )
+        self._generate_grasp_detection_mask_images()
+        return True
+
+    def _generate_grasp_detection_mask_images(self):
+        if self.generate_grasp_detection_mask_images is None:
+            return
+
+        target_label = self.state.target_label
+        if not target_label:
+            return
+
+        try:
+            self.generate_grasp_detection_mask_images(target_label)
+        except Exception as exc:
+            self.state.logger().warn(
+                f"grasp detection mask image 생성 실패: {exc}"
+            )
+
     def _rotate_wrist(self, vlm_yaw_deg, context):
         log = self.state.logger()
         ok = self.motion.rotate_wrist_by_yaw_deg(vlm_yaw_deg, log)
@@ -287,6 +319,13 @@ class PickSequenceRunner:
         return False
 
     def _descend_to_grasp(self, plan, ori):
+        self.state._publish_robot_status(
+            "grasping",
+            tool_name=self.state.target_label,
+            action="bring",
+            message=f"{self.state.target_label} 파지를 위해 Z 하강합니다.",
+            command=self.state.current_command,
+        )
         if not plan.should_descend_to_grasp:
             self.state.logger().info("4단계: approach_z와 grasp_z가 같아 추가 하강 생략")
             return True
@@ -333,14 +372,14 @@ class PickSequenceRunner:
 
     def _wait_tool_mask_lock(self):
         log = self.state.logger()
-        log.info("6단계: 공구 mask lock 완료 대기")
+        log.info("handoff 위치 이동 후 depth locked tool mask 완료 대기")
         if self.handoff.wait_for_tool_mask_lock(log):
             return True
 
         if self._interrupted():
             return False
 
-        log.error("공구 mask lock 실패. Lift 전에 pick 시퀀스를 중단합니다.")
+        log.error("공구 mask lock 실패. 사용자 잡기 대기 전에 pick 시퀀스를 중단합니다.")
         self.state._publish_robot_status(
             "failed",
             message="공구 mask lock에 실패했습니다.",
