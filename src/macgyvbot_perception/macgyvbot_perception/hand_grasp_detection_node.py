@@ -678,7 +678,9 @@ class HandGraspDetectionNode(Node):
         tool_detection: Optional[ToolDetection],
     ) -> None:
         self.pre_grasp_lock_requested = False
-        locked = self._lock_from_yolo_or_candidate(frame, tool_detection)
+        locked = self._pre_grasp_sam_mask(frame, tool_detection)
+        if locked is None:
+            locked = self._lock_from_yolo_or_candidate(frame, tool_detection)
         if locked is None:
             self.get_logger().warn("Pre-grasp tool mask lock failed.")
             return
@@ -696,6 +698,29 @@ class HandGraspDetectionNode(Node):
             "Pre-grasp tool mask locked: "
             f"source={locked.source}, roi={locked.roi}, "
             f"depth_mm={self.pre_grasp_tool_depth_mm}"
+        )
+
+    def _pre_grasp_sam_mask(
+        self,
+        frame,
+        tool_detection: Optional[ToolDetection],
+    ) -> Optional[LockedToolMask]:
+        if tool_detection is None or self.sam_segmenter is None:
+            return None
+
+        mask = self.sam_segmenter.segment(frame, tool_detection.roi)
+        if mask is None or int(mask.sum()) <= 0:
+            self.get_logger().warn("Pre-grasp SAM returned an empty tool mask.")
+            return None
+
+        roi = mask_to_roi(mask) or tool_detection.roi
+        self.get_logger().info(
+            f"Pre-grasp SAM mask locked: label={tool_detection.label}, roi={roi}"
+        )
+        return LockedToolMask(
+            roi=roi,
+            mask=mask,
+            source="PRE_GRASP_SAM_LOCKED",
         )
 
     def _lock_tool_mask(
