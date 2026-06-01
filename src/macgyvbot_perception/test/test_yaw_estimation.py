@@ -132,6 +132,26 @@ def test_estimate_sam_mask_for_crop_prefers_mask_containing_grasp_point():
     assert mask[30, 40] == 1
 
 
+def test_estimate_sam_mask_for_crop_saves_received_mask_before_selection():
+    crop = np.zeros((60, 80, 3), dtype=np.uint8)
+    oversized_mask = np.ones((60, 80), dtype=np.uint8)
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        mask, debug = estimate_sam_mask_for_crop(
+            crop,
+            sam_predictor=FakeSamPredictor([oversized_mask]),
+            config={
+                "pca_input_mask_dir": temp_dir,
+                "save_pca_input_mask_image": True,
+            },
+        )
+
+        assert mask is None
+        assert debug["reason"] == "no_mask_passed_selection"
+        assert len(debug["sam_received_mask_paths"]) == 1
+        assert Path(debug["sam_received_mask_paths"][0]).exists()
+
+
 def test_aggregate_masks_majority_stabilizes_jitter():
     base = np.zeros((40, 40), dtype=np.uint8)
     base[10:30, 12:28] = 1

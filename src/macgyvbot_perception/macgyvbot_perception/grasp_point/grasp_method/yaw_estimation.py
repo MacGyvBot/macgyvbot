@@ -97,6 +97,7 @@ def estimate_sam_mask_for_crop(
         "selected_mask_score": None,
         "mask_area_ratio": 0.0,
         "grasp_point_inside_mask": False,
+        "sam_received_mask_paths": [],
         "reason": "",
     }
 
@@ -139,6 +140,11 @@ def estimate_sam_mask_for_crop(
 
     crop_area = float(max(1, width * height))
     debug_info["sam_num_masks"] = int(len(masks))
+    debug_info["sam_received_mask_paths"] = _save_sam_received_mask_images(
+        masks,
+        cfg,
+        shape=(height, width),
+    )
     min_ratio = float(cfg["min_mask_area_ratio"])
     max_ratio = float(cfg["max_mask_area_ratio"])
     grasp_point_xy = _coerce_point(grasp_point)
@@ -748,6 +754,43 @@ def _save_pca_input_mask_image(mask: np.ndarray, cfg: dict[str, Any]) -> str:
     except Exception as exc:
         _log(cfg, "warning", f"Failed to save PCA input mask image: {exc}")
         return ""
+
+
+def _save_sam_received_mask_images(
+    masks,
+    cfg: dict[str, Any],
+    shape: tuple[int, int],
+) -> list[str]:
+    """Save every valid mask returned by SAM before selection filters run."""
+    if not bool(cfg.get("save_pca_input_mask_image", False)):
+        return []
+
+    saved_paths: list[str] = []
+    try:
+        output_dir = Path(str(cfg.get("pca_input_mask_dir", ""))).expanduser()
+        output_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+
+        for index, mask in enumerate(masks):
+            binary_mask = _to_binary_mask(mask, shape)
+            if binary_mask is None:
+                continue
+
+            output_path = output_dir / f"{timestamp}_sam_received_mask_{index}.png"
+            cv2.imwrite(str(output_path), binary_mask.astype(np.uint8) * 255)
+            saved_paths.append(str(output_path))
+
+        if saved_paths:
+            _log(
+                cfg,
+                "info",
+                "Saved SAM received mask image(s): "
+                f"count={len(saved_paths)} paths={saved_paths}",
+            )
+        return saved_paths
+    except Exception as exc:
+        _log(cfg, "warning", f"Failed to save SAM received mask image: {exc}")
+        return saved_paths
 
 
 def _save_pca_debug_visualization(
