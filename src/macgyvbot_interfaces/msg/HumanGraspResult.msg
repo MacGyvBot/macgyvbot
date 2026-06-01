@@ -1,7 +1,8 @@
 # Human-tool grasp detection result.
 # The final grasp decision is true only when ML, depth, and locked-mask checks pass.
-# has_* flags distinguish nullable JSON fields from valid zero/empty values.
+# has_* flags distinguish nullable fields from valid zero/empty values.
 string state
+bool hand_present
 bool human_grasped_tool
 int32 grasp_counter
 float32 grasp_score
@@ -52,4 +53,3 @@ bool has_active_hand_index
 int32 active_hand_index
 bool has_active_handedness
 string active_handedness
-string payload_json

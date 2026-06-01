@@ -402,18 +402,6 @@ class GraspPointSelector:
 
 def normalize_grasp_point_mode(mode, logger):
     """Return a supported grasp point mode, falling back to center."""
-    if mode in ("grasp_point_mode_vlm_only", "vlm_only"):
-        logger.warn(
-            "'vlm_only' is deprecated. Use 'vlm_only_smol', "
-            "'vlm_only_qwen3b', or 'vlm_only_qwen7b'. "
-            "Falling back to 'vlm_only_qwen3b'."
-        )
-        return GRASP_POINT_MODE_VLM_ONLY_QWEN3B
-    if mode == "vlm_only_qwen_3b":
-        return GRASP_POINT_MODE_VLM_ONLY_QWEN3B
-    if mode == "vlm_only_qwen_7b":
-        return GRASP_POINT_MODE_VLM_ONLY_QWEN7B
-
     if mode in (
         GRASP_POINT_MODE_CENTER,
         GRASP_POINT_MODE_VLM,

@@ -3,19 +3,19 @@
 from __future__ import annotations
 
 from macgyvbot_config.drawer import (
-    DRAWER_1_SAFE_Z_OFFSET_M,
     DRAWER_STORE_MARKER_CLEARANCE_Z_OFFSET_M,
     DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M,
     DRAWER_STORE_MARKER_APPROACH_Z_OFFSET_M,
     DRAWER_STORE_MARKER_RELEASE_Z_OFFSET_M,
 )
+from macgyvbot_config.return_flow import RETURN_TOOL_RELEASE_WAIT_SEC
 from macgyvbot_manipulation.grasp_verifier import GraspVerifier
 from macgyvbot_manipulation.robot_pose import (
     current_ee_orientation,
     get_ee_matrix,
     make_safe_pose,
 )
-from macgyvbot_manipulation.robot_safezone import SAFE_Z_MIN
+from macgyvbot_manipulation.robot_safezone import safe_z_min_for_drawer
 from macgyvbot_task.application.pick_flow.pick_target_planner import PickTargetPlanner
 
 
@@ -166,7 +166,7 @@ class ReturnDrawerPlacementFlow:
             return False
 
         marker_x, marker_y, marker_z = marker_target.base_xyz
-        safe_z_min = self._safe_z_min_for_drawer(drawer_id)
+        safe_z_min = safe_z_min_for_drawer(drawer_id)
         clearance_z = self._clearance_z_for_drawer(drawer_id)
         approach_z = max(
             safe_z_min,
@@ -248,7 +248,7 @@ class ReturnDrawerPlacementFlow:
         if self.tool_hold_monitor is not None:
             self.tool_hold_monitor.stop("return_drawer_release")
         self.gripper.open_gripper()
-        self.wait_fn(0.8)
+        self.wait_fn(RETURN_TOOL_RELEASE_WAIT_SEC)
 
         if not self._move_to_pose(
             marker_x,
@@ -285,16 +285,10 @@ class ReturnDrawerPlacementFlow:
             "서랍 내부 공구를 놓은 뒤 y축 exit offset 이동에 실패했습니다.",
         )
 
-    @staticmethod
-    def _safe_z_min_for_drawer(drawer_id):
-        if drawer_id == 1:
-            return SAFE_Z_MIN + DRAWER_1_SAFE_Z_OFFSET_M
-        return SAFE_Z_MIN
-
     @classmethod
     def _clearance_z_for_drawer(cls, drawer_id):
         return (
-            cls._safe_z_min_for_drawer(drawer_id)
+            safe_z_min_for_drawer(drawer_id)
             + DRAWER_STORE_MARKER_CLEARANCE_Z_OFFSET_M
         )
 

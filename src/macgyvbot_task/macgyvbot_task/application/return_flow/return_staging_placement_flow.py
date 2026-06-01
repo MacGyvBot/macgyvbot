@@ -8,6 +8,7 @@ from macgyvbot_config.drawer import (
     DRAWER_STORE_FORCE_DESCENT_START_Z_OFFSET_M,
     DRAWER_STORE_TOOL_OBSERVE_POINT,
 )
+from macgyvbot_config.return_flow import RETURN_TOOL_RELEASE_WAIT_SEC
 from macgyvbot_manipulation.force_detection import ForceReactionDetector
 from macgyvbot_manipulation.robot_pose import (
     current_ee_orientation,
@@ -129,7 +130,7 @@ class ReturnStagingPlacementFlow:
         if self.tool_hold_monitor is not None:
             self.tool_hold_monitor.stop("return_store_observe_release")
         self.gripper.open_gripper()
-        self.wait_fn(0.8)
+        self.wait_fn(RETURN_TOOL_RELEASE_WAIT_SEC)
         if self.interrupted():
             logger.info("반납 공구 놓기 후 stop/pause 요청으로 중단합니다.")
             return False

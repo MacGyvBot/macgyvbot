@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from macgyvbot_config.topics import TOOL_COMMAND_TOPIC
+
 
 class ToolCommandController:
     """Route parsed tool commands to pick, return, release, or pause actions."""
@@ -28,7 +30,7 @@ class ToolCommandController:
         self.release_gripper = release_gripper
         self.move_home = move_home
 
-    def handle_target_label(self, tool_name, source="/target_label", command=None):
+    def handle_target_label(self, tool_name, source=TOOL_COMMAND_TOPIC, command=None):
         val = (tool_name or "").strip()
 
         if not val or val == "unknown":
@@ -71,7 +73,11 @@ class ToolCommandController:
         tool_name = command.get("tool_name", "unknown")
 
         if action == "bring":
-            self.handle_target_label(tool_name, source="/tool_command", command=command)
+            self.handle_target_label(
+                tool_name,
+                source=TOOL_COMMAND_TOPIC,
+                command=command,
+            )
             return
 
         if action == "return":
