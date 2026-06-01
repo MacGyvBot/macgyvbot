@@ -77,6 +77,7 @@ class HandGraspDetectionNode(Node):
         self.latest_tool_mask: Optional[LockedToolMask] = None
         self.mask_tracking_active = False
         self.frame_index = 0
+        self._smoothed_roi: Optional[tuple] = None
 
         self.color_topic = self.declare_parameter(
             "color_topic",
@@ -142,6 +143,9 @@ class HandGraspDetectionNode(Node):
         )
         self.sam_track_margin = int(
             self.declare_parameter("sam_track_margin", 12).value
+        )
+        self.sam_bbox_ema_alpha = float(
+            self.declare_parameter("sam_bbox_ema_alpha", 0.4).value
         )
         self.allow_bbox_lock = self._as_bool(
             self.declare_parameter("allow_bbox_lock", True).value
@@ -286,6 +290,7 @@ class HandGraspDetectionNode(Node):
             self.lock_requested = True
             self.mask_tracking_active = False
             self.locked_tool = None
+            self._smoothed_roi = None
             if self.ml_classifier is not None:
                 self.ml_classifier.reset()
             self.get_logger().info("Robot grasp success received. Tool mask lock requested.")
@@ -297,6 +302,7 @@ class HandGraspDetectionNode(Node):
                 self.locked_tool = None
                 self.latest_tool_detection = None
                 self.latest_tool_mask = None
+                self._smoothed_roi = None
             self.mask_tracking_active = True
             return
 
@@ -306,6 +312,7 @@ class HandGraspDetectionNode(Node):
             self.latest_tool_detection = None
             self.latest_tool_mask = None
             self.mask_tracking_active = False
+            self._smoothed_roi = None
             if self.ml_classifier is not None:
                 self.ml_classifier.reset()
 
@@ -416,13 +423,26 @@ class HandGraspDetectionNode(Node):
             min_depth_contact_landmarks=self.depth_min_contact_landmarks,
         )
 
+    def _smooth_bbox_roi(self, roi: tuple) -> tuple:
+        alpha = self.sam_bbox_ema_alpha
+        if self._smoothed_roi is None:
+            self._smoothed_roi = roi
+            return roi
+        self._smoothed_roi = tuple(
+            int(alpha * n + (1 - alpha) * s)
+            for n, s in zip(roi, self._smoothed_roi)
+        )
+        return self._smoothed_roi
+
     def _update_prelock_tool_mask(self, frame, tool_detection: ToolDetection) -> None:
         if self.locked_tool is not None:
             return
 
+        smoothed_roi = self._smooth_bbox_roi(tool_detection.roi)
+
         if self.sam_segmenter is None:
             self.latest_tool_mask = create_bbox_locked_mask(
-                tool_detection.roi,
+                smoothed_roi,
                 frame.shape[:2],
             )
             return
@@ -430,9 +450,9 @@ class HandGraspDetectionNode(Node):
         if self.frame_index % max(1, self.sam_track_interval) != 0:
             return
 
-        mask = self.sam_segmenter.segment(frame, tool_detection.roi)
+        mask = self.sam_segmenter.segment(frame, smoothed_roi)
         if mask is not None and int(mask.sum()) > 0:
-            roi = mask_to_roi(mask) or tool_detection.roi
+            roi = mask_to_roi(mask) or smoothed_roi
             self.latest_tool_mask = LockedToolMask(
                 roi=roi,
                 mask=mask,
