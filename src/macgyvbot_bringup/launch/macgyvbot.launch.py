@@ -7,6 +7,7 @@ from launch.substitutions import LaunchConfiguration
 from launch.substitutions import PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+from macgyvbot_config.models import HAND_GRASP_SAM_CHECKPOINT_NAME
 from macgyvbot_config.topics import (
     CAMERA_COLOR_TOPIC,
     CAMERA_DEPTH_TOPIC,
@@ -31,7 +32,7 @@ def generate_launch_description():
         [resources_share, "weights", "hand_grasp_model.pkl"]
     )
     default_sam_checkpoint = PathJoinSubstitution(
-        [resources_share, "weights", "mobile_sam.pt"]
+        [resources_share, "weights", HAND_GRASP_SAM_CHECKPOINT_NAME]
     )
 
     use_voice_command = LaunchConfiguration("use_voice_command")
@@ -286,6 +287,7 @@ def generate_launch_description():
                         "position_frame_id": "base_link",
                         "publish_annotated": True,
                         "display": False,
+                        "show_return_close_roi": False,
                         "yolo_model": LaunchConfiguration("yolo_model"),
                         "tool_classes": "drill,hammer,pliers,screwdriver,tape_measure,wrench",
                         "yolo_conf": 0.20,
@@ -302,6 +304,10 @@ def generate_launch_description():
                         "sam_device": "cuda",
                         "sam_track_interval": 10,
                         "sam_track_margin": 12,
+                        "sam_reseed_from_yolo": False,
+                        "sam_track_max_center_shift_px": 80.0,
+                        "sam_track_min_area_ratio": 0.35,
+                        "sam_track_max_area_ratio": 2.5,
                         "allow_bbox_lock": True,
                         "require_ml_grasp": True,
                         "require_locked_tool": True,

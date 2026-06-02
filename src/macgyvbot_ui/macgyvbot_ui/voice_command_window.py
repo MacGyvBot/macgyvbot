@@ -8,6 +8,7 @@ try:
     from PyQt5.QtWidgets import (
         QApplication,
         QFrame,
+        QGridLayout,
         QHBoxLayout,
         QLabel,
         QLineEdit,
@@ -15,6 +16,7 @@ try:
         QPushButton,
         QScrollArea,
         QSizePolicy,
+        QSlider,
         QVBoxLayout,
         QWidget,
     )
@@ -26,9 +28,10 @@ except ImportError:  # pragma: no cover - runtime environment guidance
 else:
 
     class VoiceCommandGuiWindow(QMainWindow):
-        def __init__(self, on_user_text=None):
+        def __init__(self, on_user_text=None, on_gripper_width=None):
             super().__init__()
             self._on_user_text = on_user_text
+            self._on_gripper_width = on_gripper_width
             self.setWindowTitle('MacGyvBot Assistant')
             self.setFixedSize(1420, 900)
             self._detector_pixmap = None
@@ -106,6 +109,7 @@ else:
             status_panel.setObjectName('statusPanel')
             status_panel.setFixedWidth(290)
             status_panel.setMinimumHeight(455)
+            status_panel.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
             status_panel_layout = QVBoxLayout()
             status_panel_layout.setContentsMargins(16, 16, 16, 16)
             status_panel_layout.setSpacing(10)
@@ -122,6 +126,55 @@ else:
             status_panel_layout.addWidget(self._task_stage_status)
             status_panel_layout.addStretch(1)
             status_panel_layout.addLayout(control_button_layout)
+
+            gripper_title = QLabel('Gripper Control')
+            gripper_title.setObjectName('gripperPanelTitle')
+            self._gripper_status = QLabel('비활성화: 안전한 제어 인터페이스 없음')
+            self._gripper_status.setObjectName('gripperStatus')
+            self._gripper_value = QLabel('폭: 80 mm')
+            self._gripper_value.setObjectName('gripperValue')
+
+            self._gripper_slider = QSlider(Qt.Horizontal)
+            self._gripper_slider.setObjectName('gripperSlider')
+            self._gripper_slider.setRange(0, 80)
+            self._gripper_slider.setValue(80)
+            self._gripper_slider.setSingleStep(1)
+            self._gripper_slider.setPageStep(5)
+            self._gripper_slider.setTracking(False)
+            self._gripper_slider.valueChanged.connect(self._update_gripper_value)
+            self._gripper_slider.sliderReleased.connect(
+                self._request_gripper_width_from_slider
+            )
+
+            gripper_scale_layout = QHBoxLayout()
+            gripper_scale_layout.setContentsMargins(0, 0, 0, 0)
+            gripper_scale_layout.setSpacing(0)
+            gripper_scale_layout.addWidget(QLabel('닫힘'))
+            gripper_scale_layout.addStretch(1)
+            gripper_scale_layout.addWidget(QLabel('열림'))
+
+            self._gripper_apply_button = QPushButton('적용')
+            self._gripper_apply_button.setObjectName('gripperApplyButton')
+            self._gripper_apply_button.clicked.connect(
+                self._request_gripper_width_from_slider
+            )
+
+            gripper_panel = QFrame()
+            gripper_panel.setObjectName('gripperPanel')
+            gripper_panel.setFixedWidth(290)
+            gripper_panel.setMinimumHeight(210)
+            gripper_panel.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+            gripper_panel_layout = QVBoxLayout()
+            gripper_panel_layout.setContentsMargins(16, 14, 16, 14)
+            gripper_panel_layout.setSpacing(8)
+            gripper_panel.setLayout(gripper_panel_layout)
+            gripper_panel_layout.addWidget(gripper_title)
+            gripper_panel_layout.addWidget(self._gripper_status)
+            gripper_panel_layout.addWidget(self._gripper_value)
+            gripper_panel_layout.addWidget(self._gripper_slider)
+            gripper_panel_layout.addLayout(gripper_scale_layout)
+            gripper_panel_layout.addWidget(self._gripper_apply_button)
+            self._set_gripper_controls_enabled(False)
 
             chat_panel = QWidget()
             chat_panel_layout = QVBoxLayout()
@@ -171,12 +224,14 @@ else:
             log_scroll = QScrollArea()
             log_scroll.setObjectName('taskLogScroll')
             log_scroll.setWidgetResizable(True)
-            log_scroll.setMinimumHeight(190)
+            log_scroll.setMinimumHeight(185)
             log_scroll.setWidget(self._task_log)
             self._task_log_scroll = log_scroll
 
             log_panel = QFrame()
             log_panel.setObjectName('taskLogPanel')
+            log_panel.setMinimumHeight(210)
+            log_panel.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
             log_panel_layout = QVBoxLayout()
             log_panel_layout.setContentsMargins(14, 12, 14, 12)
             log_panel_layout.setSpacing(8)
@@ -190,13 +245,19 @@ else:
             left_workspace_layout.setSpacing(18)
             left_workspace.setLayout(left_workspace_layout)
 
-            top_left_layout = QHBoxLayout()
-            top_left_layout.setContentsMargins(0, 0, 0, 0)
-            top_left_layout.setSpacing(14)
-            top_left_layout.addWidget(status_panel)
-            top_left_layout.addWidget(detector_panel, 1)
-            left_workspace_layout.addLayout(top_left_layout, 0)
-            left_workspace_layout.addWidget(log_panel, 1)
+            workspace_grid = QGridLayout()
+            workspace_grid.setContentsMargins(0, 0, 0, 0)
+            workspace_grid.setHorizontalSpacing(14)
+            workspace_grid.setVerticalSpacing(14)
+            workspace_grid.addWidget(status_panel, 0, 0)
+            workspace_grid.addWidget(detector_panel, 0, 1)
+            workspace_grid.addWidget(gripper_panel, 1, 0)
+            workspace_grid.addWidget(log_panel, 1, 1)
+            workspace_grid.setColumnStretch(0, 0)
+            workspace_grid.setColumnStretch(1, 1)
+            workspace_grid.setRowStretch(0, 0)
+            workspace_grid.setRowStretch(1, 1)
+            left_workspace_layout.addLayout(workspace_grid, 1)
 
             content_layout = QHBoxLayout()
             content_layout.setContentsMargins(0, 0, 0, 0)
@@ -282,6 +343,29 @@ else:
         def set_task_status(self, target_text, stage_text):
             self._task_target_status.setText(f'작업 대상: {target_text}')
             self._task_stage_status.setText(f'작업 단계: {stage_text}')
+
+        def set_gripper_control_state(self, enabled, reason):
+            reason = str(reason or '').strip()
+            if enabled:
+                self._gripper_status.setText(reason or '활성화: 수동 조작 가능')
+            else:
+                self._gripper_status.setText(reason or '비활성화')
+            self._set_gripper_controls_enabled(bool(enabled))
+
+        def _set_gripper_controls_enabled(self, enabled):
+            self._gripper_slider.setEnabled(enabled)
+            self._gripper_apply_button.setEnabled(enabled)
+            self._gripper_status.setStyleSheet(
+                self._gripper_status_style(enabled)
+            )
+
+        def _update_gripper_value(self, value):
+            self._gripper_value.setText(f'폭: {int(value)} mm')
+
+        def _request_gripper_width_from_slider(self):
+            width_mm = int(self._gripper_slider.value())
+            if self._on_gripper_width is not None:
+                self._on_gripper_width(width_mm)
 
         def append_task_log(self, level, message, source='ui', event='EVENT', detail=''):
             level = str(level or 'INFO').upper()
@@ -781,6 +865,11 @@ else:
                     border: 1px solid #C9DAEC;
                     border-radius: 16px;
                 }
+                QFrame#gripperPanel {
+                    background-color: #F8FBFF;
+                    border: 1px solid #C9DAEC;
+                    border-radius: 16px;
+                }
                 QFrame#detectorPanel {
                     background-color: #F8FBFF;
                     border: 1px solid #C9DAEC;
@@ -790,6 +879,45 @@ else:
                     color: #223B5C;
                     font-size: 17px;
                     font-weight: 900;
+                }
+                QLabel#gripperPanelTitle {
+                    color: #223B5C;
+                    font-size: 15px;
+                    font-weight: 900;
+                }
+                QLabel#gripperValue {
+                    color: #34536F;
+                    font-size: 13px;
+                    font-weight: 800;
+                }
+                QSlider#gripperSlider::groove:horizontal {
+                    height: 8px;
+                    background: #DCE8F5;
+                    border-radius: 4px;
+                }
+                QSlider#gripperSlider::handle:horizontal {
+                    background: #2F6FDC;
+                    border: 1px solid #1E55B3;
+                    width: 18px;
+                    margin: -6px 0;
+                    border-radius: 9px;
+                }
+                QSlider#gripperSlider::handle:horizontal:disabled {
+                    background: #9AA9B8;
+                    border: 1px solid #8A9AAA;
+                }
+                QPushButton#gripperApplyButton {
+                    background-color: #FFFFFF;
+                    color: #2563B8;
+                    border: 1px solid #BFD4EE;
+                    border-radius: 12px;
+                    padding: 9px 12px;
+                    font-weight: 800;
+                }
+                QPushButton#gripperApplyButton:disabled {
+                    background-color: #EFF4F9;
+                    color: #8A9AAA;
+                    border: 1px solid #D3DFEA;
                 }
                 QLabel#statusPanelSubtitle {
                     color: #6A7E96;
@@ -935,3 +1063,23 @@ else:
             '''
             self._task_target_status.setStyleSheet(task_style)
             self._task_stage_status.setStyleSheet(task_style)
+
+        @staticmethod
+        def _gripper_status_style(enabled):
+            if enabled:
+                color = '#2563B8'
+                border = '#BFD4EE'
+                background = '#F5FAFF'
+            else:
+                color = '#7A8794'
+                border = '#D5E2F0'
+                background = '#F7FAFD'
+            return f'''
+                background-color: {background};
+                border: 1px solid {border};
+                border-radius: 10px;
+                padding: 8px 10px;
+                color: {color};
+                font-size: 12px;
+                font-weight: 700;
+            '''
