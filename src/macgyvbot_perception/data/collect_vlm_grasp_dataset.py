@@ -28,7 +28,6 @@ DEFAULT_MODEL_NAME = "yolov11_best.pt"
 DEFAULT_WIDTH = 640
 DEFAULT_HEIGHT = 480
 DEFAULT_FPS = 30
-DEFAULT_SAM_CHECKPOINT = "mobile_sam.pt"
 DATA_ROOT = Path(__file__).resolve().parent / "grasp_dataset"
 
 
@@ -40,6 +39,9 @@ def add_workspace_packages_to_path() -> None:
 
 
 def parse_args() -> argparse.Namespace:
+    add_workspace_packages_to_path()
+    from macgyvbot_config.models import HAND_GRASP_SAM_CHECKPOINT_NAME
+
     parser = argparse.ArgumentParser(
         description="Collect RealSense frames and YOLO crops for VLM grasp tuning."
     )
@@ -58,7 +60,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument(
         "--sam-checkpoint",
-        default=DEFAULT_SAM_CHECKPOINT,
+        default=HAND_GRASP_SAM_CHECKPOINT_NAME,
         help="SAM checkpoint path or weight filename.",
     )
     parser.add_argument(

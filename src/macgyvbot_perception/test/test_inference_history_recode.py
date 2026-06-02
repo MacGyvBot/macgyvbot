@@ -2,15 +2,15 @@ import csv
 
 from PIL import Image
 
-from macgyvbot_perception.grasp_point.vlm.inference_history_recode import (
-    InferenceHistoryConfig,
-    InferenceHistoryRecode,
+from macgyvbot_perception.grasp_point.mask_image_for_grasp_detection import (
+    GraspDetectionRecordConfig,
+    GraspDetectionRecorder,
 )
 
 
 def test_history_disabled_writes_nothing(tmp_path):
-    recorder = InferenceHistoryRecode(
-        InferenceHistoryConfig(enabled=False, root_dir=str(tmp_path))
+    recorder = GraspDetectionRecorder(
+        GraspDetectionRecordConfig(enabled=False, root_dir=str(tmp_path))
     )
 
     recorder.record(
@@ -25,9 +25,9 @@ def test_history_disabled_writes_nothing(tmp_path):
     assert not any(tmp_path.iterdir())
 
 
-def test_history_enabled_writes_image_and_csv(tmp_path):
-    recorder = InferenceHistoryRecode(
-        InferenceHistoryConfig(enabled=True, root_dir=str(tmp_path))
+def test_history_enabled_writes_csv(tmp_path):
+    recorder = GraspDetectionRecorder(
+        GraspDetectionRecordConfig(enabled=True, root_dir=str(tmp_path))
     )
 
     recorder.record(
@@ -46,7 +46,7 @@ def test_history_enabled_writes_image_and_csv(tmp_path):
 
     csv_path = tmp_path / "inference_history.csv"
     assert csv_path.exists()
-    assert len(list((tmp_path / "crop_image").glob("*.jpg"))) == 1
+    assert not (tmp_path / "crop_image").exists()
     assert not (tmp_path / "frame_image").exists()
     with csv_path.open(encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))

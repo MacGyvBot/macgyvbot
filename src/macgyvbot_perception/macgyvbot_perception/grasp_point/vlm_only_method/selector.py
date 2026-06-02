@@ -12,9 +12,9 @@ from macgyvbot_config.vlm import (
     VLM_INFERENCE_HISTORY_ENABLED,
     VLM_MODEL_QWEN3B,
 )
-from macgyvbot_perception.grasp_point.vlm.inference_history_recode import (
-    InferenceHistoryConfig,
-    InferenceHistoryRecode,
+from macgyvbot_perception.grasp_point.mask_image_for_grasp_detection import (
+    GraspDetectionRecordConfig,
+    GraspDetectionRecorder,
 )
 from macgyvbot_perception.grasp_point.vlm.models import VLMOnly
 from macgyvbot_perception.grasp_point.vlm.parser import Parser
@@ -42,8 +42,8 @@ class VLMOnlyGraspPointSelector:
         self.mode = mode
         self.model = None
         self.parser = Parser()
-        self.history = InferenceHistoryRecode(
-            InferenceHistoryConfig(enabled=history_enabled, root_dir=history_dir),
+        self.history = GraspDetectionRecorder(
+            GraspDetectionRecordConfig(enabled=history_enabled, root_dir=history_dir),
             logger=logger,
         )
 

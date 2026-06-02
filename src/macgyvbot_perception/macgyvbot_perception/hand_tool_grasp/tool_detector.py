@@ -51,8 +51,8 @@ class ToolDetector:
         self.image_size = image_size
         self.model = YOLO(str(resolved_model_path))
 
-    def detect(self, frame) -> Optional[ToolDetection]:
-        """Return highest-confidence target tool detection, or None."""
+    def detect(self, frame, target_label: str | None = None) -> Optional[ToolDetection]:
+        """Return highest-confidence matching tool detection, or None."""
         results = self.model.predict(
             source=frame,
             imgsz=self.image_size,
@@ -70,12 +70,17 @@ class ToolDetector:
         best_confidence = -1.0
         names = result.names
 
+        requested_label = self._normalize_label(target_label)
+
         for box in result.boxes:
             confidence = float(box.conf[0])
             class_id = int(box.cls[0])
-            label = str(names.get(class_id, class_id)).lower()
+            label = self._normalize_label(names.get(class_id, class_id))
 
             if self.target_classes and label not in self.target_classes:
+                continue
+
+            if requested_label and label != requested_label:
                 continue
 
             if confidence <= best_confidence:
@@ -94,6 +99,10 @@ class ToolDetector:
     @staticmethod
     def is_builtin_model(model_path: str) -> bool:
         return Path(model_path).suffix == ".pt" and not Path(model_path).exists()
+
+    @staticmethod
+    def _normalize_label(label) -> str:
+        return str(label or "").strip().lower()
 
     @staticmethod
     def _resolve_model_path(model_path: str) -> Path | str:

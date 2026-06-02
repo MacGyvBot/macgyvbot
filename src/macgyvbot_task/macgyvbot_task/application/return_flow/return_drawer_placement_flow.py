@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 from macgyvbot_config.drawer import (
-    DRAWER_STORE_MARKER_CLEARANCE_Z_OFFSET_M,
-    DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M,
     DRAWER_STORE_MARKER_APPROACH_Z_OFFSET_M,
     DRAWER_STORE_MARKER_RELEASE_Z_OFFSET_M,
 )
@@ -16,6 +14,10 @@ from macgyvbot_manipulation.robot_pose import (
     make_safe_pose,
 )
 from macgyvbot_manipulation.robot_safezone import safe_z_min_for_drawer
+from macgyvbot_task.application.drawer_store_motion import (
+    drawer_store_clearance_z,
+    move_to_drawer_store_exit,
+)
 from macgyvbot_task.application.pick_flow.pick_target_planner import PickTargetPlanner
 
 
@@ -167,7 +169,7 @@ class ReturnDrawerPlacementFlow:
 
         marker_x, marker_y, marker_z = marker_target.base_xyz
         safe_z_min = safe_z_min_for_drawer(drawer_id)
-        clearance_z = self._clearance_z_for_drawer(drawer_id)
+        clearance_z = drawer_store_clearance_z(drawer_id)
         approach_z = max(
             safe_z_min,
             float(marker_z) + DRAWER_STORE_MARKER_APPROACH_Z_OFFSET_M,
@@ -263,34 +265,31 @@ class ReturnDrawerPlacementFlow:
         ):
             return False
 
-        exit_x = marker_x + DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M[0]
-        exit_y = marker_y + DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M[1]
-        exit_z = clearance_z + DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M[2]
-        logger.info(
-            "서랍 marker release 후 exit offset 이동: "
-            f"offset=({DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M[0]:.3f}, "
-            f"{DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M[1]:.3f}, "
-            f"{DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M[2]:.3f}), "
-            f"target=({exit_x:.3f}, {exit_y:.3f}, {exit_z:.3f})"
-        )
-        return self._move_to_pose(
-            exit_x,
-            exit_y,
-            exit_z,
-            ori,
+        ok = move_to_drawer_store_exit(
+            self.motion,
             logger,
-            tool_name,
-            command,
-            "return_drawer_place_failed",
+            marker_x,
+            marker_y,
+            clearance_z,
+            ori,
+            "서랍 marker release 후 exit offset 이동",
             "서랍 내부 공구를 놓은 뒤 y축 exit offset 이동에 실패했습니다.",
         )
+        if ok:
+            return True
+
+        self.reporter.fail(
+            tool_name,
+            "서랍 내부 공구를 놓은 뒤 y축 exit offset 이동에 실패했습니다.",
+            "return_drawer_place_failed",
+            command,
+            logger,
+        )
+        return False
 
     @classmethod
     def _clearance_z_for_drawer(cls, drawer_id):
-        return (
-            safe_z_min_for_drawer(drawer_id)
-            + DRAWER_STORE_MARKER_CLEARANCE_Z_OFFSET_M
-        )
+        return drawer_store_clearance_z(drawer_id)
 
     def _move_to_current_xy_clearance(
         self,
