@@ -86,10 +86,12 @@ class FakeMotion:
     def __init__(self, results=None):
         self.results = list(results or [True, True, True, True, True, True])
         self.targets = []
+        self.min_z_values = []
         self.home_calls = 0
 
-    def plan_and_execute(self, logger, pose_goal=None, state_goal=None):
+    def plan_and_execute(self, logger, pose_goal=None, state_goal=None, min_z=None):
         self.targets.append(pose_goal)
+        self.min_z_values.append(min_z)
         return self.results.pop(0)
 
     def move_to_home_joints(self, logger):
@@ -175,6 +177,14 @@ class FakeDrawerFlow:
         if self.events is not None:
             self.events.append("close")
         return self.close_result
+
+
+class FakePregrasp:
+    def __init__(self, measurement):
+        self.measurement = measurement
+
+    def measure_pregrasp_depth(self, logger):
+        return self.measurement
 
 
 def test_return_tool_to_original_position_uses_drawer_clearance(monkeypatch):
@@ -312,3 +322,76 @@ def test_handoff_search_failure_returns_directly_to_target_clearance():
     assert runner.handoff.events == ["return", "close", "home"]
     assert runner.state.statuses[-1][0] == "returned"
     assert runner.state.statuses[-1][1]["reason"] == "handoff_pose_unavailable"
+
+
+def test_pregrasp_depth_adjust_can_descend_below_drawer_safe_z_by_depth():
+    runner = PickSequenceRunner.__new__(PickSequenceRunner)
+    runner.motion = FakeMotion()
+    runner.state = FakeState()
+    runner.gripper = FakeGripper()
+    runner.grasp = FakePregrasp({"width_mm": 25.0, "depth_mm": 20.0})
+    runner.control_events = {}
+    plan = types.SimpleNamespace(
+        target_x=0.30,
+        target_y=0.10,
+        grasp_z=0.322,
+    )
+    context = {
+        "plan": plan,
+        "safe_z_min": safe_z_min_for_drawer(1),
+        "ori": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+    }
+
+    assert runner._pregrasp_depth_adjust(context)
+
+    assert runner.gripper.open_calls == 1
+    assert math.isclose(runner.motion.targets[-1].pose.position.z, 0.302)
+    assert math.isclose(runner.motion.min_z_values[-1], 0.302)
+
+
+def test_pregrasp_depth_adjust_uses_drawer_safe_z_minus_depth_as_clamp():
+    runner = PickSequenceRunner.__new__(PickSequenceRunner)
+    runner.motion = FakeMotion()
+    runner.state = FakeState()
+    runner.gripper = FakeGripper()
+    runner.grasp = FakePregrasp({"width_mm": 25.0, "depth_mm": 20.0})
+    runner.control_events = {}
+    plan = types.SimpleNamespace(
+        target_x=0.30,
+        target_y=0.10,
+        grasp_z=0.310,
+    )
+    context = {
+        "plan": plan,
+        "safe_z_min": safe_z_min_for_drawer(1),
+        "ori": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+    }
+
+    assert runner._pregrasp_depth_adjust(context)
+
+    assert math.isclose(runner.motion.targets[-1].pose.position.z, 0.302)
+    assert math.isclose(runner.motion.min_z_values[-1], 0.302)
+
+
+def test_pregrasp_depth_adjust_allows_target_below_global_safe_z_min():
+    runner = PickSequenceRunner.__new__(PickSequenceRunner)
+    runner.motion = FakeMotion()
+    runner.state = FakeState()
+    runner.gripper = FakeGripper()
+    runner.grasp = FakePregrasp({"width_mm": 25.0, "depth_mm": 20.0})
+    runner.control_events = {}
+    plan = types.SimpleNamespace(
+        target_x=0.30,
+        target_y=0.10,
+        grasp_z=0.250,
+    )
+    context = {
+        "plan": plan,
+        "safe_z_min": safe_z_min_for_drawer(0),
+        "ori": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+    }
+
+    assert runner._pregrasp_depth_adjust(context)
+
+    assert math.isclose(runner.motion.targets[-1].pose.position.z, 0.230)
+    assert math.isclose(runner.motion.min_z_values[-1], 0.220)

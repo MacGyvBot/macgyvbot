@@ -291,6 +291,7 @@ def plan_and_execute(
     params=None,
     should_interrupt=None,
     execute_trajectory=None,
+    min_z=None,
 ):
     if should_interrupt is not None and should_interrupt():
         logger.info("중단 요청으로 planning/execution을 시작하지 않습니다.")
@@ -302,7 +303,7 @@ def plan_and_execute(
         x = pose_goal.pose.position.x
         y = pose_goal.pose.position.y
         z = pose_goal.pose.position.z
-        sx, sy, sz = clamp_to_safe_workspace(x, y, z, logger)
+        sx, sy, sz = clamp_to_safe_workspace(x, y, z, logger, min_z=min_z)
         pose_goal.pose.position.x = sx
         pose_goal.pose.position.y = sy
         pose_goal.pose.position.z = sz
@@ -376,7 +377,7 @@ class MoveItController:
                 self.trajectory_action_name,
             )
 
-    def plan_and_execute(self, logger, pose_goal=None, state_goal=None):
+    def plan_and_execute(self, logger, pose_goal=None, state_goal=None, min_z=None):
         return plan_and_execute(
             self.robot,
             self.arm,
@@ -388,6 +389,7 @@ class MoveItController:
             execute_trajectory=self._execute_trajectory_action
             if self._trajectory_client is not None
             else None,
+            min_z=min_z,
         )
 
     def cancel_current_goal(self, logger=None, reason=""):
