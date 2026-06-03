@@ -1,10 +1,10 @@
 """Headless command-input node for MacGyvBot.
 
-- 留덉씠??STT? `/stt_text` ?낅젰??紐낅졊 ?댁꽍 ?뚯씠?꾨씪?몄쑝濡??섏쭛?쒕떎.
-- LLM 以묒떖 parser瑜??ㅽ뻾?섍퀬 `/tool_command`, `/command_feedback`??諛쒗뻾?쒕떎.
-- TTS??command ?⑦궎吏???④꺼 MacGyvBot ?묐떟???뚯꽦?쇰줈 異쒕젰?쒕떎.
+- 마이크 STT와 `/stt_text` 입력을 명령 해석 파이프라인으로 수집한다.
+- LLM 중심 parser를 실행하고 `/tool_command`, `/command_feedback`를 발행한다.
+- TTS는 command 패키지 안에서 MacGyvBot 응답을 음성으로 출력한다.
 
-GUI ?쒖떆??`macgyvbot_ui/operator_ui_node`媛 ROS topic留?援щ룆?댁꽌 ?대떦?쒕떎.
+GUI 표시는 `macgyvbot_ui/operator_ui_node`가 ROS topic만 구독해서 담당한다.
 """
 from macgyvbot_domain.logging import emit_structured_log
 
@@ -151,17 +151,17 @@ class CommandInputNode(Node):
                 phrase_time_limit_sec=f"{self._phrase_time_limit:.1f}",
                 msg="STT service ready",
             )
-            emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg=f'STT 以鍮??꾨즺: language={self._language}, '
+            emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg=f'STT 준비 완료: language={self._language}, '
                 f'device_index={self._device_index}, '
                 f'phrase_time_limit={self._phrase_time_limit:.1f}s')
         else:
-            emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg='留덉씠??STT 鍮꾪솢?깊솕 紐⑤뱶濡??ㅽ뻾?⑸땲??')
+            emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg='마이크 STT 비활성화 모드로 실행합니다.')
 
-        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg=f'?낅젰 topic: {stt_text_topic}')
-        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg=f'異쒕젰 topic: {tool_command_topic}, {command_feedback_topic}')
-        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg=f'濡쒕큸 ?곹깭 topic: {robot_status_topic}')
+        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg=f'입력 topic: {stt_text_topic}')
+        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg=f'출력 topic: {tool_command_topic}, {command_feedback_topic}')
+        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg=f'로봇 상태 topic: {robot_status_topic}')
         if self._tts_service.enabled:
-            emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg='TTS 紐⑤뱶 ?쒖꽦?? MacGyvBot ?묐떟???뚯꽦?쇰줈 異쒕젰?⑸땲??')
+            emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg='TTS 모드 활성화: MacGyvBot 응답을 음성으로 출력합니다.')
 
     def _log_stt(self, level, message):
         logger = self.service_log.bind("stt")
@@ -211,7 +211,7 @@ class CommandInputNode(Node):
             msg="STT recognized text",
         )
 
-        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg=f'STT ?몄떇 寃곌낵: "{text}"')
+        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg=f'STT 인식 결과: "{text}"')
 
     def _text_cb(self, msg):
         text = (msg.text or '').strip()
@@ -219,10 +219,10 @@ class CommandInputNode(Node):
             return
 
         if self._is_recent_bot_echo(text):
-            emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg=f'TTS echo濡?蹂댁씠???낅젰??臾댁떆?⑸땲?? "{text}"')
+            emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg=f'TTS echo로 보이는 입력을 무시합니다: "{text}"')
             return
 
-        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg=f'紐낅졊 ?댁꽍 ?붿껌: "{text}"')
+        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg=f'명령 해석 요청: "{text}"')
         self._handle_text(text)
 
     def _handle_text(self, text):
@@ -232,17 +232,17 @@ class CommandInputNode(Node):
         if command is not None:
             action = command.get('action')
             if action in ('pause', 'resume', 'cancel'):
-                emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg=f'?묒뾽 ?쒖뼱 紐낅졊 ?댁꽍: action={action}, raw_text="{text}"')
+                emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg=f'작업 제어 명령 해석: action={action}, raw_text="{text}"')
                 for payload in result.get('feedbacks', []):
                     self._publish_feedback_payload(payload)
                 self._send_task_control_request(action=action, reason=text)
                 return
             if action == 'exit':
                 if self._exit_pending:
-                    emit_structured_log(self.service_log.bind("legacy"), 'warn', "log", "status", svc='command', pipe='command', msg='?대? 醫낅즺 ?붿껌??泥섎━ 以묒엯?덈떎.')
+                    emit_structured_log(self.service_log.bind("legacy"), 'warn', "log", "status", svc='command', pipe='command', msg='이미 종료 요청을 처리 중입니다.')
                     return
                 self._exit_pending = True
-                emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg=f'醫낅즺 ?쒖뼱 紐낅졊 ?댁꽍: action={action}, raw_text="{text}"')
+                emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg=f'종료 제어 명령 해석: action={action}, raw_text="{text}"')
                 for payload in result.get('feedbacks', []):
                     self._publish_feedback_payload(payload)
                 self._send_task_control_request(action=action, reason=text)
@@ -265,7 +265,7 @@ class CommandInputNode(Node):
             topic=TOOL_COMMAND_TOPIC,
             msg="tool command published",
         )
-        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg='/tool_command 諛쒗뻾: '
+        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg='/tool_command 발행: '
             f'action={command.get("action", "unknown")}, '
             f'tool={command.get("tool_name", "unknown")}')
 
@@ -293,13 +293,13 @@ class CommandInputNode(Node):
             topic=TASK_CONTROL_TOPIC,
             msg="task control request published",
         )
-        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg=f'{TASK_CONTROL_TOPIC} 諛쒗뻾: action={action}, reason={reason}')
+        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg=f'{TASK_CONTROL_TOPIC} 발행: action={action}, reason={reason}')
 
     def _shutdown_cb(self, msg):
         if msg.action != 'shutdown':
             return
 
-        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg='operator UI 醫낅즺 ?좏샇 ?섏떊: command_input_node瑜?醫낅즺?⑸땲??')
+        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg='operator UI 종료 신호 수신: command_input_node를 종료합니다.')
         if rclpy.ok():
             rclpy.shutdown()
 
@@ -325,12 +325,12 @@ class CommandInputNode(Node):
         if self._exit_pending and str(status.get('action', '')).lower() == 'exit':
             if state in ('done', 'completed', 'success'):
                 self._exit_pending = False
-                emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg='醫낅즺 ?꾨즺 ?곹깭 ?뺤씤: command_input_node瑜?醫낅즺?⑸땲??')
+                emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg='종료 완료 상태 확인: command_input_node를 종료합니다.')
                 if rclpy.ok():
                     rclpy.shutdown()
             elif state in ('failed', 'error', 'rejected'):
                 self._exit_pending = False
-                emit_structured_log(self.service_log.bind("legacy"), 'warn', "log", "status", svc='command', pipe='command', msg='醫낅즺 泥섎━媛 ?ㅽ뙣?섏뿬 command_input_node瑜??좎??⑸땲??')
+                emit_structured_log(self.service_log.bind("legacy"), 'warn', "log", "status", svc='command', pipe='command', msg='종료 처리가 실패하여 command_input_node를 유지합니다.')
 
     @staticmethod
     def _tool_command_message(command):
@@ -385,23 +385,23 @@ class CommandInputNode(Node):
 
         if status == 'accepted':
             if action == 'pause':
-                return '?뺤? ?붿껌??濡쒕큸???꾨떖?덉뒿?덈떎. ?묒뾽???ш컻?좉퉴?? ?꾨땲硫??대쾲 ?묒뾽??痍⑥냼?좉퉴??'
+                return '정지 요청을 로봇에 전달했습니다. 작업을 재개할까요? 아니면 이번 작업을 취소할까요?'
             if action == 'resume':
-                return message or '?ш컻 ?붿껌???댄빐?덉뒿?덈떎.'
+                return message or '재개 요청을 이해했습니다.'
             if action == 'cancel':
-                return message or '?꾩옱 ?묒뾽 痍⑥냼 ?붿껌???댄빐?덉뒿?덈떎.'
+                return message or '현재 작업 취소 요청을 이해했습니다.'
             if action == 'exit':
-                return message or '醫낅즺 ?붿껌???댄빐?덉뒿?덈떎.'
-            return message or '紐낅졊???댄빐?덉뒿?덈떎.'
+                return message or '종료 요청을 이해했습니다.'
+            return message or '명령을 이해했습니다.'
 
         if status == 'pending_confirmation':
-            return message or '?쒓? ?댄빐??紐낅졊??留욌굹?? ???먮뒗 ?꾨땲?ㅻ줈 ?듯빐二쇱꽭??'
+            return message or '제가 이해한 명령이 맞나요? 예 또는 아니오로 답해주세요.'
 
         if status == 'cancelled':
-            return message or '?뚭쿋?듬땲?? ?ㅽ뻾?섏? ?딄쿋?듬땲??'
+            return message or '알겠습니다. 실행하지 않겠습니다.'
 
         if status == 'assistant_response':
-            return message or '?? ?꾩슂??怨듦뎄媛 ?덉쑝硫??몄젣??留먰빐二쇱꽭??'
+            return message or '네. 필요한 공구가 있으면 말해주세요.'
 
         if status == 'rejected':
             return self._build_rejected_message(reason, message)
@@ -411,32 +411,31 @@ class CommandInputNode(Node):
     def _build_rejected_message(self, reason, message):
         if reason == 'llm_failed':
             return (
-                '臾몄옣???앷퉴吏 ?댄빐?섏? 紐삵뻽?듬땲?? '
-                '?쒕씪?대쾭, ?뚮씪?댁뼱, 留앹튂, 以꾩옄 以??대뼡 怨듦뎄?몄? '
-                '議곌툑 ??援ъ껜?곸쑝濡?留먰빐二쇱꽭??'
+                '문장을 끝까지 이해하지 못했습니다. '
+                '드라이버, 플라이어, 망치, 줄자 중 어떤 공구인지 '
+                '조금 더 구체적으로 말해주세요.'
             )
         if reason == 'unknown_tool':
             return (
-                '?대뼡 怨듦뎄?몄? ?뺤떎?섏? ?딆뒿?덈떎. '
-                '?쒕씪?대쾭, ?뚮씪?댁뼱, 留앹튂, 以꾩옄 以묒뿉???ㅼ떆 留먰빐二쇱꽭??'
+                '어떤 공구인지 확실하지 않습니다. '
+                '드라이버, 플라이어, 망치, 줄자 중에서 다시 말해주세요.'
             )
         if reason == 'unknown_action':
             return (
-                '臾댁뾿???좎? ?뺤떎?섏? ?딆뒿?덈떎. '
-                '媛?몃떎以? ?뺣━?? 硫덉떠泥섎읆 留먰빐二쇱꽭??'
+                '무엇을 할지 확실하지 않습니다. '
+                '가져다줘, 정리해, 멈춰처럼 말해주세요.'
             )
         if reason == 'deictic_bring_not_supported':
             return (
-                '媛?몄삤湲?紐낅졊? 怨듦뎄 ?대쫫???꾩슂?⑸땲?? '
-                '?대뼡 怨듦뎄瑜?媛?몄삱吏 留먰빐二쇱꽭??'
+                '가져오기 명령은 공구 이름이 필요합니다. '
+                '어떤 공구를 가져올지 말해주세요.'
             )
         if reason == 'low_confidence':
             return (
-                '?쒓? ?댄빐???댁슜???뺤떎?섏? ?딆뒿?덈떎. '
-                '怨듦뎄 ?대쫫怨??숈옉??議곌툑 ??紐낇솗??留먰빐二쇱꽭??'
+                '제가 이해한 내용이 확실하지 않습니다. '
+                '공구 이름과 동작을 조금 더 명확히 말해주세요.'
             )
-        return message or '紐낅졊???댄빐?섏? 紐삵뻽?듬땲?? ?ㅼ떆 ?낅젰?댁＜?몄슂.'
-
+        return message or '명령을 이해하지 못했습니다. 다시 입력해주세요.'
     @staticmethod
     def _spoken_robot_statuses():
         return {
@@ -457,18 +456,18 @@ class CommandInputNode(Node):
     @staticmethod
     def _robot_status_default_message(state):
         return {
-            'waiting_handoff': '?먯쑝濡?怨듦뎄瑜??≪븘二쇱꽭??',
-            'waiting_return_handoff': '諛섎궔??怨듦뎄瑜?諛쏆쓣 以鍮꾨? ?섍퀬 ?덉뒿?덈떎.',
-            'done': '?묒뾽???꾨즺?섏뿀?듬땲??',
-            'completed': '?묒뾽???꾨즺?섏뿀?듬땲??',
-            'success': '?묒뾽???꾨즺?섏뿀?듬땲??',
-            'failed': '?묒뾽???ㅽ뙣?덉뒿?덈떎.',
-            'error': '?묒뾽 以??ㅻ쪟媛 諛쒖깮?덉뒿?덈떎.',
-            'busy': '?대? ?ㅻⅨ ?묒뾽???섑뻾 以묒엯?덈떎.',
-            'paused': '濡쒕큸???쇱떆?뺤??섏뿀?듬땲??',
-            'resumed': '?묒뾽???ㅼ떆 ?쒖옉?⑸땲??',
-            'cancelled': '?묒뾽??痍⑥냼?섏뿀?듬땲??',
-            'rejected': '?붿껌???섑뻾?????놁뒿?덈떎.',
+            'waiting_handoff': '손으로 공구를 잡아주세요.',
+            'waiting_return_handoff': '반납할 공구를 받을 준비를 하고 있습니다.',
+            'done': '작업이 완료되었습니다.',
+            'completed': '작업이 완료되었습니다.',
+            'success': '작업이 완료되었습니다.',
+            'failed': '작업이 실패했습니다.',
+            'error': '작업 중 오류가 발생했습니다.',
+            'busy': '이미 다른 작업을 수행 중입니다.',
+            'paused': '로봇이 일시정지되었습니다.',
+            'resumed': '작업을 다시 시작합니다.',
+            'cancelled': '작업이 취소되었습니다.',
+            'rejected': '요청을 수행할 수 없습니다.',
         }.get(state, '')
 
     def _speak_bot(self, text):

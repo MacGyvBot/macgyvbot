@@ -677,7 +677,7 @@ class HandGraspDetectionNode(Node):
                 return float(probabilities[classes.index("grasp")])
             return float(max(probabilities))
         except Exception as exc:
-            self.service_log.bind("gripper").warn("log", "status", msg=f"ML grasp ?꾨낫 ?먯닔 怨꾩궛 ?ㅽ뙣: {exc}")
+            self.service_log.bind("gripper").warn("log", "status", msg=f"ML grasp 후보 점수 계산 실패: {exc}")
             return None
 
     def _compose_result(
