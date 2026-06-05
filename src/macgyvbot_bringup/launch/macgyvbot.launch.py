@@ -10,6 +10,7 @@ from launch.substitutions import LaunchConfiguration
 from launch.substitutions import PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+from macgyvbot_config.models import HAND_GRASP_SAM_CHECKPOINT_NAME
 from macgyvbot_config.topics import (
     CAMERA_COLOR_TOPIC,
     CAMERA_DEPTH_TOPIC,
@@ -43,11 +44,16 @@ def generate_launch_description():
         [resources_share, "weights", "hand_grasp_model.pkl"]
     )
     default_sam_checkpoint = PathJoinSubstitution(
-        [resources_share, "weights", "mobile_sam.pt"]
+        [resources_share, "weights", HAND_GRASP_SAM_CHECKPOINT_NAME]
     )
 
     use_voice_command = LaunchConfiguration("use_voice_command")
     use_stt = LaunchConfiguration("use_stt")
+    stt_pause_threshold = LaunchConfiguration("stt_pause_threshold")
+    stt_phrase_threshold = LaunchConfiguration("stt_phrase_threshold")
+    stt_non_speaking_duration = LaunchConfiguration("stt_non_speaking_duration")
+    stt_phrase_time_limit = LaunchConfiguration("stt_phrase_time_limit")
+    stt_ambient_duration = LaunchConfiguration("stt_ambient_duration")
     use_tts = LaunchConfiguration("use_tts")
     tts_engine = LaunchConfiguration("tts_engine")
     tts_voice = LaunchConfiguration("tts_voice")
@@ -110,6 +116,11 @@ def generate_launch_description():
         parameters=[
             {
                 "enable_microphone": use_stt,
+                "pause_threshold": stt_pause_threshold,
+                "phrase_threshold": stt_phrase_threshold,
+                "non_speaking_duration": stt_non_speaking_duration,
+                "phrase_time_limit": stt_phrase_time_limit,
+                "ambient_duration": stt_ambient_duration,
                 "enable_tts": use_tts,
                 "tts_engine": tts_engine,
                 "tts_voice": tts_voice,
@@ -161,6 +172,31 @@ def generate_launch_description():
                 "use_stt",
                 default_value="true",
                 description="Enable microphone STT.",
+            ),
+            DeclareLaunchArgument(
+                "stt_pause_threshold",
+                default_value="0.45",
+                description="Seconds of silence before STT finalizes a phrase.",
+            ),
+            DeclareLaunchArgument(
+                "stt_phrase_threshold",
+                default_value="0.15",
+                description="Minimum speaking duration accepted as a phrase.",
+            ),
+            DeclareLaunchArgument(
+                "stt_non_speaking_duration",
+                default_value="0.25",
+                description="Silence retained around each STT phrase.",
+            ),
+            DeclareLaunchArgument(
+                "stt_phrase_time_limit",
+                default_value="3.0",
+                description="Maximum seconds captured for one STT phrase.",
+            ),
+            DeclareLaunchArgument(
+                "stt_ambient_duration",
+                default_value="0.5",
+                description="Seconds used for microphone ambient-noise calibration.",
             ),
             DeclareLaunchArgument(
                 "use_tts",
@@ -325,6 +361,7 @@ def generate_launch_description():
                         "position_frame_id": "base_link",
                         "publish_annotated": True,
                         "display": False,
+                        "show_return_close_roi": False,
                         "yolo_model": LaunchConfiguration("yolo_model"),
                         "tool_classes": "drill,hammer,pliers,screwdriver,tape_measure,wrench",
                         "yolo_conf": 0.20,
@@ -341,6 +378,10 @@ def generate_launch_description():
                         "sam_device": "cuda",
                         "sam_track_interval": 10,
                         "sam_track_margin": 12,
+                        "sam_reseed_from_yolo": False,
+                        "sam_track_max_center_shift_px": 80.0,
+                        "sam_track_min_area_ratio": 0.35,
+                        "sam_track_max_area_ratio": 2.5,
                         "allow_bbox_lock": True,
                         "require_ml_grasp": True,
                         "require_locked_tool": True,

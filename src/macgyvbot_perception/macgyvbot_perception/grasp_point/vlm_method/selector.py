@@ -12,9 +12,9 @@ from macgyvbot_config.vlm import (
     VLM_INFERENCE_HISTORY_DIR,
     VLM_INFERENCE_HISTORY_ENABLED,
 )
-from macgyvbot_perception.grasp_point.vlm.inference_history_recode import (
-    InferenceHistoryConfig,
-    InferenceHistoryRecode,
+from macgyvbot_perception.grasp_point.mask_image_for_grasp_detection import (
+    GraspDetectionRecordConfig,
+    GraspDetectionRecorder,
 )
 from macgyvbot_perception.grasp_point.vlm.models import VLM
 from macgyvbot_perception.grasp_point.vlm.parser import Parser
@@ -40,8 +40,8 @@ class VLMGraspPointSelector:
         self.model = None
         self.parser = Parser()
         self.grid_policy = GridPolicy()
-        self.history = InferenceHistoryRecode(
-            InferenceHistoryConfig(enabled=history_enabled, root_dir=history_dir),
+        self.history = GraspDetectionRecorder(
+            GraspDetectionRecordConfig(enabled=history_enabled, root_dir=history_dir),
             logger=logger,
         )
 
@@ -130,6 +130,7 @@ class VLMGraspPointSelector:
         runtime = self.model.get_runtime_info()
         self.logger.info(
             "VLM runtime: "
+            f"model_id={runtime['model_id']}, "
             f"device={runtime['device']}, "
             f"dtype={runtime['dtype']}, "
             f"local_weights={runtime['using_local_weights']}, "
@@ -137,9 +138,17 @@ class VLMGraspPointSelector:
         )
         if runtime["device"] != "cuda":
             self.logger.warn("VLM is not using CUDA. Running on CPU.")
-        self.logger.info("VLM weights loading...")
+        self.logger.info(
+            "VLM 가중치 로드 시작: "
+            f"model_id={runtime['model_id']}, "
+            f"source={runtime['model_source']}"
+        )
         self.model.load()
-        self.logger.info("VLM weights loaded.")
+        self.logger.info(
+            "VLM 가중치 로드 완료: "
+            f"model_id={runtime['model_id']}, "
+            f"source={runtime['model_source']}"
+        )
 
     @staticmethod
     def clamp_bbox_to_image(bbox, image):

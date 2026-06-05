@@ -12,9 +12,9 @@ from macgyvbot_config.vlm import (
     VLM_INFERENCE_HISTORY_ENABLED,
     VLM_MODEL_QWEN3B,
 )
-from macgyvbot_perception.grasp_point.vlm.inference_history_recode import (
-    InferenceHistoryConfig,
-    InferenceHistoryRecode,
+from macgyvbot_perception.grasp_point.mask_image_for_grasp_detection import (
+    GraspDetectionRecordConfig,
+    GraspDetectionRecorder,
 )
 from macgyvbot_perception.grasp_point.vlm.models import VLMOnly
 from macgyvbot_perception.grasp_point.vlm.parser import Parser
@@ -42,8 +42,8 @@ class VLMOnlyGraspPointSelector:
         self.mode = mode
         self.model = None
         self.parser = Parser()
-        self.history = InferenceHistoryRecode(
-            InferenceHistoryConfig(enabled=history_enabled, root_dir=history_dir),
+        self.history = GraspDetectionRecorder(
+            GraspDetectionRecordConfig(enabled=history_enabled, root_dir=history_dir),
             logger=logger,
         )
 
@@ -166,13 +166,23 @@ class VLMOnlyGraspPointSelector:
         runtime = self.model.get_runtime_info()
         self.logger.info(
             "VLM-only runtime: "
+            f"model_id={runtime['model_id']}, "
             f"device={runtime['device']}, "
             f"dtype={runtime['dtype']}, "
             f"local_weights={runtime['using_local_weights']}, "
             f"source={runtime['model_source']}"
         )
+        self.logger.info(
+            "VLM-only 가중치 로드 시작: "
+            f"model_id={runtime['model_id']}, "
+            f"source={runtime['model_source']}"
+        )
         self.model.load()
-        self.logger.info("VLM-only weights loaded.")
+        self.logger.info(
+            "VLM-only 가중치 로드 완료: "
+            f"model_id={runtime['model_id']}, "
+            f"source={runtime['model_source']}"
+        )
 
     @staticmethod
     def clamp_bbox_to_image(bbox, image):

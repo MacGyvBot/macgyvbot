@@ -44,4 +44,3 @@ def build_grasp_prompt(
         f"Object: {object_label}\n"
         f"Robot task: {request_text}\n"
     )
-

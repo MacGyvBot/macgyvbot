@@ -13,6 +13,8 @@ class SpeechToTextService:
         device_index,
         energy_threshold,
         pause_threshold,
+        phrase_threshold,
+        non_speaking_duration,
         dynamic_energy,
         ambient_duration,
         phrase_time_limit,
@@ -30,8 +32,15 @@ class SpeechToTextService:
         self._logger = logger
 
         self._recognizer = sr.Recognizer()
+        pause_threshold = max(0.1, float(pause_threshold))
+        non_speaking_duration = max(
+            0.05,
+            min(float(non_speaking_duration), pause_threshold),
+        )
         self._recognizer.energy_threshold = float(energy_threshold)
-        self._recognizer.pause_threshold = float(pause_threshold)
+        self._recognizer.pause_threshold = pause_threshold
+        self._recognizer.phrase_threshold = float(phrase_threshold)
+        self._recognizer.non_speaking_duration = non_speaking_duration
         self._recognizer.dynamic_energy_threshold = bool(dynamic_energy)
 
         self._log_microphones()

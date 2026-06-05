@@ -1,6 +1,7 @@
 import unittest
 
 from macgyvbot_manipulation.grasp_verifier import read_grasp_confirmation
+from macgyvbot_manipulation.onrobot_gripper import RG
 
 
 class FakeGripper:
@@ -26,6 +27,10 @@ class FakeLogger:
 
 
 class TestGripperGraspConfirmation(unittest.TestCase):
+    def test_signed_int16_depth_conversion(self):
+        self.assertEqual(RG._to_signed_int16(120), 120)
+        self.assertEqual(RG._to_signed_int16(65524), -12)
+
     def test_rejects_fully_closed_gripper_even_when_grip_detected(self):
         confirmed, busy, status, width = read_grasp_confirmation(
             FakeGripper([0, 1, 0, 0, 0, 0, 0], 0.0),
