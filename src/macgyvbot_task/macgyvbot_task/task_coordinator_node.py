@@ -237,7 +237,10 @@ class TaskCoordinatorNode(Node):
         self.gripper_self_collision_scene = None
         self._gripper_self_collision_acm_applied = False
         if self.enable_gripper_self_collision_acm:
-            self.gripper_self_collision_scene = GripperSelfCollisionManager(self)
+            self.gripper_self_collision_scene = GripperSelfCollisionManager(
+                self,
+                moveit_robot=self.robot,
+            )
         self.drawer_collision_scene = DrawerCollisionSceneManager(
             self,
             moveit_robot=self.robot,

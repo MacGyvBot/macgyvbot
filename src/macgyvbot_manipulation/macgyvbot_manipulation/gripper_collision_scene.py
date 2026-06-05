@@ -12,27 +12,28 @@ from moveit_msgs.msg import (
 from moveit_msgs.srv import ApplyPlanningScene, GetPlanningScene
 
 from macgyvbot_config.gripper import (
-    RG2_ALLOWED_COLLISION_PAIRS,
-    DEFAULT_GET_PLANNING_SCENE_SERVICE,
     DEFAULT_APPLY_PLANNING_SCENE_SERVICE,
+    DEFAULT_GET_PLANNING_SCENE_SERVICE,
     DEFAULT_PLANNING_SCENE_TOPICS,
-    DEFAULT_SCENE_SETTLE_SEC
+    DEFAULT_SCENE_SETTLE_SEC,
+    RG2_ALLOWED_COLLISION_PAIRS,
 )
 
 
 class GripperSelfCollisionManager:
     """Allow only RG2 internal link-link collisions in MoveIt's ACM."""
-    '''Allow self-collision between gripper links'''
 
     def __init__(
         self,
         node,
+        moveit_robot=None,
         allowed_pairs=None,
         planning_scene_topics=None,
         get_service_name=DEFAULT_GET_PLANNING_SCENE_SERVICE,
         apply_service_name=DEFAULT_APPLY_PLANNING_SCENE_SERVICE,
     ):
         self.node = node
+        self.moveit_robot = moveit_robot
         self.allowed_pairs = _normalize_pairs(
             allowed_pairs or RG2_ALLOWED_COLLISION_PAIRS
         )
@@ -53,11 +54,19 @@ class GripperSelfCollisionManager:
         self._apply_service_name = apply_service_name
 
     def apply(self, logger=None, timeout_sec=3.0):
-        """Fetch the current ACM, add RG2 internal pairs, and apply it."""
+        """Patch RG2 internal pairs in the local and shared planning scene ACM."""
         log = logger or self.node.get_logger()
+        local_ok, local_changed = self._apply_to_moveit_py(log)
+
         response = self._request_current_scene(log, timeout_sec)
         if response is None:
-            return False
+            if local_ok:
+                _info(
+                    log,
+                    "RG2 self-collision ACM patched in local MoveItPy scene: "
+                    f"pairs={len(self.allowed_pairs)}, changed={local_changed}",
+                )
+            return local_ok
 
         acm = response.scene.allowed_collision_matrix
         changed = _allow_collision_pairs(acm, self.allowed_pairs)
@@ -76,10 +85,42 @@ class GripperSelfCollisionManager:
         _info(
             log,
             "RG2 self-collision ACM patch requested: "
-            f"pairs={len(self.allowed_pairs)}, changed={changed}, "
+            f"pairs={len(self.allowed_pairs)}, "
+            f"local_moveit_py={local_ok}, local_changed={local_changed}, "
+            f"service_changed={changed}, "
             f"apply_service={service_ok}",
         )
-        return service_ok or bool(self._scene_publishers)
+        return local_ok if self.moveit_robot is not None else service_ok
+
+    def _apply_to_moveit_py(self, logger):
+        if self.moveit_robot is None:
+            return False, 0
+
+        try:
+            psm = self.moveit_robot.get_planning_scene_monitor()
+            with psm.read_write() as planning_scene:
+                acm = planning_scene.allowed_collision_matrix
+                changed = _allow_core_collision_pairs(acm, self.allowed_pairs)
+                _set_core_collision_matrix_if_supported(planning_scene, acm)
+
+            with psm.read_only() as planning_scene:
+                acm = planning_scene.allowed_collision_matrix
+                if _core_collision_pairs_allowed(acm, self.allowed_pairs):
+                    return True, changed
+        except Exception as exc:
+            _warn(
+                logger,
+                "MoveItPy local planning scene에 RG2 self-collision ACM을 "
+                f"직접 적용하지 못했습니다: {exc}",
+            )
+            return False, 0
+
+        _warn(
+            logger,
+            "MoveItPy local planning scene RG2 self-collision ACM 적용을 "
+            "확인하지 못했습니다.",
+        )
+        return False, 0
 
     def _request_current_scene(self, logger, timeout_sec):
         if not self._get_client.wait_for_service(timeout_sec=timeout_sec):
@@ -156,6 +197,43 @@ def _allow_collision_pairs(acm, pairs):
     acm.entry_names = list(names)
     acm.entry_values = [_make_entry(row) for row in rows]
     return changed
+
+
+def _allow_core_collision_pairs(acm, pairs):
+    changed = 0
+    for left_name, right_name in pairs:
+        was_allowed = _get_core_collision_entry(acm, left_name, right_name)
+        acm.set_entry(left_name, right_name, True)
+        if was_allowed is not True:
+            changed += 1
+    return changed
+
+
+def _core_collision_pairs_allowed(acm, pairs):
+    for left_name, right_name in pairs:
+        if _get_core_collision_entry(acm, left_name, right_name) is not True:
+            return False
+    return True
+
+
+def _get_core_collision_entry(acm, left_name, right_name):
+    try:
+        result = acm.get_entry(left_name, right_name)
+    except Exception:
+        return None
+    if isinstance(result, (tuple, list)):
+        if not result:
+            return None
+        return bool(result[0])
+    return bool(result)
+
+
+def _set_core_collision_matrix_if_supported(planning_scene, acm):
+    try:
+        planning_scene.allowed_collision_matrix = acm
+        return True
+    except Exception:
+        return False
 
 
 def _normalize_matrix(names, rows):
