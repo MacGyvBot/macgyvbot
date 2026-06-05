@@ -1,10 +1,11 @@
-"""Pick target planning helpers."""
+﻿"""Pick target planning helpers."""
 
 from __future__ import annotations
 
 from macgyvbot_config.drawer import DRAWER_WALL_CLEARANCE_Z_OFFSET_M
 from macgyvbot_manipulation.robot_safezone import SAFE_Z_MIN
 from macgyvbot_domain.pick_models import PickMotionPlan
+from macgyvbot_task.application.logging_utils import log_warn
 
 
 class PickTargetPlanner:

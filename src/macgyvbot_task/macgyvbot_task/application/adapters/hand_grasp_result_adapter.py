@@ -46,14 +46,25 @@ class HandGraspResultAdapter:
             )
         u, v = clamped_u, clamped_v
 
-        camera_point = pixel_to_camera_point(
-            u,
-            v,
-            self.state.depth_image,
-            self.state.intrinsics,
-            logger=self.logger,
-            source="handover_hand_pixel",
-        )
+        projector_fn = getattr(self.depth_projector, "pixel_to_camera_point", None)
+        if projector_fn is None:
+            camera_point = pixel_to_camera_point(
+                u,
+                v,
+                self.state.depth_image,
+                self.state.intrinsics,
+                logger=self.logger,
+                source="handover_hand_pixel",
+            )
+        else:
+            camera_point = projector_fn(
+                u,
+                v,
+                self.state.depth_image,
+                self.state.intrinsics,
+                logger=self.logger,
+                source="handover_hand_pixel",
+            )
         if camera_point is None:
             return
 
