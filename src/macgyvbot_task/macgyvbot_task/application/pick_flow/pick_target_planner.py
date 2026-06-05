@@ -22,10 +22,13 @@ class PickTargetPlanner:
         drawer_wall_clearance_z = safe_z_min + DRAWER_WALL_CLEARANCE_Z_OFFSET_M
 
         if float(bz) < safe_z_min:
-            logger.warn(
-                f"계산된 grasp_z({float(bz):.3f})가 "
-                f"safe_z_min({safe_z_min:.3f})보다 낮아 "
-                "safe_z_min으로 맞춥니다."
+            log_warn(
+                logger,
+                "pick grasp z clamped to safe minimum",
+                step="plan",
+                event="clamp",
+                raw_bz=float(bz),
+                safe_z_min=safe_z_min,
             )
 
         return PickMotionPlan(

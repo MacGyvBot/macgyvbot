@@ -357,7 +357,7 @@ def test_handoff_search_failure_can_retry_before_fallback(monkeypatch):
     plan = types.SimpleNamespace(
         target_x=0.30,
         target_y=0.10,
-        travel_z=0.40,
+        drawer_wall_clearance_z=0.40,
         grasp_z=0.25,
     )
     context = {
@@ -402,7 +402,7 @@ def test_handoff_search_failure_fallback_clears_pending(monkeypatch):
     plan = types.SimpleNamespace(
         target_x=0.30,
         target_y=0.10,
-        travel_z=0.40,
+        drawer_wall_clearance_z=0.40,
         grasp_z=0.25,
     )
     context = {

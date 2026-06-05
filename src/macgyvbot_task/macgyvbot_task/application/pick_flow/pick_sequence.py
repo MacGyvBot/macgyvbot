@@ -2,6 +2,8 @@
 
 import time
 
+import rclpy
+
 from macgyvbot_config.drawer import TOOL_OBSERVE_X_BACKOFF_M
 
 from macgyvbot_manipulation.robot_pose import (
@@ -106,10 +108,9 @@ class PickSequenceRunner:
             target_y=plan.target_y,
             safe_z_min=safe_z_min,
             raw_bz=bz,
-            corrected_bz=plan.corrected_bz,
-            travel_z=plan.travel_z,
-            approach_z=plan.approach_z,
+            drawer_wall_clearance_z=plan.drawer_wall_clearance_z,
             grasp_z=plan.grasp_z,
+            should_descend_to_grasp=plan.should_descend_to_grasp,
         )
 
         steps = [
@@ -363,8 +364,14 @@ class PickSequenceRunner:
             return False
 
         if not plan.should_descend_to_grasp:
-            self.state.logger().info(
-                "4단계: drawer_wall_clearance_z와 grasp_z가 같아 추가 하강 생략"
+            log_info(
+                self.state.logger(),
+                "grasp descent skipped",
+                step="grasp_descent",
+                event="skip",
+                reason="same_height",
+                drawer_wall_clearance_z=plan.drawer_wall_clearance_z,
+                grasp_z=plan.grasp_z,
             )
             return True
 
@@ -506,7 +513,12 @@ class PickSequenceRunner:
                 log,
             )
             if decision == "retry":
-                log.info("사용자 요청으로 handoff 위치 관측을 다시 시도합니다.")
+                log_info(
+                    log,
+                    "handoff pose retry requested",
+                    step="handoff",
+                    event="retry",
+                )
                 continue
             if decision == "interrupted":
                 return False
@@ -564,7 +576,12 @@ class PickSequenceRunner:
 
             decision = self._wait_for_handoff_decision("handoff_timeout", log)
             if decision == "retry":
-                log.info("사용자 요청으로 사용자 잡기 인식을 다시 기다립니다.")
+                log_info(
+                    log,
+                    "human grasp wait retry requested",
+                    step="human_grasp",
+                    event="retry",
+                )
                 continue
             if decision == "interrupted":
                 return False
@@ -618,9 +635,13 @@ class PickSequenceRunner:
             reason=reason,
             command=self.state.current_command,
         )
-        log.warn(
-            "handoff inspection 선택 대기: "
-            f"reason={reason}, options=retry/fallback"
+        log_warn(
+            log,
+            "handoff inspection decision pending",
+            step="handoff_decision",
+            event="pending",
+            reason=reason,
+            options="retry/fallback",
         )
 
         try:
@@ -696,7 +717,12 @@ class PickSequenceRunner:
         return True
 
     def _home_before_close_drawer(self):
-        self.state.logger().info("11단계: 서랍 닫기 전 Home 위치로 이동")
+        log_info(
+            self.state.logger(),
+            "home before close drawer",
+            step="home_before_close_drawer",
+            event="start",
+        )
         return self.handoff.move_home_after_handoff(self.state.logger())
 
     def _home_after_handoff(self):
