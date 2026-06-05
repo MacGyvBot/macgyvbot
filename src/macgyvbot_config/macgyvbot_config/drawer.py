@@ -37,16 +37,23 @@ DRAWER_STORE_TOOL_OBSERVE_POINT = {
     "joint_5": math.radians(90.16),
     "joint_6": math.radians(67.19),
 }
+
+# Back off from the detected or staged tool along base X for camera observation.
+TOOL_OBSERVE_X_BACKOFF_M = 0.08
+# Start force-based staging descent slightly above the global minimum safe Z.
 DRAWER_STORE_FORCE_DESCENT_START_Z_OFFSET_M = 0.03
 
 DRAWER_OPEN_OFFSET_XYZ_M = [-0.185, 0.0, 0.0]
 DRAWER_OBSERVE_OFFSET_XYZ_M = [0.10, 0.0, 0.15]
 DRAWER_HANDLE_PREAPPROACH_X_OFFSET_M = -0.02
 DRAWER_GRIPPER_SETTLE_SEC = 0.8
-DRAWER_1_SAFE_Z_OFFSET_M = 0.085
+# Drawer floor heights are modeled as offsets above the global minimum safe Z.
+DRAWER_1_SAFE_Z_OFFSET_M = 0.087
 DRAWER_2_SAFE_Z_OFFSET_M = DRAWER_1_SAFE_Z_OFFSET_M * 2.0
-DRAWER_STORE_MARKER_CLEARANCE_Z_OFFSET_M = 0.10
+# Clearance above each drawer floor used to cross drawer walls or lips.
+DRAWER_WALL_CLEARANCE_Z_OFFSET_M = 0.10
 DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M = [-0.15, 0.0, 0.0]
+# Marker placement offsets are relative to the detected drawer marker Z.
 DRAWER_STORE_MARKER_APPROACH_Z_OFFSET_M = 0.09
 DRAWER_STORE_MARKER_RELEASE_Z_OFFSET_M = 0.02
 DRAWER_CLOSE_LIFT_OFFSET_M = 0.01

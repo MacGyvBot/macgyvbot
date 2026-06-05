@@ -353,23 +353,19 @@ class ReturnSequenceRunner:
         self.reporter.publish(
             "moving_store_observe_point",
             observed_tool,
-            "임시 관찰 위치로 이동해 공구 bbox를 다시 확인합니다.",
+            "임시 관찰 viewpoint로 이동해 공구 bbox 중심을 다시 확인합니다.",
             context["command"],
         )
-        ok = self.placement.move_to_store_observe_point(self.state.logger())
+        ok = self.placement.move_to_store_observe_viewpoint(
+            observed_tool,
+            context["command"],
+            self.state.logger(),
+        )
         if ok:
             return True
 
         if self._interrupted():
             return False
-
-        self.reporter.fail(
-            observed_tool,
-            "임시 관찰 위치 이동에 실패했습니다.",
-            "return_store_observe_move_failed",
-            context["command"],
-            self.state.logger(),
-        )
         return False
 
     def _resolve_store_tool_bbox(self, context):

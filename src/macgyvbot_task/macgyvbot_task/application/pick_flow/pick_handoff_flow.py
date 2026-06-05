@@ -26,7 +26,7 @@ from macgyvbot_manipulation.handover_targeting import (
 from macgyvbot_manipulation.robot_pose import get_ee_matrix, make_safe_pose
 from macgyvbot_manipulation.robot_safezone import SAFE_Z_MIN
 from macgyvbot_task.application.drawer_store_motion import (
-    drawer_store_clearance_z,
+    drawer_wall_clearance_z_for_drawer,
     move_to_drawer_store_exit,
 )
 
@@ -56,7 +56,7 @@ class PickHandoffFlow:
         self,
         target_x,
         target_y,
-        travel_z,
+        drawer_wall_clearance_z,
         grasp_z,
         ori,
         logger,
@@ -65,9 +65,8 @@ class PickHandoffFlow:
         move_home=True,
         lift_from_current=True,
     ):
-        clearance_z = travel_z
         if drawer_id is not None:
-            clearance_z = drawer_store_clearance_z(drawer_id)
+            drawer_wall_clearance_z = drawer_wall_clearance_z_for_drawer(drawer_id)
 
         if grasp_z < safe_z_min:
             logger.warn(
@@ -88,7 +87,7 @@ class PickHandoffFlow:
                 pose_goal=make_safe_pose(
                     current_x,
                     current_y,
-                    clearance_z,
+                    drawer_wall_clearance_z,
                     ori,
                     logger,
                 ),
@@ -110,7 +109,7 @@ class PickHandoffFlow:
             pose_goal=make_safe_pose(
                 target_x,
                 target_y,
-                clearance_z,
+                drawer_wall_clearance_z,
                 ori,
                 logger,
             ),
@@ -146,7 +145,7 @@ class PickHandoffFlow:
             pose_goal=make_safe_pose(
                 target_x,
                 target_y,
-                clearance_z,
+                drawer_wall_clearance_z,
                 ori,
                 logger,
             ),
@@ -161,7 +160,7 @@ class PickHandoffFlow:
                 logger,
                 target_x,
                 target_y,
-                clearance_z,
+                drawer_wall_clearance_z,
                 ori,
                 "반환 6단계: 공구를 놓은 뒤 drawer exit offset 이동",
                 "공구를 놓은 뒤 drawer exit offset 이동 실패",

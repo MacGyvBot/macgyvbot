@@ -63,8 +63,8 @@ sys.modules.setdefault("scipy", scipy_module)
 sys.modules.setdefault("scipy.spatial", scipy_spatial_module)
 sys.modules.setdefault("scipy.spatial.transform", scipy_transform_module)
 
-from macgyvbot_config.drawer import DRAWER_STORE_MARKER_CLEARANCE_Z_OFFSET_M
 from macgyvbot_config.drawer import DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M
+from macgyvbot_config.drawer import DRAWER_WALL_CLEARANCE_Z_OFFSET_M
 from macgyvbot_manipulation.robot_safezone import safe_z_min_for_drawer
 from macgyvbot_task.application.pick_flow import pick_handoff_flow
 from macgyvbot_task.application.pick_flow.pick_handoff_flow import PickHandoffFlow
@@ -143,7 +143,7 @@ class FakeHandoff:
         self,
         target_x,
         target_y,
-        travel_z,
+        drawer_wall_clearance_z,
         grasp_z,
         ori,
         logger,
@@ -158,7 +158,7 @@ class FakeHandoff:
         assert not move_home
         return True
 
-    def move_to_handoff_pose(self, ori, logger):
+    def move_to_handoff_pose(self, logger):
         return None, None, None
 
     def move_home_after_handoff(self, logger, publish_on_failure=True):
@@ -211,20 +211,20 @@ def test_return_tool_to_original_position_uses_drawer_clearance(monkeypatch):
         drawer_id=1,
     )
 
-    clearance_z = (
+    drawer_wall_clearance_z = (
         safe_z_min_for_drawer(1)
-        + DRAWER_STORE_MARKER_CLEARANCE_Z_OFFSET_M
+        + DRAWER_WALL_CLEARANCE_Z_OFFSET_M
     )
     positions = [target.pose.position for target in motion.targets]
 
     assert math.isclose(positions[0].x, 0.12)
     assert math.isclose(positions[0].y, -0.05)
-    assert math.isclose(positions[0].z, clearance_z)
+    assert math.isclose(positions[0].z, drawer_wall_clearance_z)
     assert math.isclose(positions[1].x, 0.30)
     assert math.isclose(positions[1].y, 0.10)
-    assert math.isclose(positions[1].z, clearance_z)
+    assert math.isclose(positions[1].z, drawer_wall_clearance_z)
     assert math.isclose(positions[2].z, 0.35)
-    assert math.isclose(positions[3].z, clearance_z)
+    assert math.isclose(positions[3].z, drawer_wall_clearance_z)
     assert math.isclose(
         positions[4].x,
         0.30 + DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M[0],
@@ -235,7 +235,7 @@ def test_return_tool_to_original_position_uses_drawer_clearance(monkeypatch):
     )
     assert math.isclose(
         positions[4].z,
-        clearance_z + DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M[2],
+        drawer_wall_clearance_z + DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M[2],
     )
     assert gripper.open_calls == 1
     assert motion.home_calls == 1
@@ -250,7 +250,7 @@ def test_handoff_timeout_return_closes_drawer():
     plan = types.SimpleNamespace(
         target_x=0.30,
         target_y=0.10,
-        travel_z=0.40,
+        drawer_wall_clearance_z=0.40,
         grasp_z=0.25,
     )
     context = {
@@ -278,7 +278,7 @@ def test_handoff_timeout_reports_drawer_close_failure():
     plan = types.SimpleNamespace(
         target_x=0.30,
         target_y=0.10,
-        travel_z=0.40,
+        drawer_wall_clearance_z=0.40,
         grasp_z=0.25,
     )
     context = {
@@ -305,7 +305,7 @@ def test_handoff_search_failure_returns_directly_to_target_clearance():
     plan = types.SimpleNamespace(
         target_x=0.30,
         target_y=0.10,
-        travel_z=0.40,
+        drawer_wall_clearance_z=0.40,
         grasp_z=0.25,
     )
     context = {

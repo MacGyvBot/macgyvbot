@@ -2,9 +2,7 @@
 
 import time
 
-import rclpy
-
-from macgyvbot_config.pick import OBSERVE_X_OFFSET_M
+from macgyvbot_config.drawer import TOOL_OBSERVE_X_BACKOFF_M
 
 from macgyvbot_manipulation.robot_pose import (
     current_ee_orientation,
@@ -94,25 +92,23 @@ class PickSequenceRunner:
         log.info(
             f"시퀀스 시작: Target({plan.target_x:.3f}, {plan.target_y:.3f}), "
             f"safe_z_min={safe_z_min:.3f}, raw_bz={bz:.3f}, "
-            f"corrected_bz={plan.corrected_bz:.3f}, "
-            f"travel_z={plan.travel_z:.3f}, "
-            f"approach_z={plan.approach_z:.3f}, "
+            f"drawer_wall_clearance_z={plan.drawer_wall_clearance_z:.3f}, "
             f"grasp_z={plan.grasp_z:.3f}"
         )
 
         steps = [
             TaskStep("pick/open_gripper", self._open_gripper),
             TaskStep(
-                "pick/travel_z",
+                "pick/drawer_wall_clearance",
                 lambda: self._move_to_pose(
-                    "1단계: 안전 이동 높이 확보",
+                    "1단계: 서랍 벽 회피 높이 확보",
                     context["plan"].current_x,
                     context["plan"].current_y,
-                    context["plan"].travel_z,
+                    context["plan"].drawer_wall_clearance_z,
                     context["ori"],
-                    "안전 이동 높이 확보 실패. Pick 시퀀스 중단",
-                    "안전 이동 높이 확보 실패",
-                    "travel_z_plan_failed",
+                    "서랍 벽 회피 높이 확보 실패. Pick 시퀀스 중단",
+                    "서랍 벽 회피 높이 확보 실패",
+                    "drawer_wall_clearance_plan_failed",
                 ),
             ),
             TaskStep(
@@ -122,19 +118,6 @@ class PickSequenceRunner:
             TaskStep(
                 "pick/refine_target_and_apply_vlm_yaw",
                 lambda: self._refine_target_and_apply_vlm_yaw_step(context),
-            ),
-            TaskStep(
-                "pick/approach",
-                lambda: self._move_to_pose(
-                    "3단계: 타겟 상단 접근",
-                    context["plan"].target_x,
-                    context["plan"].target_y,
-                    context["plan"].approach_z,
-                    context["ori"],
-                    "상단 접근 실패. Pick 시퀀스 중단",
-                    "상단 접근 실패",
-                    "approach_failed",
-                ),
             ),
             TaskStep(
                 "pick/grasp_descent",
@@ -154,10 +137,10 @@ class PickSequenceRunner:
                     "7단계: 안전 높이 복귀",
                     context["plan"].target_x,
                     context["plan"].target_y,
-                    context["plan"].travel_z,
+                    context["plan"].drawer_wall_clearance_z,
                     context["ori"],
-                    "안전 높이 복귀 실패",
-                    "안전 높이 복귀 실패",
+                    "서랍 벽 회피 높이 복귀 실패",
+                    "서랍 벽 회피 높이 복귀 실패",
                     "lift_failed",
                 ),
             ),
@@ -278,9 +261,9 @@ class PickSequenceRunner:
     def _move_to_vlm_observe_pose(self, context):
         ok = self._move_to_pose(
             "2단계: 안전 높이에서 XY 수평 이동",
-            context["plan"].target_x - OBSERVE_X_OFFSET_M,
+            context["plan"].target_x - TOOL_OBSERVE_X_BACKOFF_M,
             context["plan"].target_y,
-            context["plan"].travel_z,
+            context["plan"].drawer_wall_clearance_z,
             context["ori"],
             "XY 이동 실패. Pick 시퀀스 중단",
             "XY 이동 실패",
@@ -342,7 +325,9 @@ class PickSequenceRunner:
             command=self.state.current_command,
         )
         if not plan.should_descend_to_grasp:
-            self.state.logger().info("4단계: approach_z와 grasp_z가 같아 추가 하강 생략")
+            self.state.logger().info(
+                "4단계: drawer_wall_clearance_z와 grasp_z가 같아 추가 하강 생략"
+            )
             return True
 
         return self._move_to_pose(
@@ -553,7 +538,7 @@ class PickSequenceRunner:
         returned = self.handoff.return_tool_to_original_position(
             plan.target_x,
             plan.target_y,
-            plan.travel_z,
+            plan.drawer_wall_clearance_z,
             plan.grasp_z,
             context["ori"],
             log,
