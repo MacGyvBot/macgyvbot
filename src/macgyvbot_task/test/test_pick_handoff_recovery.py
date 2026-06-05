@@ -136,8 +136,10 @@ class FakeHandoff:
     def __init__(self):
         self.returned_drawer_id = None
         self.events = []
+        self.last_failure_reason = ""
 
     def wait_for_human_grasp(self, logger):
+        self.last_failure_reason = "handoff_timeout"
         return False
 
     def return_tool_to_original_position(
@@ -160,6 +162,7 @@ class FakeHandoff:
         return True
 
     def move_to_handoff_pose(self, ori, logger):
+        self.last_failure_reason = "handoff_search_failed"
         return None, None, None
 
     def move_home_after_handoff(self, logger, publish_on_failure=True):
