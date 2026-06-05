@@ -17,6 +17,7 @@ from macgyvbot_command.input_mapping.command_vocabulary import (
     HOME_KEYWORDS,
     RELEASE_KEYWORDS,
     RESUME_KEYWORDS,
+    RETRY_KEYWORDS,
     RETURN_KEYWORDS,
     STOP_KEYWORDS,
     TOOL_KEYWORDS,
@@ -28,6 +29,7 @@ SHORT_CONTROL_MAX_LENGTH = 14
 
 _SHORT_CONTROL_KEYWORDS = (
     ('pause', STOP_KEYWORDS),
+    ('retry', RETRY_KEYWORDS),
     ('resume', RESUME_KEYWORDS),
     ('cancel', CANCEL_KEYWORDS),
     ('home', HOME_KEYWORDS),
@@ -148,6 +150,10 @@ def find_action(text):
     for keyword in RESUME_KEYWORDS:
         if normalize_text(keyword) in normalized:
             return 'resume'
+
+    for keyword in RETRY_KEYWORDS:
+        if normalize_text(keyword) in normalized:
+            return 'retry'
 
     for keyword in CANCEL_KEYWORDS:
         if normalize_text(keyword) in normalized:
