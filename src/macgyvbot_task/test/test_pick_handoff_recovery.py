@@ -161,7 +161,7 @@ class FakeHandoff:
         assert not move_home
         return True
 
-    def move_to_handoff_pose(self, ori, logger):
+    def move_to_handoff_pose(self, logger):
         self.last_failure_reason = "handoff_search_failed"
         return None, None, None
 
@@ -175,7 +175,7 @@ class RetryableHandoff(FakeHandoff):
         super().__init__()
         self.move_calls = 0
 
-    def move_to_handoff_pose(self, ori, logger):
+    def move_to_handoff_pose(self, logger):
         self.move_calls += 1
         if self.move_calls == 1:
             self.last_failure_reason = "handoff_search_failed"
@@ -449,8 +449,9 @@ def test_pregrasp_depth_adjust_can_descend_below_drawer_safe_z_by_depth():
     assert runner._pregrasp_depth_adjust(context)
 
     assert runner.gripper.open_calls == 1
-    assert math.isclose(runner.motion.targets[-1].pose.position.z, 0.302)
-    assert math.isclose(runner.motion.min_z_values[-1], 0.302)
+    expected_z = safe_z_min_for_drawer(1) - 0.020
+    assert math.isclose(runner.motion.targets[-1].pose.position.z, expected_z)
+    assert math.isclose(runner.motion.min_z_values[-1], expected_z)
 
 
 def test_pregrasp_depth_adjust_uses_drawer_safe_z_minus_depth_as_clamp():
@@ -473,8 +474,9 @@ def test_pregrasp_depth_adjust_uses_drawer_safe_z_minus_depth_as_clamp():
 
     assert runner._pregrasp_depth_adjust(context)
 
-    assert math.isclose(runner.motion.targets[-1].pose.position.z, 0.302)
-    assert math.isclose(runner.motion.min_z_values[-1], 0.302)
+    expected_z = safe_z_min_for_drawer(1) - 0.020
+    assert math.isclose(runner.motion.targets[-1].pose.position.z, expected_z)
+    assert math.isclose(runner.motion.min_z_values[-1], expected_z)
 
 
 def test_pregrasp_depth_adjust_allows_target_below_global_safe_z_min():

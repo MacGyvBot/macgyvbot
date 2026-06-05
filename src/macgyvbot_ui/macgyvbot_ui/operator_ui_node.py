@@ -437,8 +437,8 @@ class OperatorUiNode(Node):
             ):
                 self.window.append_control_actions(
                     (
-                        ('다시 인식', '다시 인식'),
-                        ('복귀', '전달 취소'),
+                        ('재시도', '재시도'),
+                        ('복귀', '복귀'),
                     )
                 )
 
@@ -663,7 +663,11 @@ class OperatorUiNode(Node):
         raw_message = str(status.get('message') or '').strip()
         reason = str(status.get('reason') or '').strip()
 
-        abnormal_message = robot_status_chat(state, reason, raw_message)
+        abnormal_message = (
+            ''
+            if state == 'handoff_inspection_pending'
+            else robot_status_chat(state, reason, raw_message)
+        )
         message = (
             abnormal_message
             or self._robot_status_message(state, target_label, raw_message, reason)
@@ -868,7 +872,6 @@ class OperatorUiNode(Node):
     @staticmethod
     def _always_show_robot_statuses():
         return {
-            'waiting_handoff',
             'handoff_inspection_pending',
             'waiting_return_handoff',
             'done',
@@ -1060,12 +1063,13 @@ class OperatorUiNode(Node):
         response_message = str(getattr(response, 'message', '') or '').strip()
         if bool(getattr(response, 'success', False)):
             applied_width = float(getattr(response, 'applied_width_mm', 0.0))
-            message = response_message or f'그리퍼를 {applied_width:.0f} mm로 이동합니다.'
+            message = f'그리퍼를 {applied_width:.0f} mm로 적용합니다.'
             self._append_bot(message)
             self._append_log(
                 'info',
                 f'그리퍼 명령 완료: width_mm={applied_width:.1f}, '
-                f'status={getattr(response, "status", "")}',
+                f'status={getattr(response, "status", "")}, '
+                f'message={response_message}',
             )
         else:
             message = response_message or '그리퍼 명령이 거부되었습니다.'

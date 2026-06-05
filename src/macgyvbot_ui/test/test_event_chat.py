@@ -27,18 +27,16 @@ class EventChatTest(unittest.TestCase):
             "",
         )
 
-    def test_hand_detection_transition_messages(self):
-        self.assertEqual(
-            hand_detection_chat(False, True),
-            HAND_DETECTED_MESSAGE,
-        )
-        self.assertEqual(
-            hand_detection_chat(True, False),
-            HAND_NOT_FOUND_MESSAGE,
-        )
+    def test_raw_hand_detection_transitions_do_not_chat(self):
+        self.assertEqual(hand_detection_chat(False, True), "")
+        self.assertEqual(hand_detection_chat(True, False), "")
         self.assertEqual(hand_detection_chat(True, True), "")
 
     def test_robot_status_abnormal_messages(self):
+        self.assertEqual(
+            robot_status_chat("waiting_handoff"),
+            HAND_DETECTED_MESSAGE,
+        )
         self.assertEqual(
             robot_status_chat("failed", "handoff_search_failed"),
             HAND_NOT_FOUND_MESSAGE,

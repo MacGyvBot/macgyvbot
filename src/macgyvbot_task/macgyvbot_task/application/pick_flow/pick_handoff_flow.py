@@ -180,7 +180,7 @@ class PickHandoffFlow:
 
         return True
 
-    def move_to_handoff_pose(self, ori, logger):
+    def move_to_handoff_pose(self, logger):
         self.last_failure_reason = ""
         if self.interrupted():
             logger.info(
@@ -192,6 +192,16 @@ class PickHandoffFlow:
 
         if not self._move_to_observation_pose(logger):
             return None, None, None
+        handoff_ori = self.state.home_ori
+        if handoff_ori is None:
+            logger.error("Home orientation이 없어 사용자 손 위치로 이동할 수 없습니다.")
+            self.state._publish_robot_status(
+                "failed",
+                message="Home orientation을 확인하지 못했습니다.",
+                reason="handoff_home_orientation_unavailable",
+                command=self.state.current_command,
+            )
+            return None, None, None
 
         candidate = self._observe_handoff_candidate(logger)
         if candidate is None:
@@ -200,7 +210,7 @@ class PickHandoffFlow:
         if not self._validate_candidate(candidate, logger):
             return None, None, None
 
-        return self._move_to_candidate(candidate, ori, logger)
+        return self._move_to_candidate(candidate, handoff_ori, logger)
 
     def _move_to_observation_pose(self, logger):
         ok, start_pose = move_to_observation_pose(self.motion, self.robot, logger)

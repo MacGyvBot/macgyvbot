@@ -12,7 +12,10 @@ from macgyvbot_config.drawer import (
     DRAWER_STORE_MARKER_APPROACH_Z_OFFSET_M,
     DRAWER_STORE_MARKER_RELEASE_Z_OFFSET_M,
 )
-from macgyvbot_config.return_flow import RETURN_TOOL_RELEASE_WAIT_SEC
+from macgyvbot_config.return_flow import (
+    RETURN_DRAWER_PLACE_WRIST_YAW_DEG,
+    RETURN_TOOL_RELEASE_WAIT_SEC,
+)
 from macgyvbot_manipulation.grasp_verifier import GraspVerifier
 from macgyvbot_manipulation.robot_pose import (
     current_ee_orientation,
@@ -282,6 +285,8 @@ class ReturnDrawerPlacementFlow:
             safe_z_min,
             float(marker_z) + DRAWER_STORE_MARKER_RELEASE_Z_OFFSET_M,
         )
+        if not self._rotate_wrist_for_drawer_place(tool_name, command, logger):
+            return False
         ori = current_ee_orientation(self.robot)
         logger.info(
             "서랍 marker place 높이 계산: "
@@ -386,6 +391,30 @@ class ReturnDrawerPlacementFlow:
             tool_name,
             "서랍 내부 공구를 놓은 뒤 y축 exit offset 이동에 실패했습니다.",
             "return_drawer_place_failed",
+            command,
+            logger,
+        )
+        return False
+
+    def _rotate_wrist_for_drawer_place(self, tool_name, command, logger):
+        logger.info(
+            "서랍 내부 보관 전 "
+            f"J6를 {RETURN_DRAWER_PLACE_WRIST_YAW_DEG:.1f}도 회전합니다."
+        )
+        ok = self.motion.rotate_wrist_by_yaw_deg(
+            RETURN_DRAWER_PLACE_WRIST_YAW_DEG,
+            logger,
+        )
+        if ok:
+            return True
+
+        if self.interrupted():
+            return False
+
+        self.reporter.fail(
+            tool_name,
+            "서랍 내부 보관 전 J6 회전에 실패했습니다.",
+            "return_drawer_place_wrist_rotation_failed",
             command,
             logger,
         )

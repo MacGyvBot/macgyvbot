@@ -6,6 +6,7 @@ from macgyvbot_config.pick import (
     APPROACH_Z_OFFSET,
     GRASP_Z_OFFSET,
     OBJECT_Z_HEIGHT_BIAS_M,
+    PICK_TRAVEL_Z_CLEARANCE_M,
     SAFE_Z,
 )
 from macgyvbot_manipulation.robot_pose import get_ee_matrix
@@ -30,7 +31,7 @@ class PickTargetPlanner:
 
         target_x = bx
         target_y = by
-        travel_z = SAFE_Z
+        travel_z = safe_z_min + PICK_TRAVEL_Z_CLEARANCE_M
 
         if approach_z < grasp_z:
             logger.warn(

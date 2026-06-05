@@ -322,6 +322,12 @@ class CommandLlmParser:
         effective_text = self._effective_command_text(text)
         tool_name, match_method, match_score, matched_keyword = find_tool(effective_text)
         action = find_action(effective_text)
+        inferred_tool = self._infer_tool_from_text(effective_text)
+        if inferred_tool and match_method != 'alias':
+            tool_name = inferred_tool
+            match_method = 'local_function'
+            match_score = 0.92
+            matched_keyword = ''
 
         if action == 'pause':
             command = {
@@ -768,6 +774,7 @@ class CommandLlmParser:
 - pliers: {ALLOWED_TOOLS['pliers']}
 - hammer: {ALLOWED_TOOLS['hammer']}
 - tape_measure: {ALLOWED_TOOLS['tape_measure']}
+- wrench: {ALLOWED_TOOLS['wrench']}
 - unknown: {ALLOWED_TOOLS['unknown']}
 
 허용 action:
@@ -801,7 +808,8 @@ class CommandLlmParser:
 - "못 박는 거", "두드리는 거", "치는 거", "때리는 거"는 hammer에 가깝다.
 - "길이 재는 거", "치수 재는 거"는 tape_measure에 가깝다.
 - "집는 거", "잡는 거", "펜치 같은 거"는 pliers에 가깝다.
-- 드릴, 렌치, 스패너는 현재 프로젝트 대상 공구가 아니므로 tool_name unknown으로 둔다.
+- "렌치", "스패너", "볼트 조이는 거", "너트 푸는 거", "육각 조이는 거"는 wrench에 가깝다.
+- 드릴은 현재 프로젝트 대상 공구가 아니므로 tool_name unknown으로 둔다.
 - "나사 돌리는 거", "못 두드리는 거"처럼 기능 표현이 있으면 target_mode는 named다.
 - "이거", "그거", "저거"처럼 공구명이나 기능 표현이 없는 지시어는 target_mode를 deictic으로 둔다.
 - deictic은 return action에서만 허용한다. deictic bring은 tool_name을 추측하지 말고 unknown으로 둔다.
@@ -853,6 +861,12 @@ class CommandLlmParser:
 
 입력: 길이 재는 거 줘
 출력: {{"intent":"command","tool_name":"tape_measure","action":"bring","target_mode":"named","confidence":0.82,"needs_confirmation":false,"context_used":"none"}}
+
+입력: 볼트 조이는 거 가져와
+출력: {{"intent":"command","tool_name":"wrench","action":"bring","target_mode":"named","confidence":0.84,"needs_confirmation":false,"context_used":"none"}}
+
+입력: 스패너 정리해
+출력: {{"intent":"command","tool_name":"wrench","action":"return","target_mode":"named","confidence":0.90,"needs_confirmation":false,"context_used":"none"}}
 
 입력: 놔줘
 출력: {{"intent":"command","tool_name":"unknown","action":"release","target_mode":"unknown","confidence":0.95,"needs_confirmation":false,"context_used":"none"}}
@@ -1475,7 +1489,56 @@ class CommandLlmParser:
                 '길이',
                 '치수',
                 '측정',
+                '렌치',
+                '랜치',
+                '스패너',
+                '스페너',
+                '스파나',
+                '몽키',
+                '볼트',
+                '너트',
+                '육각',
             )
+        )
+
+    def _infer_tool_from_text(self, raw_text):
+        normalized = self._normalize_answer(raw_text)
+        has_wrench_expression = any(
+            token in normalized
+            for token in (
+                '렌치',
+                '랜치',
+                '스패너',
+                '스페너',
+                '스파나',
+                '몽키',
+                '볼트',
+                '너트',
+                '육각',
+            )
+        )
+        has_impact_expression = any(
+            token in normalized
+            for token in ('박', '두드리', '치는거', '쳐', '때리', '망치')
+        )
+        has_measure_expression = any(
+            token in normalized
+            for token in ('길이', '치수', '재', '측정', '센치', 'cm')
+        )
+        has_grip_expression = any(
+            token in normalized
+            for token in ('집', '잡', '찝', '펜치', '플라이어', '니퍼')
+        )
+        has_turn_expression = any(
+            token in normalized
+            for token in ('돌리', '조이', '풀어', '푸는', '풀')
+        )
+        return self._infer_tool_from_function_words(
+            has_turn_expression=has_turn_expression,
+            has_impact_expression=has_impact_expression,
+            has_measure_expression=has_measure_expression,
+            has_grip_expression=has_grip_expression,
+            has_wrench_expression=has_wrench_expression,
         )
 
     @staticmethod
@@ -1517,6 +1580,20 @@ class CommandLlmParser:
             word in normalized
             for word in ('돌리', '조이', '풀어', '푸는', '풀')
         )
+        has_wrench_expression = any(
+            word in normalized
+            for word in (
+                '렌치',
+                '랜치',
+                '스패너',
+                '스페너',
+                '스파나',
+                '몽키',
+                '볼트',
+                '너트',
+                '육각',
+            )
+        )
         has_impact_expression = any(
             word in normalized
             for word in ('박', '두드리', '치는거', '쳐', '때리', '망치')
@@ -1542,6 +1619,12 @@ class CommandLlmParser:
                 '뺀치',
                 '줄자',
                 '테이프',
+                '렌치',
+                '랜치',
+                '스패너',
+                '스페너',
+                '스파나',
+                '몽키',
             )
         )
         has_tool_clue = any(
@@ -1550,6 +1633,7 @@ class CommandLlmParser:
                 has_impact_expression,
                 has_measure_expression,
                 has_grip_expression,
+                has_wrench_expression,
                 has_named_tool,
             )
         )
@@ -1562,6 +1646,7 @@ class CommandLlmParser:
             has_impact_expression=has_impact_expression,
             has_measure_expression=has_measure_expression,
             has_grip_expression=has_grip_expression,
+            has_wrench_expression=has_wrench_expression,
         )
         if inferred_tool is not None:
             if tool_name != inferred_tool:
@@ -1594,7 +1679,10 @@ class CommandLlmParser:
         has_impact_expression,
         has_measure_expression,
         has_grip_expression,
+        has_wrench_expression,
     ):
+        if has_wrench_expression:
+            return 'wrench'
         if has_impact_expression:
             return 'hammer'
         if has_measure_expression:
@@ -1615,7 +1703,7 @@ class CommandLlmParser:
         normalized = self._normalize_answer(raw_text)
         return any(
             token in normalized
-            for token in ('드릴', '렌치', '스패너', '스페너')
+            for token in ('드릴',)
         )
 
     def _resolve_deterministic_tool(self, raw_text):
