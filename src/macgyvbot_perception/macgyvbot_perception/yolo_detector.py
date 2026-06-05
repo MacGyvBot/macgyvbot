@@ -12,10 +12,11 @@ def resolve_model_path(model_name):
 class YoloDetector:
     """Small wrapper around Ultralytics YOLO to keep node wiring thin."""
 
-    def __init__(self, model_name, logger=None):
+    def __init__(self, model_name, logger=None, log_detections=False):
         from ultralytics import YOLO
 
         self.logger = logger
+        self.log_detections = bool(log_detections)
         self.model_path = resolve_model_path(model_name)
         if self.logger is not None:
             self.logger.info(
@@ -40,7 +41,7 @@ class YoloDetector:
         return self.model.names
 
     def detect(self, image):
-        if self.logger is not None:
+        if self.logger is not None and self.log_detections:
             shape = getattr(image, "shape", None)
             self.logger.info(
                 "detect",
@@ -50,7 +51,7 @@ class YoloDetector:
                 msg="YOLO detection started",
             )
         results = self.model(image, verbose=False)
-        if self.logger is not None:
+        if self.logger is not None and self.log_detections:
             self.logger.info(
                 "detect",
                 "done",

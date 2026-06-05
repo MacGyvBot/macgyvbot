@@ -42,6 +42,9 @@ class PickFrameProcessor:
 
     def process_current_frame(self):
         """Detect objects, optionally handle target pick, and return a display frame."""
+        if not self.state.target_label:
+            return self.state.color_image.copy()
+
         if self.state.target_label and not self.drawer_ready_for_target(
             self.state.target_label
         ):
