@@ -2,6 +2,37 @@
 
 from __future__ import annotations
 
+PKG_WIDTH = 22
+PIPE_WIDTH = 30
+
+PKG_LABELS = {
+    "command": "macgyvbot_command",
+    "task": "macgyvbot_task",
+    "perception": "macgyvbot_perception",
+    "ui": "macgyvbot_ui",
+    "manipulation": "macgyvbot_manipulation",
+}
+
+PIPE_LABELS = {
+    "input": "command_input",
+    "router": "task_router",
+    "operator": "operator_ui",
+    "system": "task_system",
+    "moveit": "moveit_control",
+    "task": "task_runtime",
+    "pick": "pick_flow",
+    "return": "return_flow",
+    "perception": "perception_runtime",
+    "hand_grasp": "hand_grasp_detection",
+    "vlm_service": "vlm_grasp_service",
+    "control": "task_control",
+    "gripper": "manual_gripper",
+    "camera": "camera_state",
+    "cleanup": "task_cleanup",
+    "safety": "tool_drop_safety",
+    "request": "task_request",
+    "vlm": "vlm_selector",
+}
 
 MESSAGE_TRANSLATIONS = {
     "legacy command log": "기존 명령 로그",
@@ -25,11 +56,10 @@ MESSAGE_TRANSLATIONS = {
     "operator ui shutdown received": "UI 종료 신호 수신",
     "exit completed": "종료 처리 완료",
     "exit failed": "종료 처리 실패",
-    "task coordinator initialized": "작업 코디네이터 초기화 완료",
+    "task coordinator initialized": "노드 준비 완료",
     "topic ready": "토픽 준비 완료",
     "YOLO model ready": "YOLO 모델 준비 완료",
     "grasp point mode ready": "grasp point 모드 준비 완료",
-    "robot grasp attempt": "로봇 파지 시도",
     "robot grasp": "로봇 파지 시작",
     "robot grasp failed": "로봇 파지 실패",
     "grasp descent skipped": "파지 하강 생략",
@@ -81,7 +111,8 @@ MESSAGE_TRANSLATIONS = {
     "VLM service request bbox is invalid.": "VLM 서비스 요청 bbox가 올바르지 않습니다.",
     "VLM grasp point failed. Falling back to bbox center.": "VLM grasp point 선택에 실패하여 bbox 중심으로 대체합니다.",
     "VLM-only grasp point failed. Falling back to bbox center.": "VLM-only grasp point 선택에 실패하여 bbox 중심으로 대체합니다.",
-    "VLM grasp service ready:": "VLM grasp 서비스 준비 완료:",
+    "VLM grasp service ready:": "노드 준비 완료:",
+    "node ready": "노드 준비 완료",
 }
 
 PREFIX_TRANSLATIONS = {
@@ -90,13 +121,12 @@ PREFIX_TRANSLATIONS = {
     "ML grasp update failed: ": "ML grasp 갱신 실패: ",
     "robot grasp attempt ": "로봇 파지 시도 ",
     "VLM service image conversion failed: ": "VLM 서비스 이미지 변환 실패: ",
-    "VLM grasp service ready: ": "VLM grasp 서비스 준비 완료: ",
+    "VLM grasp service ready: ": "노드 준비 완료: ",
     "VLM grasp point inference failed: ": "VLM grasp point 추론 실패: ",
     "VLM-only grasp point inference failed: ": "VLM-only grasp point 추론 실패: ",
     "API grasp point inference failed: ": "API grasp point 추론 실패: ",
     "VLM grasp module import failed: ": "VLM grasp 모듈 import 실패: ",
     "VLM-only grasp module import failed: ": "VLM-only grasp 모듈 import 실패: ",
-    "API grasp point inference failed: ": "API grasp point 추론 실패: ",
     "VLM preload failed: ": "VLM preload 실패: ",
     "VLM-only preload failed: ": "VLM-only preload 실패: ",
     "VLM service request received: ": "VLM 서비스 요청 수신: ",
@@ -130,6 +160,20 @@ def translate_log_message(message):
     return text
 
 
+def describe_pipe(pipe):
+    text = str(pipe or "").strip()
+    if not text:
+        return ""
+    return PIPE_LABELS.get(text, text)
+
+
+def describe_pkg(pkg):
+    text = str(pkg or "").strip()
+    if not text:
+        return ""
+    return PKG_LABELS.get(text, text)
+
+
 def format_log_value(value):
     text = " ".join(str(value or "").replace("\r", " ").replace("\n", " ").split())
     if not text:
@@ -142,17 +186,36 @@ def format_log_value(value):
     return text
 
 
-def format_structured_log(*, svc, pipe, step, event, msg="", translate=True, **fields):
+def _pad_segment(text, width):
+    if len(text) >= width:
+        return text
+    return text + (" " * (width - len(text)))
+
+
+def format_structured_log(
+    *,
+    pkg=None,
+    svc=None,
+    pipe="",
+    step="",
+    event="",
+    msg="",
+    translate=True,
+    **fields,
+):
+    package_name = describe_pkg(pkg or svc or "")
+    pipe_name = describe_pipe(pipe)
     message = translate_log_message(msg) if translate else str(msg or "")
+
     parts = [
-        f"svc={format_log_value(svc)}",
-        f"pipe={format_log_value(pipe)}",
-        f"step={format_log_value(step)}",
-        f"event={format_log_value(event)}",
+        _pad_segment(f"pkg={format_log_value(package_name)}", PKG_WIDTH),
+        _pad_segment(f"pipe={format_log_value(pipe_name)}", PIPE_WIDTH),
     ]
     if message != "":
         parts.append(f"msg={format_log_value(message)}")
     for key, value in fields.items():
+        if key in {"step", "event", "svc", "pkg"}:
+            continue
         if value is None or value == "":
             continue
         parts.append(f"{key}={format_log_value(value)}")

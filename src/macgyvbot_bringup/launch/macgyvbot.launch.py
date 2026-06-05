@@ -262,6 +262,22 @@ def generate_launch_description():
                 "RCUTILS_CONSOLE_OUTPUT_FORMAT",
                 "{message}",
             ),
+            SetEnvironmentVariable(
+                "PYTHONWARNINGS",
+                "ignore",
+            ),
+            SetEnvironmentVariable(
+                "TF_CPP_MIN_LOG_LEVEL",
+                "3",
+            ),
+            SetEnvironmentVariable(
+                "GLOG_minloglevel",
+                "2",
+            ),
+            SetEnvironmentVariable(
+                "ABSL_MIN_LOG_LEVEL",
+                "2",
+            ),
             Node(
                 package="macgyvbot_task",
                 executable="macgyvbot",

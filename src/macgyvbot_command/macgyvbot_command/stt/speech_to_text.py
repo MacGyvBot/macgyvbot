@@ -1,9 +1,76 @@
 """Speech-to-text utility wrapper using speech_recognition."""
 
+from __future__ import annotations
+
+from contextlib import contextmanager
+import ctypes
+import os
+import sys
+
 try:
     import speech_recognition as sr
 except ImportError:  # pragma: no cover - runtime dependency check
     sr = None
+
+
+def _noop_alsa_error_handler(filename, line, function, err, fmt):
+    return
+
+
+@contextmanager
+def _suppress_native_stderr():
+    try:
+        stderr_fd = sys.stderr.fileno()
+    except (AttributeError, OSError, ValueError):
+        stderr_fd = None
+
+    if stderr_fd is None:
+        yield
+        return
+
+    saved_stderr_fd = None
+    devnull_fd = None
+    try:
+        saved_stderr_fd = os.dup(stderr_fd)
+        devnull_fd = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull_fd, stderr_fd)
+        yield
+    finally:
+        if saved_stderr_fd is not None:
+            os.dup2(saved_stderr_fd, stderr_fd)
+            os.close(saved_stderr_fd)
+        if devnull_fd is not None:
+            os.close(devnull_fd)
+
+
+@contextmanager
+def _suppress_alsa_errors():
+    asound = None
+    handler = None
+    try:
+        asound = ctypes.cdll.LoadLibrary("libasound.so")
+        handler = ctypes.CFUNCTYPE(
+            None,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+        )(_noop_alsa_error_handler)
+        asound.snd_lib_error_set_handler(handler)
+    except Exception:
+        asound = None
+        handler = None
+
+    try:
+        with _suppress_native_stderr():
+            yield
+    finally:
+        if asound is not None:
+            try:
+                asound.snd_lib_error_set_handler(None)
+            except Exception:
+                pass
 
 
 class SpeechToTextService:
@@ -22,8 +89,8 @@ class SpeechToTextService:
     ):
         if sr is None:
             raise RuntimeError(
-                'speech_recognition 패키지가 없습니다. '
-                'pip install SpeechRecognition PyAudio 후 다시 실행하세요.'
+                "speech_recognition 패키지가 없습니다. "
+                "pip install SpeechRecognition PyAudio 후 다시 실행해 주세요."
             )
 
         self._language = language
@@ -43,20 +110,19 @@ class SpeechToTextService:
         self._recognizer.non_speaking_duration = non_speaking_duration
         self._recognizer.dynamic_energy_threshold = bool(dynamic_energy)
 
-        self._log_microphones()
-
         device = self._device_index if self._device_index >= 0 else None
-        self._microphone = sr.Microphone(device_index=device)
+        with _suppress_alsa_errors():
+            self._microphone = sr.Microphone(device_index=device)
 
-        with self._microphone as source:
-            self._logger('info', f'주변 소음 측정 중 ({ambient_duration:.1f}s)...')
+        with _suppress_alsa_errors(), self._microphone as source:
+            self._logger("info", f"주변 소음 측정 중 ({ambient_duration:.1f}s)...")
             self._recognizer.adjust_for_ambient_noise(
                 source,
                 duration=float(ambient_duration),
             )
             self._logger(
-                'info',
-                f'보정된 energy_threshold={self._recognizer.energy_threshold:.1f}',
+                "info",
+                f"보정 완료 energy_threshold={self._recognizer.energy_threshold:.1f}",
             )
 
         self._stop_listen = None
@@ -83,27 +149,11 @@ class SpeechToTextService:
         except sr.UnknownValueError:
             return
         except sr.RequestError as exc:
-            self._logger('warn', f'Google STT 요청 실패: {exc}')
+            self._logger("warn", f"Google STT 요청 실패: {exc}")
             return
 
-        text = (text or '').strip()
+        text = (text or "").strip()
         if not text:
             return
 
         text_callback(text)
-
-    def _log_microphones(self):
-        self._logger('info', '=== 마이크 장치 목록 ===')
-        try:
-            names = sr.Microphone.list_microphone_names()
-        except Exception as exc:
-            self._logger('warn', f'마이크 목록 조회 실패: {exc}')
-            return
-
-        if not names:
-            self._logger('warn', '사용 가능한 마이크 장치를 찾지 못했습니다.')
-            return
-
-        for idx, name in enumerate(names):
-            mark = ' <- 선택됨' if idx == self._device_index else ''
-            self._logger('info', f'[{idx}] {name}{mark}')

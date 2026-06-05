@@ -49,7 +49,7 @@ from macgyvbot_ui.voice_command_window import (
 
 def _format_operator_ros_log(message):
     text = str(message or "").strip()
-    if not text or text.startswith("svc="):
+    if not text or text.startswith("pkg="):
         return text
     return format_structured_log(
         svc="ui",

@@ -62,8 +62,7 @@ class VLMGraspServiceNode(Node):
         )
         self._preload_default_mode()
         self.get_logger().info(
-            "VLM grasp service ready: "
-            f"service={service_name}, default_mode={self.grasp_point_mode}"
+            f"{self.grasp_point_mode} 서비스 준비 완료"
         )
 
     def get_logger(self):
@@ -253,7 +252,7 @@ class _StructuredLoggerAdapter:
     @staticmethod
     def _format(message):
         text = str(message or "")
-        if text.startswith("svc="):
+        if text.startswith("pkg="):
             return text
         return format_structured_log(
             svc="perception",

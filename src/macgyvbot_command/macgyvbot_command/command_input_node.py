@@ -62,7 +62,7 @@ class _StructuredLoggerAdapter:
     @staticmethod
     def _format(message):
         text = str(message or "")
-        if text.startswith("svc="):
+        if text.startswith("pkg="):
             return text
         return _format_command_log(text)
 
