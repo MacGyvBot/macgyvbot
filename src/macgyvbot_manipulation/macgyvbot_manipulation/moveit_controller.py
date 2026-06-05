@@ -291,12 +291,27 @@ def plan_and_execute(
     params=None,
     should_interrupt=None,
     execute_trajectory=None,
+    planning_precondition=None,
 ):
     if should_interrupt is not None and should_interrupt():
         logger.info("중단 요청으로 planning/execution을 시작하지 않습니다.")
         return False
 
+    if planning_precondition is not None:
+        try:
+            planning_ready = bool(planning_precondition(logger))
+        except Exception as exc:
+            logger.error(f"planning precondition 확인 중 예외 발생: {exc}")
+            return False
+        if not planning_ready:
+            logger.error("planning precondition을 만족하지 않아 planning을 중단합니다.")
+            return False
+
     arm.set_start_state_to_current_state()
+
+    if should_interrupt is not None and should_interrupt():
+        logger.info("중단 요청으로 planning/execution을 시작하지 않습니다.")
+        return False
 
     if pose_goal:
         x = pose_goal.pose.position.x
@@ -358,11 +373,13 @@ class MoveItController:
         node=None,
         trajectory_action_name=DEFAULT_TRAJECTORY_ACTION_NAME,
         poll_interval_sec=0.02,
+        planning_precondition=None,
     ):
         self.robot = robot
         self.arm = arm
         self.params = params
         self.should_interrupt = should_interrupt
+        self.planning_precondition = planning_precondition
         self.node = node
         self.trajectory_action_name = trajectory_action_name
         self.poll_interval_sec = poll_interval_sec
@@ -388,6 +405,7 @@ class MoveItController:
             execute_trajectory=self._execute_trajectory_action
             if self._trajectory_client is not None
             else None,
+            planning_precondition=self.planning_precondition,
         )
 
     def cancel_current_goal(self, logger=None, reason=""):

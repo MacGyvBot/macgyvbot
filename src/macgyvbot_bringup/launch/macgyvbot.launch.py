@@ -62,6 +62,9 @@ def generate_launch_description():
     enable_drawer_collision_scene = LaunchConfiguration(
         "enable_drawer_collision_scene"
     )
+    enable_gripper_self_collision_acm = LaunchConfiguration(
+        "enable_gripper_self_collision_acm"
+    )
     sam_enabled = LaunchConfiguration("sam_enabled")
     sam_checkpoint = LaunchConfiguration("sam_checkpoint")
     grasp_point_api_model = LaunchConfiguration("grasp_point_api_model")
@@ -190,6 +193,14 @@ def generate_launch_description():
                 description="Register static drawer collision boxes in MoveIt.",
             ),
             DeclareLaunchArgument(
+                "enable_gripper_self_collision_acm",
+                default_value="true",
+                description=(
+                    "Allow only RG2 internal self-collision pairs in MoveIt's "
+                    "planning scene ACM."
+                ),
+            ),
+            DeclareLaunchArgument(
                 "grasp_point_mode",
                 default_value="vlm_only_qwen3b",
                 description=(
@@ -267,6 +278,9 @@ def generate_launch_description():
                         "display_debug_windows": display_debug_windows,
                         "enable_drawer_collision_scene": (
                             enable_drawer_collision_scene
+                        ),
+                        "enable_gripper_self_collision_acm": (
+                            enable_gripper_self_collision_acm
                         ),
                         "sam_enabled": sam_enabled,
                         "sam_checkpoint": sam_checkpoint,

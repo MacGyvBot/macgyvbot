@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 from geometry_msgs.msg import Pose
 from moveit_msgs.msg import CollisionObject, ObjectColor, PlanningScene
 from moveit_msgs.srv import ApplyPlanningScene
@@ -29,6 +31,7 @@ class DrawerCollisionSceneManager:
         self.node = node
         self.moveit_robot = moveit_robot
         self.boxes = list(boxes if boxes is not None else DRAWER_COLLISION_BOXES)
+        self._applied_to_moveit_py = False
         topics = planning_scene_topics or DRAWER_COLLISION_SCENE_TOPICS
         self._scene_publishers = [
             node.create_publisher(PlanningScene, topic, 10)
@@ -40,7 +43,7 @@ class DrawerCollisionSceneManager:
         )
         self._apply_service_name = apply_service_name
 
-    def apply(self, logger=None):
+    def apply(self, logger=None, publish=True, request_service=True):
         """Apply drawer boxes locally and publish a scene diff for RViz/move_group."""
         log = logger or self.node.get_logger()
         if not self.boxes:
@@ -51,17 +54,52 @@ class DrawerCollisionSceneManager:
         scene = self._build_scene_diff(collision_objects, colors)
 
         direct_ok = self._apply_to_moveit_py(collision_objects, colors, log)
-        self._publish_scene_diff(scene, log)
-        service_requested = self._request_apply_scene(scene, log)
+        self._applied_to_moveit_py = bool(direct_ok)
+        if publish:
+            self._publish_scene_diff(scene, log)
+        service_requested = False
+        if request_service:
+            service_requested = self._request_apply_scene(scene, log)
 
         _info(
             log,
             "drawer collision scene update requested: "
             f"objects={len(collision_objects)}, "
             f"moveit_py={direct_ok}, "
+            f"published={publish}, "
             f"apply_service={service_requested}",
         )
         return direct_ok or service_requested
+
+    def is_ready(self):
+        """Return whether drawer boxes were applied to the local MoveItPy scene."""
+        return bool(self.boxes) and self._applied_to_moveit_py
+
+    def ensure_ready(
+        self,
+        logger=None,
+        attempts=1,
+        retry_delay_sec=0.0,
+        refresh=True,
+    ):
+        """Ensure drawer boxes are present before a motion plan is requested."""
+        log = logger or self.node.get_logger()
+        if not self.boxes:
+            _warn(log, "drawer collision boxes are empty; motion is not safe")
+            return False
+        if not refresh and self.is_ready():
+            return True
+
+        attempts = max(1, int(attempts))
+        for attempt_index in range(attempts):
+            self.apply(log, publish=False, request_service=False)
+            if self.is_ready():
+                return True
+            if attempt_index + 1 < attempts and retry_delay_sec > 0.0:
+                time.sleep(float(retry_delay_sec))
+
+        _warn(log, "drawer collision scene is not ready; planning is blocked")
+        return False
 
     def _build_objects(self):
         collision_objects = []

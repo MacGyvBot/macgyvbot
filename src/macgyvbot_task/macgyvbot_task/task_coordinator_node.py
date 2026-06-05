@@ -62,6 +62,9 @@ from macgyvbot_manipulation.drawer_collision_scene import (
     DrawerCollisionSceneManager,
 )
 from macgyvbot_manipulation.drawer_motion import DrawerMotionFlow
+from macgyvbot_manipulation.gripper_collision_scene import (
+    GripperSelfCollisionManager,
+)
 from macgyvbot_manipulation.moveit_controller import MoveItController
 from macgyvbot_manipulation.onrobot_gripper import RG
 from macgyvbot_manipulation.robot_pose import (
@@ -157,6 +160,7 @@ class TaskCoordinatorNode(Node):
         self.declare_parameter("display_debug_windows", False)
         self.declare_parameter("manual_gripper_service", MANUAL_GRIPPER_SERVICE)
         self.declare_parameter("enable_drawer_collision_scene", True)
+        self.declare_parameter("enable_gripper_self_collision_acm", True)
         self.bridge = CvBridge()
         self.display_debug_windows = self._read_bool_parameter(
             "display_debug_windows",
@@ -164,6 +168,10 @@ class TaskCoordinatorNode(Node):
         )
         self.enable_drawer_collision_scene = self._read_bool_parameter(
             "enable_drawer_collision_scene",
+            True,
+        )
+        self.enable_gripper_self_collision_acm = self._read_bool_parameter(
+            "enable_gripper_self_collision_acm",
             True,
         )
         self.display = DebugDisplay(enabled=self.display_debug_windows)
@@ -226,6 +234,10 @@ class TaskCoordinatorNode(Node):
         self.gripper = RG("rg2", "192.168.1.1", 502)
         self.robot = MoveItPy(node_name="task_coordinator_moveit_py")
         self.arm = self.robot.get_planning_component(GROUP_NAME)
+        self.gripper_self_collision_scene = None
+        self._gripper_self_collision_acm_applied = False
+        if self.enable_gripper_self_collision_acm:
+            self.gripper_self_collision_scene = GripperSelfCollisionManager(self)
         self.drawer_collision_scene = DrawerCollisionSceneManager(
             self,
             moveit_robot=self.robot,
@@ -263,6 +275,7 @@ class TaskCoordinatorNode(Node):
             self.pilz_params,
             should_interrupt=self._motion_interrupted,
             node=self,
+            planning_precondition=self._ensure_collision_planning_scene_ready,
         )
         self.drawer_flow = DrawerMotionFlow(
             self.robot,
@@ -348,6 +361,55 @@ class TaskCoordinatorNode(Node):
 
     def _apply_drawer_collision_scene(self):
         return self.drawer_collision_scene.apply(self.get_logger())
+
+    def _ensure_collision_planning_scene_ready(self, logger=None):
+        log = logger or self.get_logger()
+        if not self._ensure_gripper_self_collision_acm(
+            attempts=1,
+            retry_delay_sec=0.0,
+        ):
+            return False
+        return self._ensure_drawer_collision_scene_ready(log)
+
+    def _ensure_drawer_collision_scene_ready(self, logger=None):
+        if not self.enable_drawer_collision_scene:
+            return True
+        log = logger or self.get_logger()
+        return self.drawer_collision_scene.ensure_ready(
+            log,
+            attempts=2,
+            retry_delay_sec=0.1,
+            refresh=True,
+        )
+
+    def _ensure_gripper_self_collision_acm(
+        self,
+        attempts=1,
+        retry_delay_sec=0.0,
+    ):
+        if not self.enable_gripper_self_collision_acm:
+            return True
+        if self._gripper_self_collision_acm_applied:
+            return True
+        if self.gripper_self_collision_scene is None:
+            self.get_logger().error(
+                "RG2 self-collision ACM manager is not initialized"
+            )
+            return False
+
+        attempts = max(1, int(attempts))
+        for attempt_index in range(attempts):
+            if self.gripper_self_collision_scene.apply(self.get_logger()):
+                self._gripper_self_collision_acm_applied = True
+                return True
+            if attempt_index + 1 < attempts and retry_delay_sec > 0.0:
+                time.sleep(float(retry_delay_sec))
+
+        self.get_logger().error(
+            "RG2 self-collision ACM patch failed; planning may start in "
+            "gripper self-collision"
+        )
+        return False
 
     def _retry_drawer_collision_scene(self):
         if self._drawer_collision_scene_retries_remaining <= 0:
@@ -768,6 +830,20 @@ class TaskCoordinatorNode(Node):
             )
             return
 
+        if not self._ensure_gripper_self_collision_acm(
+            attempts=3,
+            retry_delay_sec=0.3,
+        ):
+            self._publish_robot_status(
+                "failed",
+                tool_name=tool_name,
+                action="home",
+                message="그리퍼 self-collision 허용 설정 적용에 실패했습니다.",
+                reason="gripper_self_collision_acm_failed",
+                command=command,
+            )
+            return
+
         self._publish_robot_status(
             "returning_home",
             tool_name=tool_name,
@@ -936,6 +1012,19 @@ class TaskCoordinatorNode(Node):
             reason=reason or "exit_requested",
             command=command,
         )
+
+        if not self._ensure_gripper_self_collision_acm(
+            attempts=3,
+            retry_delay_sec=0.3,
+        ):
+            self._publish_robot_status(
+                "failed",
+                action="exit",
+                message="그리퍼 self-collision 허용 설정 적용에 실패했습니다.",
+                reason="gripper_self_collision_acm_failed",
+                command=command,
+            )
+            return
 
         ok = self.motion.move_to_home_joints(log)
         if not ok:
@@ -1370,6 +1459,11 @@ class TaskCoordinatorNode(Node):
         self.state.latest_wrench = msg.wrench
 
     def run(self):
+        if not self._ensure_gripper_self_collision_acm(
+            attempts=5,
+            retry_delay_sec=0.5,
+        ):
+            return
         self.home_initializer.initialize()
         self._process_frames()
 
