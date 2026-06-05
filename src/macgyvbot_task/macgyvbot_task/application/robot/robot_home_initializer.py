@@ -19,12 +19,26 @@ class RobotHomeInitializer:
         logger = self.state.get_logger()
         logger.info("시스템 준비 중... Home으로 이동합니다.")
 
-        ok = self.motion.move_to_home_joints(logger)
+        try:
+            ok = self.motion.move_to_home_joints(logger)
+        except Exception as exc:
+            logger.error(
+                "초기 Home 이동 중 예외가 발생했습니다: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            return False
         if not ok:
             logger.error("초기 Home 이동 실패")
             return False
 
-        transform = get_ee_matrix(self.robot)
+        try:
+            transform = get_ee_matrix(self.robot)
+        except Exception as exc:
+            logger.error(
+                "Home pose 저장 중 현재 EE pose를 읽지 못했습니다: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            return False
         self.state.home_xyz = (
             transform[0, 3],
             transform[1, 3],

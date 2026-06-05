@@ -206,10 +206,15 @@ class TaskCoordinatorNode(Node):
 
         self.declare_parameter("display_debug_windows", False)
         self.declare_parameter("manual_gripper_service", MANUAL_GRIPPER_SERVICE)
+        self.declare_parameter("robot_ready_retry_sec", 3.0)
         self.bridge = CvBridge()
         self.display_debug_windows = self._read_bool_parameter(
             "display_debug_windows",
             False,
+        )
+        self.robot_ready_retry_sec = max(
+            0.5,
+            float(self.get_parameter("robot_ready_retry_sec").value),
         )
         self.display = DebugDisplay(enabled=self.display_debug_windows)
         self.exit_req = threading.Event()
@@ -226,6 +231,8 @@ class TaskCoordinatorNode(Node):
         self._exit_home_thread = None
         self._vlm_preload_timer = None
         self._manual_gripper_lock = threading.Lock()
+        self._robot_ready = False
+        self._robot_wait_status_published = False
 
         self.grasp_point_mode = self._read_grasp_point_mode()
         self.yolo_model = self._read_yolo_model()
@@ -781,6 +788,10 @@ class TaskCoordinatorNode(Node):
             )
             return
 
+        if not self._robot_ready:
+            self._reject_robot_not_ready(tool_name, "bring", command)
+            return
+
         if self.is_running() or self.state.picking:
             self._publish_robot_status(
                 "busy",
@@ -827,6 +838,10 @@ class TaskCoordinatorNode(Node):
     def _handle_release_request(self, request):
         command = self._task_request_command(request)
         tool_name = command.get("tool_name", request.tool_name or "unknown")
+        if not self._robot_ready:
+            self._reject_robot_not_ready(tool_name, "release", command)
+            return
+
         if self.is_running() or self.state.picking:
             self._publish_robot_status(
                 "busy",
@@ -862,6 +877,13 @@ class TaskCoordinatorNode(Node):
             )
             return
 
+        initialized_now = False
+        if not self._robot_ready:
+            if not self._try_initialize_robot_home():
+                self._reject_robot_not_ready(tool_name, "home", command)
+                return
+            initialized_now = True
+
         self._publish_robot_status(
             "returning_home",
             tool_name=tool_name,
@@ -869,8 +891,9 @@ class TaskCoordinatorNode(Node):
             message="Home 위치로 복귀하는 중입니다.",
             command=command,
         )
-        ok = self.home_initializer.initialize()
+        ok = True if initialized_now else self.home_initializer.initialize()
         if not ok:
+            self._robot_ready = False
             self._publish_robot_status(
                 "failed",
                 tool_name=tool_name,
@@ -880,6 +903,7 @@ class TaskCoordinatorNode(Node):
                 command=command,
             )
             return
+        self._robot_ready = True
         self.tool_hold_monitor.release_gripper(reason="home_return")
         self._publish_robot_status(
             "done",
@@ -907,6 +931,39 @@ class TaskCoordinatorNode(Node):
             self._handle_exit(reason)
             return
         self.get_logger().warn(f"지원하지 않는 task control action: {action}")
+
+    def _reject_robot_not_ready(self, tool_name, action, command):
+        self._publish_robot_status(
+            "rejected",
+            tool_name=tool_name,
+            action=action,
+            message=(
+                "로봇 제어 노드가 아직 준비되지 않았습니다. "
+                "로봇/MoveIt 실행 후 다시 요청해주세요."
+            ),
+            reason="robot_not_ready",
+            command=command,
+        )
+
+    def _try_initialize_robot_home(self):
+        ok = self.home_initializer.initialize()
+        if ok:
+            was_ready = self._robot_ready
+            self._robot_ready = True
+            self._robot_wait_status_published = False
+            if not was_ready:
+                self._publish_robot_status(
+                    "robot_ready",
+                    tool_name=self.state.target_label or "unknown",
+                    action="system",
+                    message="로봇 제어 노드 연결을 확인했습니다.",
+                    reason="robot_ready",
+                    command=self.state.current_command,
+                )
+            return True
+
+        self._robot_ready = False
+        return False
 
     def _handle_pause(self, reason):
         if self.exit_req.is_set():
@@ -1109,6 +1166,10 @@ class TaskCoordinatorNode(Node):
 
     def start_return_sequence(self, command):
         tool_name = command.get("tool_name", "unknown")
+        if not self._robot_ready:
+            self._reject_robot_not_ready(tool_name, "return", command)
+            return False
+
         if self.is_running() or self.state.picking:
             self._publish_robot_status(
                 "busy",
@@ -1562,7 +1623,24 @@ class TaskCoordinatorNode(Node):
         self.state.latest_wrench = msg.wrench
 
     def run(self):
-        self.home_initializer.initialize()
+        while rclpy.ok() and not self._robot_ready:
+            if self._try_initialize_robot_home():
+                break
+            if not self._robot_wait_status_published:
+                self._robot_wait_status_published = True
+                self._publish_robot_status(
+                    "waiting_robot",
+                    tool_name="unknown",
+                    action="system",
+                    message=(
+                        "로봇 제어 노드가 아직 준비되지 않았습니다. "
+                        "로봇/MoveIt 실행을 기다리는 중입니다."
+                    ),
+                    reason="robot_not_ready",
+                    command=self.state.current_command,
+                )
+            time.sleep(self.robot_ready_retry_sec)
+
         self._process_frames()
 
     def _process_frames(self):
