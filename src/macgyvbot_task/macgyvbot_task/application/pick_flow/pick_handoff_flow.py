@@ -51,6 +51,7 @@ class PickHandoffFlow:
         self.wait_fn = wait_fn
         self.tool_hold_monitor = tool_hold_monitor
         self.interrupted = interrupted or (lambda: False)
+        self.last_failure_reason = ""
 
     def return_tool_to_original_position(
         self,
@@ -179,11 +180,13 @@ class PickHandoffFlow:
         return True
 
     def move_to_handoff_pose(self, logger):
+        self.last_failure_reason = ""
         if self.interrupted():
             logger.info(
                 "사용자 전달 이동 시작 전 "
                 "stop/pause 요청으로 handoff를 중단합니다."
             )
+            self.last_failure_reason = "interrupted"
             return None, None, None
 
         if not self._move_to_observation_pose(logger):
@@ -219,12 +222,14 @@ class PickHandoffFlow:
                 "관찰 자세 이동 후 "
                 "stop/pause 요청으로 handoff를 중단합니다."
             )
+            self.last_failure_reason = "interrupted"
             return False
 
         if ok:
             return True
 
         logger.error("사용자 전달 위치 이동 실패. Pick 시퀀스 중단")
+        self.last_failure_reason = "handoff_pose_move_failed"
         self.state._publish_robot_status(
             "failed",
             message="사용자 전달 위치 이동에 실패했습니다.",
@@ -247,6 +252,7 @@ class PickHandoffFlow:
                     "사용자 손 위치 관측 중 "
                     "stop/pause 요청으로 handoff를 중단합니다."
                 )
+                self.last_failure_reason = "interrupted"
                 return None
             self.wait_fn(HANDOFF_WAIT_POLL_SEC)
 
@@ -257,6 +263,7 @@ class PickHandoffFlow:
                 "사용자 손 위치 관측 후 stop/pause 요청으로 "
                 "handoff를 중단합니다."
             )
+            self.last_failure_reason = "interrupted"
             return None
 
         return candidate
@@ -264,12 +271,7 @@ class PickHandoffFlow:
     def _validate_candidate(self, candidate, logger):
         if not candidate.found:
             logger.error("사용자 손 위치를 찾지 못했습니다.")
-            self.state._publish_robot_status(
-                "failed",
-                message="사용자 손 위치를 찾지 못했습니다.",
-                reason="handoff_search_failed",
-                command=self.state.current_command,
-            )
+            self.last_failure_reason = "handoff_search_failed"
             return False
 
         if candidate.frame_id in (WORLD_FRAME, BASE_FRAME):
@@ -279,6 +281,7 @@ class PickHandoffFlow:
             "사용자 손 위치 frame을 planning에 사용할 수 없습니다: "
             f"frame={candidate.frame_id}, source={candidate.source}"
         )
+        self.last_failure_reason = "handoff_unsupported_frame"
         self.state._publish_robot_status(
             "failed",
             message="사용자 손 위치 frame이 planning frame이 아닙니다.",
@@ -302,6 +305,7 @@ class PickHandoffFlow:
                 "사용자 손 위치 이동 후 "
                 "stop/pause 요청으로 handoff를 중단합니다."
             )
+            self.last_failure_reason = "interrupted"
             return None, None, None
 
         logger.info(
@@ -314,14 +318,15 @@ class PickHandoffFlow:
         )
         if not ok:
             logger.error("사용자 손 위치로 전달 이동 실패")
+            self.last_failure_reason = (
+                "handoff_hand_pose_move_failed"
+                if reason == "target_move_failed"
+                else reason
+            )
             self.state._publish_robot_status(
                 "failed",
                 message="사용자 손 위치로 이동하지 못했습니다.",
-                reason=(
-                    "handoff_hand_pose_move_failed"
-                    if reason == "target_move_failed"
-                    else reason
-                ),
+                reason=self.last_failure_reason,
                 command=self.state.current_command,
             )
             return None, None, None
@@ -352,6 +357,7 @@ class PickHandoffFlow:
                     "사용자 잡기 인식 대기를 "
                     "stop/pause 요청으로 중단합니다."
                 )
+                self.last_failure_reason = "interrupted"
                 return False
 
             if self.state.human_grasped_tool:
@@ -363,6 +369,7 @@ class PickHandoffFlow:
                     f"{HAND_GRASP_TIMEOUT_SEC:.1f}초 동안 "
                     "사용자 잡기 인식이 없어 대기 종료"
                 )
+                self.last_failure_reason = "handoff_timeout"
                 return False
 
             self.wait_fn(HANDOFF_WAIT_POLL_SEC)

@@ -33,23 +33,41 @@ class GripperPanelSmokeTest(unittest.TestCase):
 
     def test_gripper_panel_starts_disabled(self):
         self.assertFalse(self.window._gripper_slider.isEnabled())
+        self.assertFalse(self.window._gripper_width_input.isEnabled())
         self.assertFalse(self.window._gripper_apply_button.isEnabled())
         self.assertIn("비활성화", self.window._gripper_status.text())
 
-    def test_gripper_panel_enable_and_release_callback(self):
+    def test_gripper_panel_slider_only_updates_value(self):
+        self.window.set_gripper_control_state(True, "활성화: 수동 조작 가능")
+        self.window._gripper_slider.setValue(42)
+
+        self.assertTrue(self.window._gripper_slider.isEnabled())
+        self.assertTrue(self.window._gripper_width_input.isEnabled())
+        self.assertEqual(self.window._gripper_value.text(), "폭: 42 mm")
+        self.assertEqual(self.window._gripper_width_input.value(), 42)
+        self.assertEqual(self.gripper_widths, [])
+
+    def test_gripper_panel_apply_button_sends_current_width_once(self):
         self.window.set_gripper_control_state(True, "활성화: 수동 조작 가능")
         self.window._gripper_slider.setValue(42)
         self.window._request_gripper_width_from_slider()
 
-        self.assertTrue(self.window._gripper_slider.isEnabled())
-        self.assertEqual(self.window._gripper_value.text(), "폭: 42 mm")
         self.assertEqual(self.gripper_widths, [42])
+
+    def test_gripper_panel_numeric_input_updates_slider(self):
+        self.window.set_gripper_control_state(True, "활성화: 수동 조작 가능")
+        self.window._gripper_width_input.setValue(17)
+
+        self.assertEqual(self.window._gripper_slider.value(), 17)
+        self.assertEqual(self.window._gripper_value.text(), "폭: 17 mm")
+        self.assertEqual(self.gripper_widths, [])
 
     def test_gripper_panel_disable_reason_is_visible(self):
         reason = "비활성화: 작업 실행 중"
         self.window.set_gripper_control_state(False, reason)
 
         self.assertFalse(self.window._gripper_slider.isEnabled())
+        self.assertFalse(self.window._gripper_width_input.isEnabled())
         self.assertEqual(self.window._gripper_status.text(), reason)
 
 

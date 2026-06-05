@@ -213,7 +213,7 @@ class CommandInputNode(Node):
         command = result.get('command')
         if command is not None:
             action = command.get('action')
-            if action in ('pause', 'resume', 'cancel'):
+            if action in ('pause', 'resume', 'retry', 'cancel'):
                 self.get_logger().info(
                     f'작업 제어 명령 해석: action={action}, raw_text="{text}"'
                 )
@@ -266,7 +266,7 @@ class CommandInputNode(Node):
         )
         self._publish_feedback_payload(feedback)
 
-        if action in ('pause', 'resume', 'cancel'):
+        if action in ('pause', 'resume', 'retry', 'cancel'):
             self._send_task_control_request(action=action, reason=text)
             return True
 
@@ -281,6 +281,7 @@ class CommandInputNode(Node):
         return {
             'pause': '정지 명령으로 이해했습니다.',
             'resume': '재개 명령으로 이해했습니다. 작업 재개 요청으로 전달합니다.',
+            'retry': '다시 인식하라는 뜻으로 이해했습니다.',
             'cancel': '현재 작업을 취소합니다. 다음 명령을 기다리겠습니다.',
             'home': 'Home 위치로 복귀하라는 뜻으로 이해했습니다.',
         }.get(action, '명령을 올바른 입력으로 판단했습니다.')
