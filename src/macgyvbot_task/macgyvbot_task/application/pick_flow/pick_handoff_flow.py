@@ -23,11 +23,7 @@ from macgyvbot_manipulation.handover_targeting import (
     move_to_observation_pose,
     start_async_observation_search,
 )
-from macgyvbot_manipulation.robot_pose import (
-    current_ee_orientation,
-    get_ee_matrix,
-    make_safe_pose,
-)
+from macgyvbot_manipulation.robot_pose import get_ee_matrix, make_safe_pose
 from macgyvbot_manipulation.robot_safezone import SAFE_Z_MIN
 from macgyvbot_task.application.drawer_store_motion import (
     drawer_store_clearance_z,
@@ -193,7 +189,16 @@ class PickHandoffFlow:
 
         if not self._move_to_observation_pose(logger):
             return None, None, None
-        handoff_ori = current_ee_orientation(self.robot)
+        handoff_ori = self.state.home_ori
+        if handoff_ori is None:
+            logger.error("Home orientation이 없어 사용자 손 위치로 이동할 수 없습니다.")
+            self.state._publish_robot_status(
+                "failed",
+                message="Home orientation을 확인하지 못했습니다.",
+                reason="handoff_home_orientation_unavailable",
+                command=self.state.current_command,
+            )
+            return None, None, None
 
         candidate = self._observe_handoff_candidate(logger)
         if candidate is None:
