@@ -314,7 +314,7 @@ class OperatorUiNode(Node):
         if status == 'accepted':
             command = feedback.get('command') or {}
             action = command.get('action')
-            if action in {'pause', 'resume', 'cancel', 'exit'}:
+            if action in {'pause', 'resume', 'retry', 'cancel', 'exit'}:
                 if self.window is not None and hasattr(self.window, 'append_command_result'):
                     self.window.append_command_result(command)
 
@@ -343,6 +343,13 @@ class OperatorUiNode(Node):
                 self._append_bot(resume_message)
                 self._append_log('info', '재개 명령 해석 완료')
                 self._set_status('재개 대기')
+                return
+
+            if action == 'retry':
+                retry_message = message or '사용자 손 인식을 다시 시도합니다.'
+                self._append_bot(retry_message)
+                self._append_log('info', 'handoff inspection 재시도 요청 발행')
+                self._set_status('손 인식 재시도')
                 return
 
             if action == 'cancel':
@@ -456,6 +463,17 @@ class OperatorUiNode(Node):
 
         if view['show_chat']:
             self._append_bot(view['chat_message'])
+            if (
+                view['state'] == 'handoff_inspection_pending'
+                and self.window is not None
+                and hasattr(self.window, 'append_control_actions')
+            ):
+                self.window.append_control_actions(
+                    (
+                        ('재시도', '재시도'),
+                        ('복귀', '복귀'),
+                    )
+                )
 
         self._handle_exit_status(status, view['state'])
 
@@ -679,7 +697,11 @@ class OperatorUiNode(Node):
         raw_message = str(status.get('message') or '').strip()
         reason = str(status.get('reason') or '').strip()
 
-        abnormal_message = robot_status_chat(state, reason, raw_message)
+        abnormal_message = (
+            ''
+            if state == 'handoff_inspection_pending'
+            else robot_status_chat(state, reason, raw_message)
+        )
         message = (
             abnormal_message
             or self._robot_status_message(state, target_label, raw_message, reason)
@@ -736,6 +758,9 @@ class OperatorUiNode(Node):
             'moving_to_handoff': '사용자 전달 위치로 이동 중입니다.',
             'searching_hand': '사용자 손을 찾는 중입니다.',
             'waiting_handoff': '손으로 공구를 잡아주세요.',
+            'handoff_inspection_pending': (
+                '사용자의 손을 인식하지 못했습니다. 다시 인식할까요, 복귀할까요?'
+            ),
             'handoff_complete': '공구 전달을 완료했습니다.',
             'waiting_return_handoff': '반납할 공구를 받을 준비를 하고 있습니다.',
             'moving_return_grasp_pose': '반납 공구를 감지할 위치로 이동 중입니다.',
@@ -783,6 +808,7 @@ class OperatorUiNode(Node):
             'moving_to_handoff': '전달 위치 이동',
             'searching_hand': '손 탐색',
             'waiting_handoff': '전달 대기',
+            'handoff_inspection_pending': '손 인식 선택 대기',
             'handoff_complete': '전달 완료',
             'waiting_return_handoff': '반납 대기',
             'moving_return_grasp_pose': '반납 위치 이동',
@@ -826,6 +852,7 @@ class OperatorUiNode(Node):
             'moving_to_handoff': '전달 위치 이동 중',
             'searching_hand': '사용자 손 찾는 중',
             'waiting_handoff': '사용자 잡기 대기',
+            'handoff_inspection_pending': '재시도/복귀 선택 대기',
             'handoff_complete': '공구 전달 완료',
             'waiting_return_handoff': '반납 공구 수령 대기',
             'moving_return_grasp_pose': '반납 공구 감지 위치 이동 중',
@@ -855,6 +882,7 @@ class OperatorUiNode(Node):
     def _chat_robot_statuses():
         return {
             'waiting_handoff',
+            'handoff_inspection_pending',
             'waiting_return_handoff',
             'returning_home',
             'done',
@@ -878,7 +906,7 @@ class OperatorUiNode(Node):
     @staticmethod
     def _always_show_robot_statuses():
         return {
-            'waiting_handoff',
+            'handoff_inspection_pending',
             'waiting_return_handoff',
             'done',
             'completed',
@@ -1073,12 +1101,13 @@ class OperatorUiNode(Node):
         response_message = str(getattr(response, 'message', '') or '').strip()
         if bool(getattr(response, 'success', False)):
             applied_width = float(getattr(response, 'applied_width_mm', 0.0))
-            message = response_message or f'그리퍼를 {applied_width:.0f} mm로 이동합니다.'
+            message = f'그리퍼를 {applied_width:.0f} mm로 적용합니다.'
             self._append_bot(message)
             self._append_log(
                 'info',
                 f'그리퍼 명령 완료: width_mm={applied_width:.1f}, '
-                f'status={getattr(response, "status", "")}',
+                f'status={getattr(response, "status", "")}, '
+                f'message={response_message}',
             )
         else:
             message = response_message or '그리퍼 명령이 거부되었습니다.'

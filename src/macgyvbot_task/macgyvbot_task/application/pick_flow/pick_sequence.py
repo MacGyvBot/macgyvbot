@@ -28,6 +28,9 @@ from macgyvbot_task.application.logging_utils import (
 )
 from macgyvbot_task.application.task_control.task_step import TaskStep
 
+HANDOFF_DECISION_POLL_SEC = 0.1
+HANDOFF_DECISION_PENDING_STATUS = "handoff_inspection_pending"
+
 
 class PickSequenceRunner:
     """Build pick workflow steps for task-queue execution."""
@@ -182,6 +185,7 @@ class PickSequenceRunner:
                 lambda: self._wait_human_grasp(context["plan"], context),
             ),
             TaskStep("pick/release_to_human", self._release_to_human),
+            TaskStep("pick/home_before_close_drawer", self._home_before_close_drawer),
             TaskStep(
                 "pick/close_drawer",
                 lambda: self._close_drawer_after_handoff(context),
@@ -506,12 +510,27 @@ class PickSequenceRunner:
 
     def _move_to_handoff(self, plan, context):
         log = self.state.logger()
-        handoff_pose = self.handoff.move_to_handoff_pose(context["ori"], log)
-        if handoff_pose[0] is not None:
-            return True
+        while True:
+            handoff_pose = self.handoff.move_to_handoff_pose(log)
+            if handoff_pose[0] is not None:
+                return True
 
-        if self._interrupted():
-            return False
+            if self._interrupted():
+                return False
+
+            if self.handoff.last_failure_reason != "handoff_search_failed":
+                break
+
+            decision = self._wait_for_handoff_decision(
+                "handoff_search_failed",
+                log,
+            )
+            if decision == "retry":
+                log.info("사용자 요청으로 handoff 위치 관측을 다시 시도합니다.")
+                continue
+            if decision == "interrupted":
+                return False
+            break
 
         log_error(log, "handoff pose unavailable", step="handoff", event="fail")
         returned, drawer_closed, home_ok = self._return_tool_close_drawer_home(
@@ -547,17 +566,29 @@ class PickSequenceRunner:
 
     def _wait_human_grasp(self, plan, context):
         log = self.state.logger()
-        log_info(log, "wait for human grasp", step="human_grasp", event="start")
-        self.state._publish_robot_status(
-            "waiting_handoff",
-            message="사용자 손 인식을 기다립니다.",
-            command=self.state.current_command,
-        )
-        if self.handoff.wait_for_human_grasp(log):
-            return True
+        while True:
+            log_info(log, "wait for human grasp", step="human_grasp", event="start")
+            self.state._publish_robot_status(
+                "waiting_handoff",
+                message="사용자 잡기 인식을 기다립니다.",
+                command=self.state.current_command,
+            )
+            if self.handoff.wait_for_human_grasp(log):
+                return True
 
-        if self._interrupted():
-            return False
+            if self._interrupted():
+                return False
+
+            if self.handoff.last_failure_reason != "handoff_timeout":
+                break
+
+            decision = self._wait_for_handoff_decision("handoff_timeout", log)
+            if decision == "retry":
+                log.info("사용자 요청으로 사용자 잡기 인식을 다시 기다립니다.")
+                continue
+            if decision == "interrupted":
+                return False
+            break
 
         log_error(log, "handoff pose unavailable", step="handoff", event="fail")
         returned, drawer_closed, home_ok = self._return_tool_close_drawer_home(
@@ -589,6 +620,44 @@ class PickSequenceRunner:
             command=self.state.current_command,
         )
         return False
+
+    def _wait_for_handoff_decision(self, reason, log):
+        retry_req = self.control_events.get("handoff_retry")
+        fallback_req = self.control_events.get("handoff_fallback")
+        pending = self.control_events.get("handoff_decision_pending")
+        if retry_req is None or fallback_req is None or pending is None:
+            return "fallback"
+
+        retry_req.clear()
+        fallback_req.clear()
+        pending.set()
+        self.state._publish_robot_status(
+            HANDOFF_DECISION_PENDING_STATUS,
+            action="bring",
+            message="사용자의 손을 인식하지 못했습니다. 다시 인식할까요, 복귀할까요?",
+            reason=reason,
+            command=self.state.current_command,
+        )
+        log.warn(
+            "handoff inspection 선택 대기: "
+            f"reason={reason}, options=retry/fallback"
+        )
+
+        try:
+            while rclpy.ok():
+                if self._interrupted():
+                    return "interrupted"
+                if retry_req.is_set():
+                    retry_req.clear()
+                    return "retry"
+                if fallback_req.is_set():
+                    fallback_req.clear()
+                    return "fallback"
+                cooperative_wait(HANDOFF_DECISION_POLL_SEC)
+        finally:
+            pending.clear()
+
+        return "interrupted"
 
     def _return_tool_close_drawer_home(
         self,
@@ -645,6 +714,10 @@ class PickSequenceRunner:
         self.gripper.open_gripper()
         cooperative_wait(0.8)
         return True
+
+    def _home_before_close_drawer(self):
+        self.state.logger().info("11단계: 서랍 닫기 전 Home 위치로 이동")
+        return self.handoff.move_home_after_handoff(self.state.logger())
 
     def _home_after_handoff(self):
         log_info(self.state.logger(), "home after handoff", step="home", event="start")

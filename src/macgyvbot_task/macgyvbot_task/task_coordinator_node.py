@@ -38,6 +38,7 @@ from macgyvbot_config.structured_logging import (
     translate_log_message,
 )
 from macgyvbot_config.models import HAND_GRASP_SAM_CHECKPOINT_NAME, YOLO_MODEL_NAME
+from macgyvbot_config.pick import PICK_GRASP_YAW_OFFSET_DEG
 from macgyvbot_config.robot import GROUP_NAME, HOME_JOINTS, WRIST_JOINT_NAME
 from macgyvbot_config.timing import (
     CAMERA_LOOP_IDLE_SLEEP_SEC,
@@ -292,6 +293,9 @@ class TaskCoordinatorNode(Node):
         self.exit_req = threading.Event()
         self.pause_req = threading.Event()
         self.resume_req = threading.Event()
+        self.handoff_retry_req = threading.Event()
+        self.handoff_fallback_req = threading.Event()
+        self.handoff_decision_pending = threading.Event()
 
         self._queue = deque()
         self._queue_lock = threading.RLock()
@@ -403,6 +407,9 @@ class TaskCoordinatorNode(Node):
             "exit": self.exit_req,
             "pause": self.pause_req,
             "resume": self.resume_req,
+            "handoff_retry": self.handoff_retry_req,
+            "handoff_fallback": self.handoff_fallback_req,
+            "handoff_decision_pending": self.handoff_decision_pending,
         }
         self.frame_processor = PickFrameProcessor(
             self.state,
@@ -984,6 +991,10 @@ class TaskCoordinatorNode(Node):
     def _handle_home_request(self, request):
         command = self._task_request_command(request)
         tool_name = command.get("tool_name", request.tool_name or "unknown")
+        if self.handoff_decision_pending.is_set():
+            self._handle_handoff_fallback("home_requested_during_handoff_inspection")
+            return
+
         if self.is_running() or self.state.picking:
             self._publish_robot_status(
                 "busy",
@@ -1033,6 +1044,9 @@ class TaskCoordinatorNode(Node):
         if action == "resume":
             self._handle_resume(reason)
             return
+        if action == "retry":
+            self._handle_retry(reason)
+            return
         if action == "cancel":
             self._handle_cancel(reason)
             return
@@ -1046,6 +1060,51 @@ class TaskCoordinatorNode(Node):
             action=action,
             reason="unsupported_task_control",
         )
+
+    def _handle_retry(self, reason):
+        if not self.handoff_decision_pending.is_set():
+            self.get_logger().warn(
+                f"재시도 요청을 처리할 handoff decision 상태가 아닙니다: reason={reason}"
+            )
+            self._publish_robot_status(
+                "rejected",
+                action="retry",
+                message="현재 재시도할 hand inspection 작업이 없습니다.",
+                reason="retry_not_available",
+                command=self.state.current_command,
+            )
+            return False
+
+        self.get_logger().info(f"handoff inspection retry 요청: reason={reason}")
+        self.handoff_fallback_req.clear()
+        self.handoff_retry_req.set()
+        self._publish_robot_status(
+            "resumed",
+            action="retry",
+            message="사용자 손 인식을 다시 시도합니다.",
+            reason=reason or "handoff_retry_requested",
+            command=self.state.current_command,
+        )
+        return True
+
+    def _handle_handoff_fallback(self, reason):
+        if not self.handoff_decision_pending.is_set():
+            self.get_logger().warn(
+                f"handoff fallback 요청을 무시합니다: pending=false, reason={reason}"
+            )
+            return False
+
+        self.get_logger().warn(f"handoff inspection fallback 요청: reason={reason}")
+        self.handoff_retry_req.clear()
+        self.handoff_fallback_req.set()
+        self._publish_robot_status(
+            "returning_home",
+            action="bring",
+            message="사용자 손 인식을 중단하고 공구를 원래 위치로 복귀합니다.",
+            reason=reason or "handoff_fallback_requested",
+            command=self.state.current_command,
+        )
+        return True
 
     def _handle_pause(self, reason):
         if self.exit_req.is_set():
@@ -1098,6 +1157,11 @@ class TaskCoordinatorNode(Node):
         return True
 
     def _handle_cancel(self, reason, publish_status=True):
+        if self.handoff_decision_pending.is_set():
+            return self._handle_handoff_fallback(
+                reason or "cancel_during_handoff_inspection"
+            )
+
         self._task_log("control").warn(
             "task queue cancel requested",
             step="task_control",
@@ -1430,6 +1494,9 @@ class TaskCoordinatorNode(Node):
                     target=self.state.target_label or "unknown",
                     reason="task_step_failed",
                 )
+                self._queue.clear()
+                self._suspended_step = None
+                self._suspended_task_name = None
                 self._run_cleanup_callbacks()
                 self._clear_task_state()
                 return
@@ -1483,6 +1550,9 @@ class TaskCoordinatorNode(Node):
         self.state.drawer_preparing_tool = None
         self.state.grasp_detection_mask_images = None
         self.state.grasp_detection_mask_target = None
+        self.handoff_retry_req.clear()
+        self.handoff_fallback_req.clear()
+        self.handoff_decision_pending.clear()
 
     def _run_cleanup_callbacks(self):
         try:
@@ -1710,15 +1780,18 @@ class TaskCoordinatorNode(Node):
             )
             return None
 
+        adjusted_yaw_deg = float(yaw_deg) + PICK_GRASP_YAW_OFFSET_DEG
         self._task_log("perception", quiet_info=True).info(
             "grasp detection binary crop PCA yaw applied",
             step="pca_yaw",
             event="done",
             target=target_label,
             yaw_deg=f"{yaw_deg:.1f}",
+            offset_deg=f"{PICK_GRASP_YAW_OFFSET_DEG:.1f}",
+            adjusted_yaw_deg=f"{adjusted_yaw_deg:.1f}",
             pixels=debug.get("num_pixels"),
         )
-        return yaw_deg
+        return adjusted_yaw_deg
 
     def _generate_grasp_detection_mask_images_after_vlm_observe(self, target_label):
         if not self.frame_processor.has_camera_state():

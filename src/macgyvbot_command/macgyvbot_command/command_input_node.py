@@ -292,7 +292,7 @@ class CommandInputNode(Node):
         command = result.get("command")
         if command is not None:
             action = command.get("action")
-            if action in ("pause", "resume", "cancel"):
+            if action in ("pause", "resume", "retry", "cancel"):
                 self.get_logger().info(
                     _format_command_log(
                         "task control interpreted",
@@ -367,7 +367,7 @@ class CommandInputNode(Node):
         )
         self._publish_feedback_payload(feedback)
 
-        if action in ("pause", "resume", "cancel"):
+        if action in ("pause", "resume", "retry", "cancel"):
             self._send_task_control_request(action=action, reason=text)
             return True
 
@@ -380,11 +380,12 @@ class CommandInputNode(Node):
     @staticmethod
     def _fast_control_feedback_message(action):
         return {
-            "pause": "일시 정지 요청을 로봇에 전달했습니다.",
-            "resume": "재개 요청을 로봇에 전달했습니다.",
-            "cancel": "작업 취소 요청을 로봇에 전달했습니다.",
-            "home": "Home 위치 복귀 요청을 로봇에 전달했습니다.",
-        }.get(action, "명령을 제어 요청으로 이해했습니다.")
+            "pause": "정지 명령으로 이해했습니다.",
+            "resume": "재개 명령으로 이해했습니다. 작업 재개 요청으로 전달합니다.",
+            "retry": "다시 인식하라는 뜻으로 이해했습니다.",
+            "cancel": "현재 작업을 취소합니다. 다음 명령을 기다리겠습니다.",
+            "home": "Home 위치로 복귀하라는 뜻으로 이해했습니다.",
+        }.get(action, "명령을 올바른 입력으로 판단했습니다.")
 
     def _publish_command(self, command):
         command_msg = self._tool_command_message(command)
