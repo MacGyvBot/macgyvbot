@@ -91,14 +91,10 @@ DRAWER_COLLISION_BOXES = DRAWER_COLLISION_BOX_PROFILES[
     DRAWER_COLLISION_DEFAULT_PROFILE
 ]
 DRAWER_COLLISION_SCENE_KEY_PROFILES = {
-    "drawer/observe": DRAWER_COLLISION_PROFILE_DRAWER_OPENED,
-    "drawer/approach_to_close": DRAWER_COLLISION_PROFILE_DRAWER_OPENED,
-    "drawer/store_exit": DRAWER_COLLISION_PROFILE_DRAWER_OPENED,
-    #"handoff/observation_pose": DRAWER_COLLISION_PROFILE_DRAWER_OPENED,
+    # on pick
     "handoff/move_to_user": DRAWER_COLLISION_PROFILE_DRAWER_OPENED,
-    "handoff/return_lift_to_clearance": DRAWER_COLLISION_PROFILE_DRAWER_OPENED,
-    "handoff/return_move_above_target": DRAWER_COLLISION_PROFILE_DRAWER_OPENED,
-    "handoff/return_descent_to_target": DRAWER_COLLISION_PROFILE_DRAWER_OPENED,
-    "handoff/return_lift_after_release": DRAWER_COLLISION_PROFILE_DRAWER_OPENED,
-    "handoff/home_before_close_drawer": DRAWER_COLLISION_PROFILE_DRAWER_OPENED,
+    "drawer/approach_to_close": DRAWER_COLLISION_PROFILE_DRAWER_OPENED,
+
+    # on return
+
 }
