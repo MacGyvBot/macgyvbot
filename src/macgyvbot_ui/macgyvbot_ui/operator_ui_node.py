@@ -47,6 +47,43 @@ from macgyvbot_ui.voice_command_window import (
 )
 
 
+def _format_operator_ros_log(message):
+    text = str(message or "").strip()
+    if not text or text.startswith("svc="):
+        return text
+    return (
+        "svc=ui pipe=operator step=log event=status "
+        f"msg={_format_log_value(text)}"
+    )
+
+
+def _format_log_value(value):
+    text = str(value)
+    if text == "" or text.replace("_", "").replace("-", "").replace("/", "").isalnum():
+        return text
+    return '"' + text.replace('"', '\\"') + '"'
+
+
+class _StructuredLoggerAdapter:
+    def __init__(self, logger):
+        self._logger = logger
+
+    def debug(self, message):
+        self._logger.debug(_format_operator_ros_log(message))
+
+    def info(self, message):
+        self._logger.info(_format_operator_ros_log(message))
+
+    def warn(self, message):
+        self._logger.warn(_format_operator_ros_log(message))
+
+    def warning(self, message):
+        self.warn(message)
+
+    def error(self, message):
+        self._logger.error(_format_operator_ros_log(message))
+
+
 class OperatorUiNode(Node):
     _GRIPPER_SAFE_STATES = {
         'idle',
@@ -936,6 +973,9 @@ class OperatorUiNode(Node):
         if self.window is not None:
             self.window.append_system(text)
 
+    def get_logger(self):
+        return _StructuredLoggerAdapter(super().get_logger())
+
     def _append_log(self, level, message, ros=True):
         level = str(level or 'info').lower()
         message = str(message or '').strip()
@@ -948,13 +988,14 @@ class OperatorUiNode(Node):
         if not ros:
             return
 
+        ros_message = _format_operator_ros_log(message)
         logger = self.get_logger()
         if level == 'error':
-            logger.error(message)
+            logger.error(ros_message)
         elif level in ('warn', 'warning'):
-            logger.warn(message)
+            logger.warn(ros_message)
         else:
-            logger.info(message)
+            logger.info(ros_message)
 
     def _set_status(self, text):
         if self.window is not None:

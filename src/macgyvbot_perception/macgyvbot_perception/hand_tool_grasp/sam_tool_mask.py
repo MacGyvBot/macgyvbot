@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Optional
+import warnings
 
 import cv2
 import numpy as np
@@ -37,7 +38,14 @@ class BBoxPromptSegmenter:
             raise RuntimeError(f"SAM checkpoint not found: {checkpoint}")
 
         if backend == "mobile_sam":
-            from mobile_sam import SamPredictor, sam_model_registry
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message=r"Overwriting tiny_vit_.* in registry.*",
+                    category=UserWarning,
+                    module=r"mobile_sam\..*",
+                )
+                from mobile_sam import SamPredictor, sam_model_registry
         elif backend == "sam":
             from segment_anything import SamPredictor, sam_model_registry
         else:

@@ -258,6 +258,15 @@ def generate_launch_description():
                 package="macgyvbot_task",
                 executable="task_coordinator_node",
                 output="screen",
+                arguments=[
+                    "--ros-args",
+                    "--log-level",
+                    "moveit_ros.planning_scene_monitor.planning_scene_monitor:=error",
+                    "--log-level",
+                    "moveit.pilz_industrial_motion_planner.trajectory_generator_ptp:=warn",
+                    "--log-level",
+                    "moveit.pilz_industrial_motion_planner.trajectory_generator:=warn",
+                ],
                 parameters=[
                     moveit_config.to_dict(),
                     moveit_py_params,

@@ -71,6 +71,68 @@ from macgyvbot_perception.hand_tool_grasp.visualization import (
 )
 
 
+def _format_pipeline_log(*, svc, pipe, step, event, msg="", **fields):
+    values = {
+        "svc": svc,
+        "pipe": pipe,
+        "step": step,
+        "event": event,
+        "msg": msg,
+    }
+    values.update(fields)
+    return " ".join(
+        f"{key}={_format_log_value(value)}"
+        for key, value in values.items()
+        if value is not None and value != ""
+    )
+
+
+def _format_log_value(value):
+    if isinstance(value, str):
+        if value == "" or value.replace("_", "").replace("-", "").isalnum():
+            return value
+        return '"' + value.replace('"', '\\"') + '"'
+    if isinstance(value, float):
+        return f"{value:.3f}"
+    if isinstance(value, (list, tuple, set)):
+        return "[" + ",".join(_format_log_value(item) for item in value) + "]"
+    return str(value)
+
+
+class _StructuredLoggerAdapter:
+    def __init__(self, logger, svc, pipe):
+        self._logger = logger
+        self._svc = svc
+        self._pipe = pipe
+
+    def debug(self, message):
+        self._logger.debug(self._format(message))
+
+    def info(self, message):
+        self._logger.info(self._format(message))
+
+    def warn(self, message):
+        self._logger.warn(self._format(message))
+
+    def warning(self, message):
+        self.warn(message)
+
+    def error(self, message):
+        self._logger.error(self._format(message))
+
+    def _format(self, message):
+        text = str(message or "")
+        if text.startswith("svc="):
+            return text
+        return _format_pipeline_log(
+            svc=self._svc,
+            pipe=self._pipe,
+            step="log",
+            event="status",
+            msg=text,
+        )
+
+
 class HandGraspDetectionNode(Node):
     """Detect whether a human hand is grasping a detected tool."""
 
@@ -292,18 +354,62 @@ class HandGraspDetectionNode(Node):
 
         if self.use_depth:
             self.create_subscription(Image, self.depth_topic, self._depth_cb, 10)
-            self.get_logger().info(f"Depth recognition enabled: {self.depth_topic}")
+            self._log(
+                "info",
+                "depth recognition enabled",
+                step="startup",
+                event="ready",
+                depth_topic=self.depth_topic,
+            )
         else:
-            self.get_logger().warn("Depth recognition disabled by parameter.")
+            self._log(
+                "warn",
+                "depth recognition disabled",
+                step="startup",
+                event="disabled",
+                reason="parameter_disabled",
+            )
 
         self.create_subscription(Image, self.color_topic, self._color_cb, 10)
         self.create_subscription(
             RobotTaskStatus, self.robot_status_topic, self._robot_status_cb, 10
         )
-        self.get_logger().info(f"Color image topic: {self.color_topic}")
-        self.get_logger().info(f"Result topic: {self.result_topic}")
-        self.get_logger().info(f"Robot status topic: {self.robot_status_topic}")
-        self.get_logger().info(f"Tool mask lock topic: {self.mask_lock_topic}")
+        self._log(
+            "info",
+            "node ready",
+            step="startup",
+            event="ready",
+            color_topic=self.color_topic,
+            result_topic=self.result_topic,
+            robot_status_topic=self.robot_status_topic,
+            mask_lock_topic=self.mask_lock_topic,
+        )
+
+    def _log(self, level, message, **fields):
+        text = _format_pipeline_log(
+            svc="perception",
+            pipe="hand_grasp",
+            step=fields.pop("step", "log"),
+            event=fields.pop("event", "status"),
+            msg=message,
+            **fields,
+        )
+        logger = self.get_logger()
+        if level == "debug":
+            logger.debug(text)
+        elif level == "error":
+            logger.error(text)
+        elif level in ("warn", "warning"):
+            logger.warn(text)
+        else:
+            logger.info(text)
+
+    def get_logger(self):
+        return _StructuredLoggerAdapter(
+            super().get_logger(),
+            svc="perception",
+            pipe="hand_grasp",
+        )
 
     @staticmethod
     def _as_bool(value) -> bool:
@@ -331,12 +437,22 @@ class HandGraspDetectionNode(Node):
                 image_size=image_size,
             )
         except Exception as exc:
-            self.get_logger().error(f"YOLO tool detector init failed: {exc}")
+            self._log(
+                "error",
+                "YOLO tool detector init failed",
+                step="tool_detector",
+                event="fail",
+                reason=str(exc) or type(exc).__name__,
+            )
             return None
 
-        self.get_logger().info(
-            f"YOLO tool detector enabled: model={detector.model_path}, "
-            f"classes={target_classes or 'ANY'}"
+        self._log(
+            "info",
+            "YOLO tool detector enabled",
+            step="tool_detector",
+            event="ready",
+            model=detector.model_path,
+            classes=target_classes or "ANY",
         )
         return detector
 
@@ -344,15 +460,33 @@ class HandGraspDetectionNode(Node):
         try:
             classifier = MLHandGraspClassifier(self.grasp_model_path)
         except Exception as exc:
-            self.get_logger().error(f"ML grasp classifier init failed: {exc}")
+            self._log(
+                "error",
+                "ML grasp classifier init failed",
+                step="ml_classifier",
+                event="fail",
+                reason=str(exc) or type(exc).__name__,
+            )
             return None
 
-        self.get_logger().info(f"ML grasp classifier enabled: {classifier.path}")
+        self._log(
+            "info",
+            "ML grasp classifier enabled",
+            step="ml_classifier",
+            event="ready",
+            model=classifier.path,
+        )
         return classifier
 
     def _create_sam_segmenter(self) -> Optional[BBoxPromptSegmenter]:
         if not self.sam_enabled:
-            self.get_logger().info("SAM tool mask disabled. Using bbox lock fallback.")
+            self._log(
+                "info",
+                "SAM tool mask disabled",
+                step="sam",
+                event="disabled",
+                reason="parameter_disabled",
+            )
             return None
 
         try:
@@ -363,12 +497,22 @@ class HandGraspDetectionNode(Node):
                 device=self.sam_device,
             )
         except Exception as exc:
-            self.get_logger().error(f"SAM tool mask init failed: {exc}")
+            self._log(
+                "error",
+                "SAM tool mask init failed",
+                step="sam",
+                event="fail",
+                reason=str(exc) or type(exc).__name__,
+            )
             return None
 
-        self.get_logger().info(
-            f"SAM tool mask enabled: backend={self.sam_backend}, "
-            f"checkpoint={self.sam_checkpoint}"
+        self._log(
+            "info",
+            "SAM tool mask enabled",
+            step="sam",
+            event="ready",
+            backend=self.sam_backend,
+            checkpoint=self.sam_checkpoint,
         )
         return segmenter
 
@@ -497,12 +641,15 @@ class HandGraspDetectionNode(Node):
                 cv2.waitKey(1)
 
         if result["state"] != self.last_state:
-            self.get_logger().info(
-                "grasp state={state}, human_grasped_tool={human_grasped_tool}, "
-                "ml={ml_stable_state}/{ml_raw_state}, "
-                "depth_contact_count={depth_contact_count}".format(
-                    **result
-                )
+            self._log(
+                "debug",
+                "grasp state changed",
+                step="state",
+                event="changed",
+                state=result.get("state"),
+                human_grasped_tool=result.get("human_grasped_tool"),
+                ml=f"{result.get('ml_stable_state')}/{result.get('ml_raw_state')}",
+                depth_contact_count=result.get("depth_contact_count"),
             )
             self.last_state = result["state"]
 
