@@ -1,5 +1,10 @@
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, EmitEvent, RegisterEventHandler
+from launch.actions import (
+    DeclareLaunchArgument,
+    EmitEvent,
+    RegisterEventHandler,
+    SetEnvironmentVariable,
+)
 from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessExit
 from launch.events import Shutdown
@@ -252,6 +257,10 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "sam_checkpoint",
                 default_value=default_sam_checkpoint,
+            ),
+            SetEnvironmentVariable(
+                "RCUTILS_CONSOLE_OUTPUT_FORMAT",
+                "{message}",
             ),
             Node(
                 package="macgyvbot_task",
