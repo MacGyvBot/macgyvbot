@@ -22,6 +22,7 @@ from macgyvbot_command.input_mapping.command_vocabulary import (
     NO_WORDS,
     RELEASE_KEYWORDS,
     RESUME_KEYWORDS,
+    RETRY_KEYWORDS,
     STOP_KEYWORDS,
     YES_WORDS,
 )
@@ -90,6 +91,19 @@ class CommandLlmParser:
                     'target_mode': 'unknown',
                     'raw_text': text,
                     'match_method': 'resume_keyword',
+                    'match_score': 1.0,
+                    'confidence': 1.0,
+                }
+            )
+
+        if self._has_retry_intent(text):
+            return self._accepted_result(
+                {
+                    'tool_name': 'unknown',
+                    'action': 'retry',
+                    'target_mode': 'unknown',
+                    'raw_text': text,
+                    'match_method': 'retry_keyword',
                     'match_score': 1.0,
                     'confidence': 1.0,
                 }
@@ -769,6 +783,7 @@ class CommandLlmParser:
 - release: {ALLOWED_ACTIONS['release']}
 - pause: {ALLOWED_ACTIONS['pause']}
 - resume: {ALLOWED_ACTIONS['resume']}
+- retry: {ALLOWED_ACTIONS['retry']}
 - cancel: {ALLOWED_ACTIONS['cancel']}
 - exit: {ALLOWED_ACTIONS['exit']}
 - home: {ALLOWED_ACTIONS['home']}
@@ -809,6 +824,7 @@ class CommandLlmParser:
 - status_query와 smalltalk는 assistant_message에 사용자가 볼 짧은 한국어 응답을 넣는다.
 - "멈춰", "정지", "중지", "중단", "스탑", "stop", "pause"처럼 명확한 정지 표현만 pause action이다.
 - "재개", "다시 시작", "계속해", "계속 진행해", "resume", "restart"처럼 명확한 재개 표현만 resume action이다.
+- "재시도", "다시 인식", "다시 확인", "한 번 더 봐"처럼 hand inspection을 다시 하라는 표현만 retry action이다.
 - "취소", "이번 작업 취소", "작업 취소", "cancel"처럼 현재 작업만 중단하라는 표현은 cancel action이다. cancel은 시스템 종료가 아니다.
 - "종료", "끝내", "프로그램 꺼줘", "앱 닫아줘", "GUI 종료", "exit", "quit"처럼 명확한 종료 표현만 exit action이다.
 - "카메라 꺼줘"처럼 프로그램 종료 대상이 아닌 장치를 끄라는 문장을 exit action으로 해석하지 않는다.
@@ -863,6 +879,9 @@ class CommandLlmParser:
 
 입력: 다시 시작해
 출력: {{"intent":"command","tool_name":"unknown","action":"resume","target_mode":"unknown","confidence":0.90,"needs_confirmation":false,"context_used":"none"}}
+
+입력: 다시 인식해
+출력: {{"intent":"command","tool_name":"unknown","action":"retry","target_mode":"unknown","confidence":0.90,"needs_confirmation":false,"context_used":"none"}}
 
 입력: 이번 작업 취소
 출력: {{"intent":"command","tool_name":"unknown","action":"cancel","target_mode":"unknown","confidence":0.90,"needs_confirmation":false,"context_used":"none"}}
@@ -1153,6 +1172,20 @@ class CommandLlmParser:
                 ),
             }
 
+        if action == 'retry' and not self._has_retry_intent(raw_text):
+            self._warn('명확한 재시도 표현이 없어 retry 명령을 무시합니다.')
+            candidate_command['action'] = 'unknown'
+            return {
+                'command': None,
+                'feedback': self._feedback(
+                    status='rejected',
+                    raw_text=raw_text,
+                    reason='unknown_action',
+                    message='무엇을 해야 하는지 확정하지 못했습니다. 다시 입력해주세요.',
+                    command=candidate_command,
+                ),
+            }
+
         if action == 'cancel' and not self._has_cancel_intent(raw_text):
             self._warn('명확한 취소 표현이 없어 cancel 명령을 무시합니다.')
             candidate_command['action'] = 'unknown'
@@ -1280,6 +1313,10 @@ class CommandLlmParser:
             return 'resume'
         if action == 'resume':
             return 'unknown'
+        if self._has_retry_intent(raw_text):
+            return 'retry'
+        if action == 'retry':
+            return 'unknown'
         if self._has_cancel_intent(raw_text):
             return 'cancel'
         if action == 'cancel':
@@ -1348,6 +1385,11 @@ class CommandLlmParser:
         return any(normalize_text(keyword) in normalized for keyword in RESUME_KEYWORDS)
 
     @staticmethod
+    def _has_retry_intent(raw_text):
+        normalized = normalize_text(raw_text)
+        return any(normalize_text(keyword) in normalized for keyword in RETRY_KEYWORDS)
+
+    @staticmethod
     def _has_cancel_intent(raw_text):
         normalized = normalize_text(raw_text)
         return any(normalize_text(keyword) in normalized for keyword in CANCEL_KEYWORDS)
@@ -1383,6 +1425,7 @@ class CommandLlmParser:
         return (
             self._has_stop_intent(raw_text)
             or self._has_resume_intent(raw_text)
+            or self._has_retry_intent(raw_text)
             or self._has_cancel_intent(raw_text)
             or self._has_exit_intent(raw_text)
             or self._has_home_intent(raw_text)

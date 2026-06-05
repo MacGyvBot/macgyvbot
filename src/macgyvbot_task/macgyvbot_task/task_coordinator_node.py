@@ -215,6 +215,9 @@ class TaskCoordinatorNode(Node):
         self.exit_req = threading.Event()
         self.pause_req = threading.Event()
         self.resume_req = threading.Event()
+        self.handoff_retry_req = threading.Event()
+        self.handoff_fallback_req = threading.Event()
+        self.handoff_decision_pending = threading.Event()
 
         self._queue = deque()
         self._queue_lock = threading.RLock()
@@ -326,6 +329,9 @@ class TaskCoordinatorNode(Node):
             "exit": self.exit_req,
             "pause": self.pause_req,
             "resume": self.resume_req,
+            "handoff_retry": self.handoff_retry_req,
+            "handoff_fallback": self.handoff_fallback_req,
+            "handoff_decision_pending": self.handoff_decision_pending,
         }
         self.frame_processor = PickFrameProcessor(
             self.state,
@@ -851,6 +857,10 @@ class TaskCoordinatorNode(Node):
     def _handle_home_request(self, request):
         command = self._task_request_command(request)
         tool_name = command.get("tool_name", request.tool_name or "unknown")
+        if self.handoff_decision_pending.is_set():
+            self._handle_handoff_fallback("home_requested_during_handoff_inspection")
+            return
+
         if self.is_running() or self.state.picking:
             self._publish_robot_status(
                 "busy",
@@ -900,6 +910,9 @@ class TaskCoordinatorNode(Node):
         if action == "resume":
             self._handle_resume(reason)
             return
+        if action == "retry":
+            self._handle_retry(reason)
+            return
         if action == "cancel":
             self._handle_cancel(reason)
             return
@@ -907,6 +920,51 @@ class TaskCoordinatorNode(Node):
             self._handle_exit(reason)
             return
         self.get_logger().warn(f"지원하지 않는 task control action: {action}")
+
+    def _handle_retry(self, reason):
+        if not self.handoff_decision_pending.is_set():
+            self.get_logger().warn(
+                f"재시도 요청을 처리할 handoff decision 상태가 아닙니다: reason={reason}"
+            )
+            self._publish_robot_status(
+                "rejected",
+                action="retry",
+                message="현재 재시도할 hand inspection 작업이 없습니다.",
+                reason="retry_not_available",
+                command=self.state.current_command,
+            )
+            return False
+
+        self.get_logger().info(f"handoff inspection retry 요청: reason={reason}")
+        self.handoff_fallback_req.clear()
+        self.handoff_retry_req.set()
+        self._publish_robot_status(
+            "resumed",
+            action="retry",
+            message="사용자 손 인식을 다시 시도합니다.",
+            reason=reason or "handoff_retry_requested",
+            command=self.state.current_command,
+        )
+        return True
+
+    def _handle_handoff_fallback(self, reason):
+        if not self.handoff_decision_pending.is_set():
+            self.get_logger().warn(
+                f"handoff fallback 요청을 무시합니다: pending=false, reason={reason}"
+            )
+            return False
+
+        self.get_logger().warn(f"handoff inspection fallback 요청: reason={reason}")
+        self.handoff_retry_req.clear()
+        self.handoff_fallback_req.set()
+        self._publish_robot_status(
+            "returning_home",
+            action="bring",
+            message="사용자 손 인식을 중단하고 공구를 원래 위치로 복귀합니다.",
+            reason=reason or "handoff_fallback_requested",
+            command=self.state.current_command,
+        )
+        return True
 
     def _handle_pause(self, reason):
         if self.exit_req.is_set():
@@ -949,6 +1007,11 @@ class TaskCoordinatorNode(Node):
         return True
 
     def _handle_cancel(self, reason, publish_status=True):
+        if self.handoff_decision_pending.is_set():
+            return self._handle_handoff_fallback(
+                reason or "cancel_during_handoff_inspection"
+            )
+
         self.get_logger().warn(f"task queue cancel 요청: reason={reason}")
         task_running = self.is_running() or self.state.picking
         self.exit_req.set()
@@ -1207,6 +1270,9 @@ class TaskCoordinatorNode(Node):
                 return
             elif not ok:
                 self.get_logger().error(f"task step 실패: {step.name}")
+                self._queue.clear()
+                self._suspended_step = None
+                self._suspended_task_name = None
                 self._run_cleanup_callbacks()
                 self._clear_task_state()
                 return
@@ -1251,6 +1317,9 @@ class TaskCoordinatorNode(Node):
         self.state.drawer_preparing_tool = None
         self.state.grasp_detection_mask_images = None
         self.state.grasp_detection_mask_target = None
+        self.handoff_retry_req.clear()
+        self.handoff_fallback_req.clear()
+        self.handoff_decision_pending.clear()
 
     def _run_cleanup_callbacks(self):
         try:
