@@ -110,6 +110,68 @@ class FakeDrawerFlow:
         return {"screwdriver": 1}.get(tool_name)
 
 
+class FakeReporter:
+    def __init__(self):
+        self.failures = []
+
+    def publish(self, *_args, **_kwargs):
+        pass
+
+    def fail(self, tool_name, message, reason, command, logger):
+        self.failures.append(
+            {
+                "tool_name": tool_name,
+                "message": message,
+                "reason": reason,
+                "command": command,
+            }
+        )
+
+
+class FakeMotion:
+    def __init__(self):
+        self.targets = []
+        self.min_z_values = []
+
+    def plan_and_execute(self, _logger, pose_goal, min_z=None):
+        self.targets.append(pose_goal)
+        self.min_z_values.append(min_z)
+        return True
+
+
+class FakeReturnGripper:
+    def __init__(self):
+        self.close_calls = 0
+        self.open_calls = 0
+
+    def close_gripper(self):
+        self.close_calls += 1
+
+    def open_gripper(self):
+        self.open_calls += 1
+
+    def get_status(self):
+        return [False, True]
+
+    def get_width(self):
+        return 24.0
+
+    def get_depth(self):
+        return 18.0
+
+
+class FakeReturnTargetPlanner:
+    def plan(self, _bx, _by, _bz, _logger):
+        return types.SimpleNamespace(
+            target_x=0.30,
+            target_y=0.10,
+            travel_z=0.40,
+            approach_z=0.32,
+            grasp_z=0.27,
+            should_descend_to_grasp=True,
+        )
+
+
 def test_drawer_store_observe_point_uses_staging_joint_pose():
     expected_degrees = {
         "joint_1": -22.82,
@@ -176,3 +238,41 @@ def test_return_sequence_builds_drawer_store_step_order():
         "return/home_after_drawer_close",
         "return/done",
     ]
+
+
+def test_return_staged_tool_grasp_pregrasp_depth_adjusts_before_final_grasp(
+    monkeypatch,
+):
+    import macgyvbot_task.application.return_flow.return_drawer_placement_flow as module
+
+    monkeypatch.setattr(
+        module,
+        "current_ee_orientation",
+        lambda _robot: {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+    )
+    motion = FakeMotion()
+    gripper = FakeReturnGripper()
+    reporter = FakeReporter()
+    flow = ReturnDrawerPlacementFlow(
+        robot=object(),
+        motion_controller=motion,
+        gripper=gripper,
+        state=FakeState(),
+        reporter=reporter,
+        wait_fn=lambda _duration: None,
+    )
+    flow.target_planner = FakeReturnTargetPlanner()
+    target = types.SimpleNamespace(found=True, base_xyz=(0.30, 0.10, 0.20))
+
+    assert flow.grasp_staged_tool(target, "screwdriver", {"action": "return"}, FakeLogger())
+
+    z_targets = [pose.pose.position.z for pose in motion.targets]
+    assert all(
+        math.isclose(actual, expected)
+        for actual, expected in zip(z_targets[:4], [0.40, 0.32, 0.27, 0.252])
+    )
+    assert math.isclose(motion.min_z_values[3], 0.252)
+    assert math.isclose(z_targets[-1], 0.40)
+    assert gripper.close_calls == 2
+    assert gripper.open_calls == 1
+    assert reporter.failures == []

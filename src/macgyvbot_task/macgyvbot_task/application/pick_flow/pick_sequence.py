@@ -10,9 +10,15 @@ from macgyvbot_manipulation.robot_pose import (
     current_ee_orientation,
     make_safe_pose,
 )
-from macgyvbot_manipulation.robot_safezone import safe_z_min_for_drawer
+from macgyvbot_manipulation.robot_safezone import (
+    SAFE_Z_MIN,
+    safe_z_min_for_drawer,
+)
 from macgyvbot_manipulation.timing import cooperative_wait
-from macgyvbot_task.application.pick_flow.pick_grasp_flow import PickGraspFlow
+from macgyvbot_task.application.pick_flow.pick_grasp_flow import (
+    PickGraspFlow,
+    calculate_pregrasp_extra_descent,
+)
 from macgyvbot_task.application.pick_flow.pick_handoff_flow import PickHandoffFlow
 from macgyvbot_task.application.pick_flow.pick_target_planner import PickTargetPlanner
 from macgyvbot_task.application.task_control.task_step import TaskStep
@@ -137,6 +143,10 @@ class PickSequenceRunner:
                     context["ori"],
                 ),
             ),
+            TaskStep(
+                "pick/pregrasp_depth_adjust",
+                lambda: self._pregrasp_depth_adjust(context),
+            ),
             TaskStep("pick/grasp_tool", self._grasp_tool),
             TaskStep(
                 "pick/lift",
@@ -185,12 +195,14 @@ class PickSequenceRunner:
         error_log,
         failure_message,
         failure_reason,
+        min_z=None,
     ):
         log = self.state.logger()
         log.info(log_message)
         ok = self.motion.plan_and_execute(
             log,
             pose_goal=make_safe_pose(x, y, z, ori, log),
+            min_z=min_z,
         )
         if ok:
             return True
@@ -371,6 +383,59 @@ class PickSequenceRunner:
             command=self.state.current_command,
         )
         return False
+
+    def _pregrasp_depth_adjust(self, context):
+        log = self.state.logger()
+        plan = context["plan"]
+        ori = context["ori"]
+        drawer_safe_z_min = context.get("safe_z_min", SAFE_Z_MIN)
+
+        log.info("4.5단계: pre-grasp depth 측정")
+        measurement = self.grasp.measure_pregrasp_depth(log)
+        if measurement is None:
+            log.error("pre-grasp depth 측정 실패. Pick 시퀀스 중단")
+            self.state._publish_robot_status(
+                "failed",
+                message="pre-grasp depth 측정에 실패했습니다.",
+                reason="pregrasp_depth_unavailable",
+                command=self.state.current_command,
+            )
+            return False
+
+        width_mm = measurement.get("width_mm")
+        depth_mm = measurement.get("depth_mm")
+        extra_descent_m = calculate_pregrasp_extra_descent(depth_mm)
+        redescend_min_z = drawer_safe_z_min - extra_descent_m
+        target_z = max(plan.grasp_z - extra_descent_m, redescend_min_z)
+        actual_descent_m = plan.grasp_z - target_z
+        log.info(
+            "pre-grasp actual depth 기반 추가 하강 계산: "
+            f"width={width_mm:.1f}mm, "
+            f"depth={depth_mm:.1f}mm, "
+            f"extra_descent={extra_descent_m:.3f}m, "
+            f"target_z={target_z:.3f}m, "
+            f"drawer_safe_z_min={drawer_safe_z_min:.3f}m, "
+            f"redescend_min_z={redescend_min_z:.3f}m"
+        )
+
+        self.gripper.open_gripper()
+        cooperative_wait(0.3)
+
+        if actual_descent_m <= 0.0:
+            log.info("닫힌 그리퍼 기준 z 제한으로 pre-grasp 추가 하강을 생략합니다.")
+            return True
+
+        return self._move_to_pose(
+            "4.5단계: pre-grasp actual depth 기반 추가 하강",
+            plan.target_x,
+            plan.target_y,
+            target_z,
+            ori,
+            "pre-grasp 추가 하강 실패. Pick 시퀀스 중단",
+            "pre-grasp 추가 하강 실패",
+            "pregrasp_descent_failed",
+            min_z=redescend_min_z,
+        )
 
     def _wait_tool_mask_lock(self):
         log = self.state.logger()
