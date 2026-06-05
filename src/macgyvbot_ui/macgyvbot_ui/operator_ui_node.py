@@ -1035,12 +1035,13 @@ class OperatorUiNode(Node):
         response_message = str(getattr(response, 'message', '') or '').strip()
         if bool(getattr(response, 'success', False)):
             applied_width = float(getattr(response, 'applied_width_mm', 0.0))
-            message = response_message or f'그리퍼를 {applied_width:.0f} mm로 이동합니다.'
+            message = f'그리퍼를 {applied_width:.0f} mm로 적용합니다.'
             self._append_bot(message)
             self._append_log(
                 'info',
                 f'그리퍼 명령 완료: width_mm={applied_width:.1f}, '
-                f'status={getattr(response, "status", "")}',
+                f'status={getattr(response, "status", "")}, '
+                f'message={response_message}',
             )
         else:
             message = response_message or '그리퍼 명령이 거부되었습니다.'

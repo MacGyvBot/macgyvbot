@@ -17,6 +17,7 @@ try:
         QScrollArea,
         QSizePolicy,
         QSlider,
+        QSpinBox,
         QVBoxLayout,
         QWidget,
     )
@@ -142,10 +143,25 @@ else:
             self._gripper_slider.setSingleStep(1)
             self._gripper_slider.setPageStep(5)
             self._gripper_slider.setTracking(False)
-            self._gripper_slider.valueChanged.connect(self._update_gripper_value)
-            self._gripper_slider.sliderReleased.connect(
-                self._request_gripper_width_from_slider
+            self._gripper_slider.valueChanged.connect(self._sync_gripper_from_slider)
+
+            self._gripper_width_input = QSpinBox()
+            self._gripper_width_input.setObjectName('gripperWidthInput')
+            self._gripper_width_input.setRange(
+                self._gripper_slider.minimum(),
+                self._gripper_slider.maximum(),
             )
+            self._gripper_width_input.setSuffix(' mm')
+            self._gripper_width_input.setValue(self._gripper_slider.value())
+            self._gripper_width_input.valueChanged.connect(
+                self._sync_gripper_from_input
+            )
+
+            gripper_width_layout = QHBoxLayout()
+            gripper_width_layout.setContentsMargins(0, 0, 0, 0)
+            gripper_width_layout.setSpacing(8)
+            gripper_width_layout.addWidget(self._gripper_value)
+            gripper_width_layout.addWidget(self._gripper_width_input)
 
             gripper_scale_layout = QHBoxLayout()
             gripper_scale_layout.setContentsMargins(0, 0, 0, 0)
@@ -171,7 +187,7 @@ else:
             gripper_panel.setLayout(gripper_panel_layout)
             gripper_panel_layout.addWidget(gripper_title)
             gripper_panel_layout.addWidget(self._gripper_status)
-            gripper_panel_layout.addWidget(self._gripper_value)
+            gripper_panel_layout.addLayout(gripper_width_layout)
             gripper_panel_layout.addWidget(self._gripper_slider)
             gripper_panel_layout.addLayout(gripper_scale_layout)
             gripper_panel_layout.addWidget(self._gripper_apply_button)
@@ -355,16 +371,37 @@ else:
 
         def _set_gripper_controls_enabled(self, enabled):
             self._gripper_slider.setEnabled(enabled)
+            self._gripper_width_input.setEnabled(enabled)
             self._gripper_apply_button.setEnabled(enabled)
             self._gripper_status.setStyleSheet(
                 self._gripper_status_style(enabled)
             )
 
-        def _update_gripper_value(self, value):
-            self._gripper_value.setText(f'폭: {int(value)} mm')
+        def _set_gripper_width_value(self, value, *, source):
+            width_mm = int(value)
+            self._gripper_value.setText(f'폭: {width_mm} mm')
+
+            if source != 'slider' and self._gripper_slider.value() != width_mm:
+                self._gripper_slider.blockSignals(True)
+                self._gripper_slider.setValue(width_mm)
+                self._gripper_slider.blockSignals(False)
+
+            if (
+                source != 'input'
+                and self._gripper_width_input.value() != width_mm
+            ):
+                self._gripper_width_input.blockSignals(True)
+                self._gripper_width_input.setValue(width_mm)
+                self._gripper_width_input.blockSignals(False)
+
+        def _sync_gripper_from_slider(self, value):
+            self._set_gripper_width_value(value, source='slider')
+
+        def _sync_gripper_from_input(self, value):
+            self._set_gripper_width_value(value, source='input')
 
         def _request_gripper_width_from_slider(self):
-            width_mm = int(self._gripper_slider.value())
+            width_mm = int(self._gripper_width_input.value())
             if self._on_gripper_width is not None:
                 self._on_gripper_width(width_mm)
 
@@ -882,6 +919,21 @@ else:
                     color: #34536F;
                     font-size: 13px;
                     font-weight: 800;
+                }
+                QSpinBox#gripperWidthInput {
+                    background-color: #FFFFFF;
+                    color: #163B5C;
+                    border: 1px solid #BFD4EE;
+                    border-radius: 10px;
+                    padding: 5px 8px;
+                    font-size: 12px;
+                    font-weight: 700;
+                    min-width: 72px;
+                }
+                QSpinBox#gripperWidthInput:disabled {
+                    background-color: #EFF4F9;
+                    color: #8A9AAA;
+                    border: 1px solid #D3DFEA;
                 }
                 QSlider#gripperSlider::groove:horizontal {
                     height: 8px;
