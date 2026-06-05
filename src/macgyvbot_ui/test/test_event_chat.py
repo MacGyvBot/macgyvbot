@@ -5,6 +5,7 @@ import unittest
 
 from macgyvbot_ui.event_chat import (
     GRASP_RETRY_MESSAGE,
+    HAND_DETECTED_MESSAGE,
     HAND_NOT_FOUND_MESSAGE,
     PARSE_FAILED_MESSAGE,
     TOOL_DROPPED_MESSAGE,
@@ -32,6 +33,10 @@ class EventChatTest(unittest.TestCase):
         self.assertEqual(hand_detection_chat(True, True), "")
 
     def test_robot_status_abnormal_messages(self):
+        self.assertEqual(
+            robot_status_chat("waiting_handoff"),
+            HAND_DETECTED_MESSAGE,
+        )
         self.assertEqual(
             robot_status_chat("failed", "handoff_search_failed"),
             HAND_NOT_FOUND_MESSAGE,

@@ -57,6 +57,8 @@ def robot_status_chat(status, reason="", message=""):
 
     if normalized_status == "tool_dropped":
         return TOOL_DROPPED_MESSAGE
+    if normalized_status == "waiting_handoff":
+        return HAND_DETECTED_MESSAGE
     if normalized_reason in _HAND_NOT_FOUND_REASONS:
         return HAND_NOT_FOUND_MESSAGE
     if normalized_reason in _GRASP_FAILURE_REASONS:
