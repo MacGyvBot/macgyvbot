@@ -47,8 +47,8 @@ DRAWER_STORE_MARKER_RELEASE_Z_OFFSET_M = 0.02
 DRAWER_CLOSE_LIFT_OFFSET_M = 0.01
 DRAWER_OBSERVATION_J6_DEG = 0.0
 
-# Initial drawer collision boundaries in the robot base frame. These are
-# intentionally conservative placeholders and should be calibrated in RViz.
+# Drawer collision boundary in the robot base frame. The measured bottom
+# rectangle is (262,148,0), (439,148,0), (439,398,0), (262,398,0) in mm.
 DRAWER_COLLISION_FRAME_ID = "base_link"
 DRAWER_COLLISION_APPLY_SERVICE = "/apply_planning_scene"
 DRAWER_COLLISION_SCENE_TOPICS = [
@@ -57,24 +57,10 @@ DRAWER_COLLISION_SCENE_TOPICS = [
 ]
 DRAWER_COLLISION_BOXES = [
     {
-        "id": "drawer_cabinet_boundary",
+        "id": "drawer_body_boundary",
         "frame_id": DRAWER_COLLISION_FRAME_ID,
-        "center_xyz": [0.55, -0.30, 0.36],
-        "size_xyz": [0.58, 0.34, 0.42],
+        "center_xyz": [0.3505, 0.2730, 0.1265],
+        "size_xyz": [0.1770, 0.2500, 0.2530],
         "color_rgba": [0.12, 0.45, 0.85, 0.35],
-    },
-    {
-        "id": "drawer_front_boundary",
-        "frame_id": DRAWER_COLLISION_FRAME_ID,
-        "center_xyz": [0.55, -0.48, 0.35],
-        "size_xyz": [0.58, 0.05, 0.30],
-        "color_rgba": [0.95, 0.55, 0.15, 0.45],
-    },
-    {
-        "id": "drawer_inner_keepout",
-        "frame_id": DRAWER_COLLISION_FRAME_ID,
-        "center_xyz": [0.55, -0.24, 0.35],
-        "size_xyz": [0.46, 0.20, 0.22],
-        "color_rgba": [0.85, 0.15, 0.12, 0.25],
     },
 ]
