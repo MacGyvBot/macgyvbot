@@ -34,6 +34,7 @@ from macgyvbot_interfaces.srv import SetGripper
 
 from macgyvbot_config.drawer import DRAWER_OBSERVATION_J6_DEG
 from macgyvbot_config.models import HAND_GRASP_SAM_CHECKPOINT_NAME, YOLO_MODEL_NAME
+from macgyvbot_config.pick import PICK_GRASP_YAW_OFFSET_DEG
 from macgyvbot_config.robot import GROUP_NAME, HOME_JOINTS, WRIST_JOINT_NAME
 from macgyvbot_config.timing import (
     CAMERA_LOOP_IDLE_SLEEP_SEC,
@@ -1457,12 +1458,15 @@ class TaskCoordinatorNode(Node):
             )
             return None
 
+        adjusted_yaw_deg = float(yaw_deg) + PICK_GRASP_YAW_OFFSET_DEG
         self.get_logger().info(
             "grasp detection binary crop PCA yaw applied: "
             f"target={target_label}, yaw={yaw_deg:.1f}deg, "
+            f"offset={PICK_GRASP_YAW_OFFSET_DEG:.1f}deg, "
+            f"adjusted_yaw={adjusted_yaw_deg:.1f}deg, "
             f"pixels={debug.get('num_pixels')}"
         )
-        return yaw_deg
+        return adjusted_yaw_deg
 
     def _generate_grasp_detection_mask_images_after_vlm_observe(self, target_label):
         if not self.frame_processor.has_camera_state():

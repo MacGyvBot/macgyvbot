@@ -4,21 +4,25 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
 from moveit.core.robot_state import RobotState
 
 from macgyvbot_config.drawer import (
     DRAWER_CLOSE_LIFT_OFFSET_M,
     DRAWER_GRIPPER_SETTLE_SEC,
+    DRAWER_HANDLE_PREAPPROACH_X_OFFSET_M,
     DRAWER_HANDLE_JOINT_DEGREES,
     DRAWER_JOINT_NAMES,
     DRAWER_OBSERVE_OFFSET_XYZ_M,
     DRAWER_OPEN_OFFSET_XYZ_M,
     TOOL_DRAWER_IDS,
 )
+from macgyvbot_config.robot import EE_LINK
 from macgyvbot_manipulation.robot_pose import (
     current_ee_orientation,
     get_ee_matrix,
     make_safe_pose,
+    orientation_from_transform,
 )
 
 
@@ -104,10 +108,10 @@ class DrawerMotionFlow:
             logger.error(f"drawer {drawer_id} opened pose가 없어 닫을 수 없습니다.")
             return False
 
-        if not self._move_by_offset(
-            opened["xyz"],
+        open_handle_xyz = self._open_handle_target_xyz(drawer_id, opened["xyz"])
+        if not self._move_to_handle_pose_with_preapproach(
+            open_handle_xyz,
             opened["ori"],
-            [0.0, 0.0, 0.0],
             f"drawer {drawer_id} return_to_open_handle",
             logger,
         ):
@@ -118,7 +122,7 @@ class DrawerMotionFlow:
 
         for label, offset in self._close_offsets(drawer_id):
             if not self._move_by_offset(
-                opened["xyz"],
+                open_handle_xyz,
                 opened["ori"],
                 offset,
                 f"drawer {drawer_id} {label}",
@@ -163,7 +167,45 @@ class DrawerMotionFlow:
         state_goal = RobotState(self.robot.get_robot_model())
         state_goal.joint_positions = joint_positions
         state_goal.update()
+        handle_transform = np.asarray(
+            state_goal.get_global_link_transform(EE_LINK),
+            dtype=float,
+        )
+        handle_xyz = self._xyz_from_pose(handle_transform)
+        handle_ori = orientation_from_transform(handle_transform)
+        if not self._move_to_handle_preapproach(
+            handle_xyz,
+            handle_ori,
+            f"drawer {drawer_id} handle preapproach",
+            logger,
+        ):
+            return False
         return self.motion.plan_and_execute(logger, state_goal=state_goal)
+
+    def _move_to_handle_pose_with_preapproach(self, target_xyz, ori, label, logger):
+        if not self._move_to_handle_preapproach(
+            target_xyz,
+            ori,
+            f"{label} preapproach",
+            logger,
+        ):
+            return False
+        return self._move_by_offset(
+            target_xyz,
+            ori,
+            [0.0, 0.0, 0.0],
+            label,
+            logger,
+        )
+
+    def _move_to_handle_preapproach(self, target_xyz, ori, label, logger):
+        return self._move_by_offset(
+            target_xyz,
+            ori,
+            [DRAWER_HANDLE_PREAPPROACH_X_OFFSET_M, 0.0, 0.0],
+            label,
+            logger,
+        )
 
     def _move_by_offset(self, base_xyz, ori, offset_xyz, label, logger):
         target_xyz = [
@@ -255,6 +297,13 @@ class DrawerMotionFlow:
             ("lift_before_close", lifted_offset),
             ("close_lifted", lifted_close_offset),
         ]
+
+    @staticmethod
+    def _open_handle_target_xyz(drawer_id, opened_xyz):
+        target_xyz = [float(value) for value in opened_xyz]
+        if drawer_id != 0:
+            target_xyz[2] -= DRAWER_CLOSE_LIFT_OFFSET_M
+        return target_xyz
 
     @staticmethod
     def _xyz_from_pose(pose):
