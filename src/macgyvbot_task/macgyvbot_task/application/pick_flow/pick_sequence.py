@@ -310,8 +310,8 @@ class PickSequenceRunner:
             context["plan"].target_y,
             context["plan"].travel_z,
             context["ori"],
-            "XY ?대룞 ?ㅽ뙣. Pick ?쒗??以묐떒",
-            "XY ?대룞 ?ㅽ뙣",
+            "XY 이동 실패. Pick 시퀀스를 중단합니다.",
+            "XY 이동 실패",
             "xy_move_failed",
         )
         if not ok:
@@ -321,7 +321,7 @@ class PickSequenceRunner:
             "observing_pick_target",
             tool_name=self.state.target_label,
             action="bring",
-            message=f"{self.state.target_label} VLM 愿李??꾩튂?먯꽌 SAM 異붿쟻???쒖옉?⑸땲??",
+            message=f"{self.state.target_label} VLM 관찰 위치에서 SAM 추적을 시작합니다.",
             command=self.state.current_command,
         )
         self._generate_grasp_detection_mask_images()
@@ -360,7 +360,7 @@ class PickSequenceRunner:
         log_error(log, "wrist rotation failed", step="wrist", event="fail")
         self.state._publish_robot_status(
             "failed",
-            message="J6 ?뚯쟾 ?ㅽ뙣",
+            message="J6 회전 실패",
             reason="wrist_rotation_failed",
             command=self.state.current_command,
         )
@@ -371,7 +371,7 @@ class PickSequenceRunner:
             "grasping",
             tool_name=self.state.target_label,
             action="bring",
-            message=f"{self.state.target_label} ?뚯?瑜??꾪빐 Z ?섍컯?⑸땲??",
+            message=f"{self.state.target_label} 파지를 위해 Z 하강합니다.",
             command=self.state.current_command,
         )
         if not plan.should_descend_to_grasp:
@@ -390,8 +390,8 @@ class PickSequenceRunner:
             plan.target_y,
             plan.grasp_z,
             ori,
-            "?뚯? ?믪씠 ?섍컯 ?ㅽ뙣. Pick ?쒗??以묐떒",
-            "?뚯? ?믪씠 ?섍컯 ?ㅽ뙣",
+            "파지 높이 하강 실패. Pick 시퀀스를 중단합니다.",
+            "파지 높이 하강 실패",
             "grasp_descent_failed",
         )
 
@@ -401,7 +401,7 @@ class PickSequenceRunner:
         if self.grasp.try_robot_grasp(log):
             self.state._publish_robot_status(
                 "grasp_success",
-                message="怨듦뎄 grasp???깃났?덉뒿?덈떎.",
+                message="공구 grasp에 성공했습니다.",
                 command=self.state.current_command,
             )
             if self.tool_hold_monitor is not None:
@@ -418,7 +418,7 @@ class PickSequenceRunner:
         log_error(log, "robot grasp failed", step="grasp", event="fail")
         self.state._publish_robot_status(
             "failed",
-            message="怨듦뎄 grasp???ㅽ뙣?덉뒿?덈떎.",
+            message="공구 grasp에 실패했습니다.",
             reason="robot_grasp_failed",
             command=self.state.current_command,
         )
@@ -436,7 +436,7 @@ class PickSequenceRunner:
             log_error(log, "pregrasp depth unavailable", step="pregrasp", event="fail")
             self.state._publish_robot_status(
                 "failed",
-                message="pre-grasp depth 痢≪젙???ㅽ뙣?덉뒿?덈떎.",
+                message="pre-grasp depth 측정에 실패했습니다.",
                 reason="pregrasp_depth_unavailable",
                 command=self.state.current_command,
             )
@@ -480,8 +480,8 @@ class PickSequenceRunner:
             plan.target_y,
             target_z,
             ori,
-            "pre-grasp 異붽? ?섍컯 ?ㅽ뙣. Pick ?쒗??以묐떒",
-            "pre-grasp 異붽? ?섍컯 ?ㅽ뙣",
+            "pre-grasp 추가 하강 실패. Pick 시퀀스를 중단합니다.",
+            "pre-grasp 추가 하강 실패",
             "pregrasp_descent_failed",
             min_z=redescend_min_z,
         )
@@ -498,7 +498,7 @@ class PickSequenceRunner:
         log_error(log, "tool mask lock failed", step="tool_mask_lock", event="fail")
         self.state._publish_robot_status(
             "failed",
-            message="怨듦뎄 mask lock???ㅽ뙣?덉뒿?덈떎.",
+            message="공구 mask lock에 실패했습니다.",
             reason="tool_mask_lock_failed",
             command=self.state.current_command,
         )
@@ -524,13 +524,13 @@ class PickSequenceRunner:
         self.state._publish_robot_status(
             status,
             message=(
-                "?ъ슜?????꾩튂 ?뺤씤 ?ㅽ뙣濡?怨듦뎄瑜??먮옒 ?꾩튂??諛섑솚?섍퀬 ?쒕엻???レ븯?듬땲??"
+                "사용자 위치 확인 실패로 공구를 원래 위치에 반환하고 서랍을 닫았습니다."
                 if returned and drawer_closed and home_ok
-                else "?ъ슜?????꾩튂 ?뺤씤 ?ㅽ뙣 ???쒕엻???レ븯吏留?Home 蹂듦????ㅽ뙣?덉뒿?덈떎."
+                else "사용자 위치 확인 실패 후 서랍은 닫았지만 Home 복귀는 실패했습니다."
                 if returned and drawer_closed
-                else "?ъ슜?????꾩튂 ?뺤씤 ?ㅽ뙣 ??怨듦뎄瑜?諛섑솚?덉?留??쒕엻 ?リ린???ㅽ뙣?덉뒿?덈떎."
+                else "사용자 위치 확인 실패 후 공구 반환은 했지만 서랍 닫기는 실패했습니다."
                 if returned
-                else "?ъ슜?????꾩튂 ?뺤씤 ?ㅽ뙣 ???먯쐞移?諛섑솚?먮룄 ?ㅽ뙣?덉뒿?덈떎."
+                else "사용자 위치 확인과 공구 반환 모두 실패했습니다."
             ),
             reason=(
                 "handoff_pose_unavailable"
@@ -550,7 +550,7 @@ class PickSequenceRunner:
         log_info(log, "wait for human grasp", step="human_grasp", event="start")
         self.state._publish_robot_status(
             "waiting_handoff",
-            message="?ъ슜???↔린 ?몄떇??湲곕떎由쎈땲??",
+            message="사용자 손 인식을 기다립니다.",
             command=self.state.current_command,
         )
         if self.handoff.wait_for_human_grasp(log):
@@ -569,13 +569,13 @@ class PickSequenceRunner:
         self.state._publish_robot_status(
             status,
             message=(
-                "?ъ슜???↔린 ?몄떇 ?ㅽ뙣濡?怨듦뎄瑜??먮옒 ?꾩튂??諛섑솚?섍퀬 ?쒕엻???レ븯?듬땲??"
+                "사용자 손 인식 실패로 공구를 원래 위치에 반환하고 서랍을 닫았습니다."
                 if returned and drawer_closed and home_ok
-                else "?ъ슜???↔린 ?몄떇 ?ㅽ뙣 ???쒕엻???レ븯吏留?Home 蹂듦????ㅽ뙣?덉뒿?덈떎."
+                else "사용자 손 인식 실패 후 서랍은 닫았지만 Home 복귀는 실패했습니다."
                 if returned and drawer_closed
-                else "?ъ슜???↔린 ?몄떇 ?ㅽ뙣 ??怨듦뎄瑜?諛섑솚?덉?留??쒕엻 ?リ린???ㅽ뙣?덉뒿?덈떎."
+                else "사용자 손 인식 실패 후 공구 반환은 했지만 서랍 닫기는 실패했습니다."
                 if returned
-                else "?ъ슜???↔린 ?몄떇 ?ㅽ뙣 ???먯쐞移?諛섑솚?먮룄 ?ㅽ뙣?덉뒿?덈떎."
+                else "사용자 손 인식과 공구 반환 모두 실패했습니다."
             ),
             reason=(
                 "handoff_timeout"
@@ -625,7 +625,7 @@ class PickSequenceRunner:
             "closing_drawer",
             tool_name=self.state.target_label,
             action="bring",
-            message=f"{self.state.target_label}媛 ?덈뜕 ?쒕엻???レ뒿?덈떎.",
+            message=f"{self.state.target_label}가 있던 서랍을 닫습니다.",
             command=self.state.current_command,
         )
         drawer_closed = self.drawer_flow.close_drawer(drawer_id, log)
@@ -661,7 +661,7 @@ class PickSequenceRunner:
             "closing_drawer",
             tool_name=self.state.target_label,
             action="bring",
-            message=f"{self.state.target_label}媛 ?덈뜕 ?쒕엻???レ뒿?덈떎.",
+            message=f"{self.state.target_label}가 있던 서랍을 닫습니다.",
             command=self.state.current_command,
         )
         return self.drawer_flow.close_drawer(drawer_id, log)
@@ -670,7 +670,7 @@ class PickSequenceRunner:
         log_info(self.state.logger(), "pick sequence done", step="done", event="done")
         self.state._publish_robot_status(
             "done",
-            message="怨듦뎄 ?꾨떖 ??Home 蹂듦?源뚯? ?꾨즺?섏뿀?듬땲??",
+            message="공구 전달 및 Home 복귀까지 완료했습니다.",
             command=self.state.current_command,
         )
         return True

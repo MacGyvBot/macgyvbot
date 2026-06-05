@@ -480,6 +480,7 @@ class OperatorUiNode(Node):
                 f'human_grasped_tool={msg.human_grasped_tool}, '
                 f'state={msg.state}'
             ),
+            ros=False,
         )
 
     def _tool_drop_cb(self, msg):
