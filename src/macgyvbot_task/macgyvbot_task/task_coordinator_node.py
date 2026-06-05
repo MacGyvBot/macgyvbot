@@ -323,15 +323,15 @@ class TaskCoordinatorNode(Node):
             self.get_logger(),
         )
 
-        self.pilz_params = PlanRequestParameters(self.robot)
-        self.pilz_params.planning_pipeline = "pilz_industrial_motion_planner"
-        self.pilz_params.planner_id = "PTP"
-        self.pilz_params.max_velocity_scaling_factor = 0.2
+        self.planning_params = PlanRequestParameters(self.robot)
+        self.planning_params.planning_pipeline = "ompl"
+        self.planning_params.planner_id = "RRTConnectkConfigDefault"
+        self.planning_params.max_velocity_scaling_factor = 0.1
 
         self.motion = MoveItController(
             self.robot,
             self.arm,
-            self.pilz_params,
+            self.planning_params,
             should_interrupt=self._motion_interrupted,
             node=self,
             drawer_collision_scene=self.drawer_collision_scene,
