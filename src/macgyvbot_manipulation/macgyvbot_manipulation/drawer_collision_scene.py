@@ -12,8 +12,11 @@ from std_msgs.msg import ColorRGBA
 
 from macgyvbot_config.drawer import (
     DRAWER_COLLISION_APPLY_SERVICE,
+    DRAWER_COLLISION_BOX_PROFILES,
     DRAWER_COLLISION_BOXES,
+    DRAWER_COLLISION_DEFAULT_PROFILE,
     DRAWER_COLLISION_SCENE_TOPICS,
+    DRAWER_COLLISION_STEP_PROFILES,
 )
 
 
@@ -25,13 +28,49 @@ class DrawerCollisionSceneManager:
         node,
         moveit_robot=None,
         boxes=None,
+        profiles=None,
+        profile_by_task_step=None,
+        default_profile=DRAWER_COLLISION_DEFAULT_PROFILE,
         planning_scene_topics=None,
         apply_service_name=DRAWER_COLLISION_APPLY_SERVICE,
     ):
         self.node = node
         self.moveit_robot = moveit_robot
-        self.boxes = list(boxes if boxes is not None else DRAWER_COLLISION_BOXES)
+        self.default_profile = str(default_profile)
+        if profiles is None:
+            profiles = (
+                {self.default_profile: list(boxes)}
+                if boxes is not None
+                else DRAWER_COLLISION_BOX_PROFILES
+            )
+        self.profiles = {
+            str(profile_name): list(profile_boxes)
+            for profile_name, profile_boxes in profiles.items()
+        }
+        if self.default_profile not in self.profiles and self.profiles:
+            self.default_profile = next(iter(self.profiles))
+        self.boxes = list(
+            self.profiles.get(self.default_profile, DRAWER_COLLISION_BOXES)
+        )
+        self.profile_by_task_step = {
+            str(step_name): str(profile_name)
+            for step_name, profile_name in (
+                profile_by_task_step or DRAWER_COLLISION_STEP_PROFILES
+            ).items()
+        }
+        self._known_object_ids = {
+            str(box["id"])
+            for profile_boxes in self.profiles.values()
+            for box in profile_boxes
+        }
+        self._object_frame_ids = {
+            str(box["id"]): str(box["frame_id"])
+            for profile_boxes in self.profiles.values()
+            for box in profile_boxes
+        }
         self._applied_to_moveit_py = False
+        self._applied_profile = None
+        self._applied_object_ids = set()
         topics = planning_scene_topics or DRAWER_COLLISION_SCENE_TOPICS
         self._scene_publishers = [
             node.create_publisher(PlanningScene, topic, 10)
@@ -43,18 +82,29 @@ class DrawerCollisionSceneManager:
         )
         self._apply_service_name = apply_service_name
 
-    def apply(self, logger=None, publish=True, request_service=True):
+    def apply(self, logger=None, publish=True, request_service=True, profile=None):
         """Apply drawer boxes locally and publish a scene diff for RViz/move_group."""
         log = logger or self.node.get_logger()
-        if not self.boxes:
-            _warn(log, "drawer collision boxes are empty; planning scene unchanged")
+        profile_name = self._normalize_profile(profile, log)
+        boxes = self._boxes_for_profile(profile_name)
+        if not boxes:
+            _warn(
+                log,
+                "drawer collision boxes are empty; "
+                f"profile={profile_name}, planning scene unchanged",
+            )
             return False
 
-        collision_objects, colors = self._build_objects()
-        scene = self._build_scene_diff(collision_objects, colors)
+        collision_objects, colors, active_object_ids = self._build_objects(boxes)
+        removal_objects = self._build_removal_objects(active_object_ids)
+        scene_objects = collision_objects + removal_objects
+        scene = self._build_scene_diff(scene_objects, colors)
 
-        direct_ok = self._apply_to_moveit_py(collision_objects, colors, log)
+        direct_ok = self._apply_to_moveit_py(scene_objects, colors, log)
         self._applied_to_moveit_py = bool(direct_ok)
+        if direct_ok:
+            self._applied_profile = profile_name
+            self._applied_object_ids = set(active_object_ids)
         if publish:
             self._publish_scene_diff(scene, log)
         service_requested = False
@@ -64,16 +114,49 @@ class DrawerCollisionSceneManager:
         _info(
             log,
             "drawer collision scene update requested: "
-            f"objects={len(collision_objects)}, "
+            f"profile={profile_name}, "
+            f"active_objects={len(collision_objects)}, "
+            f"removed_objects={len(removal_objects)}, "
             f"moveit_py={direct_ok}, "
             f"published={publish}, "
             f"apply_service={service_requested}",
         )
         return direct_ok or service_requested
 
-    def is_ready(self):
+    def is_ready(self, profile=None):
         """Return whether drawer boxes were applied to the local MoveItPy scene."""
-        return bool(self.boxes) and self._applied_to_moveit_py
+        profile_name = self._normalize_profile(profile)
+        active_object_ids = self._object_ids_for_profile(profile_name)
+        return (
+            bool(active_object_ids)
+            and self._applied_to_moveit_py
+            and self._applied_profile == profile_name
+            and self._applied_object_ids == active_object_ids
+        )
+
+    def profile_for_task_step(self, task_step_name):
+        if task_step_name is None:
+            return self.default_profile
+        return self.profile_by_task_step.get(
+            str(task_step_name),
+            self.default_profile,
+        )
+
+    def ensure_ready_for_task_step(
+        self,
+        task_step_name,
+        logger=None,
+        attempts=1,
+        retry_delay_sec=0.0,
+        refresh=True,
+    ):
+        return self.ensure_ready(
+            logger=logger,
+            attempts=attempts,
+            retry_delay_sec=retry_delay_sec,
+            refresh=refresh,
+            profile=self.profile_for_task_step(task_step_name),
+        )
 
     def ensure_ready(
         self,
@@ -81,35 +164,89 @@ class DrawerCollisionSceneManager:
         attempts=1,
         retry_delay_sec=0.0,
         refresh=True,
+        profile=None,
     ):
         """Ensure drawer boxes are present before a motion plan is requested."""
         log = logger or self.node.get_logger()
-        if not self.boxes:
-            _warn(log, "drawer collision boxes are empty; motion is not safe")
+        profile_name = self._normalize_profile(profile, log)
+        boxes = self._boxes_for_profile(profile_name)
+        if not boxes:
+            _warn(
+                log,
+                "drawer collision boxes are empty; "
+                f"profile={profile_name}, motion is not safe",
+            )
             return False
-        if not refresh and self.is_ready():
+        if not refresh and self.is_ready(profile_name):
             return True
 
         attempts = max(1, int(attempts))
+        sync_external_scene = self._needs_external_scene_sync(profile_name)
         for attempt_index in range(attempts):
-            self.apply(log, publish=False, request_service=False)
-            if self.is_ready():
+            sync_this_attempt = sync_external_scene and attempt_index == 0
+            self.apply(
+                log,
+                publish=sync_this_attempt,
+                request_service=sync_this_attempt,
+                profile=profile_name,
+            )
+            if self.is_ready(profile_name):
                 return True
             if attempt_index + 1 < attempts and retry_delay_sec > 0.0:
                 time.sleep(float(retry_delay_sec))
 
-        _warn(log, "drawer collision scene is not ready; planning is blocked")
+        _warn(
+            log,
+            "drawer collision scene is not ready; "
+            f"profile={profile_name}, planning is blocked",
+        )
         return False
 
-    def _build_objects(self):
+    def _normalize_profile(self, profile, logger=None):
+        profile_name = str(profile or self.default_profile)
+        if profile_name in self.profiles:
+            return profile_name
+
+        _warn(
+            logger,
+            f"unknown drawer collision profile={profile_name}; "
+            f"using default profile={self.default_profile}",
+        )
+        return self.default_profile
+
+    def _boxes_for_profile(self, profile):
+        return list(self.profiles.get(profile, []))
+
+    def _object_ids_for_profile(self, profile):
+        return {str(box["id"]) for box in self._boxes_for_profile(profile)}
+
+    def _needs_external_scene_sync(self, profile):
+        return (
+            self._applied_profile != profile
+            or self._applied_object_ids != self._object_ids_for_profile(profile)
+        )
+
+    def _build_objects(self, boxes):
         collision_objects = []
         colors = []
-        for box in self.boxes:
+        object_ids = set()
+        for box in boxes:
             collision_objects.append(_make_box_collision_object(box))
+            object_ids.add(str(box["id"]))
             color = _make_object_color(box)
             if color is not None:
                 colors.append(color)
-        return collision_objects, colors
+        return collision_objects, colors, object_ids
+
+    def _build_removal_objects(self, active_object_ids):
+        inactive_object_ids = self._known_object_ids - set(active_object_ids)
+        return [
+            _make_remove_collision_object(
+                object_id,
+                self._object_frame_ids.get(object_id, ""),
+            )
+            for object_id in sorted(inactive_object_ids)
+        ]
 
     @staticmethod
     def _build_scene_diff(collision_objects, colors):
@@ -211,6 +348,14 @@ def _make_box_collision_object(box):
     collision_object.primitives.append(primitive)
     collision_object.primitive_poses.append(pose)
     collision_object.operation = CollisionObject.ADD
+    return collision_object
+
+
+def _make_remove_collision_object(object_id, frame_id):
+    collision_object = CollisionObject()
+    collision_object.id = str(object_id)
+    collision_object.header.frame_id = str(frame_id)
+    collision_object.operation = CollisionObject.REMOVE
     return collision_object
 
 

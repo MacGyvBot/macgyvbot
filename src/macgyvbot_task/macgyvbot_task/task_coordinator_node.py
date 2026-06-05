@@ -429,6 +429,11 @@ class TaskCoordinatorNode(Node):
     def _apply_drawer_collision_scene(self):
         return self.drawer_collision_scene.apply(self.get_logger())
 
+    def _current_task_step_name(self):
+        with self._queue_lock:
+            step = self._current_step
+            return step.name if step is not None else None
+
     def _ensure_collision_planning_scene_ready(self, logger=None):
         log = logger or self.get_logger()
         if not self._ensure_gripper_self_collision_acm(
@@ -442,8 +447,9 @@ class TaskCoordinatorNode(Node):
         if not self.enable_drawer_collision_scene:
             return True
         log = logger or self.get_logger()
-        return self.drawer_collision_scene.ensure_ready(
-            log,
+        return self.drawer_collision_scene.ensure_ready_for_task_step(
+            self._current_task_step_name(),
+            logger=log,
             attempts=2,
             retry_delay_sec=0.1,
             refresh=True,
