@@ -23,7 +23,11 @@ from macgyvbot_manipulation.handover_targeting import (
     move_to_observation_pose,
     start_async_observation_search,
 )
-from macgyvbot_manipulation.robot_pose import get_ee_matrix, make_safe_pose
+from macgyvbot_manipulation.robot_pose import (
+    current_ee_orientation,
+    get_ee_matrix,
+    make_safe_pose,
+)
 from macgyvbot_manipulation.robot_safezone import SAFE_Z_MIN
 from macgyvbot_task.application.drawer_store_motion import (
     drawer_store_clearance_z,
@@ -179,7 +183,7 @@ class PickHandoffFlow:
 
         return True
 
-    def move_to_handoff_pose(self, ori, logger):
+    def move_to_handoff_pose(self, logger):
         if self.interrupted():
             logger.info(
                 "사용자 전달 이동 시작 전 "
@@ -189,6 +193,7 @@ class PickHandoffFlow:
 
         if not self._move_to_observation_pose(logger):
             return None, None, None
+        handoff_ori = current_ee_orientation(self.robot)
 
         candidate = self._observe_handoff_candidate(logger)
         if candidate is None:
@@ -197,7 +202,7 @@ class PickHandoffFlow:
         if not self._validate_candidate(candidate, logger):
             return None, None, None
 
-        return self._move_to_candidate(candidate, ori, logger)
+        return self._move_to_candidate(candidate, handoff_ori, logger)
 
     def _move_to_observation_pose(self, logger):
         ok, start_pose = move_to_observation_pose(self.motion, self.robot, logger)
