@@ -13,6 +13,4 @@ class PickMotionPlan:
     target_y: float
     drawer_wall_clearance_z: float
     grasp_z: float
-    current_x: float
-    current_y: float
     should_descend_to_grasp: bool

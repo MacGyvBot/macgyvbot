@@ -284,9 +284,6 @@ class DrawerMotionFlow:
     @staticmethod
     def _close_offsets(drawer_id):
         close_offset = [-value for value in DRAWER_OPEN_OFFSET_XYZ_M]
-        if drawer_id == 0:
-            return [("close", close_offset)]
-
         lifted_offset = [0.0, 0.0, DRAWER_CLOSE_LIFT_OFFSET_M]
         lifted_close_offset = [
             close_offset[0],
@@ -301,8 +298,7 @@ class DrawerMotionFlow:
     @staticmethod
     def _open_handle_target_xyz(drawer_id, opened_xyz):
         target_xyz = [float(value) for value in opened_xyz]
-        if drawer_id != 0:
-            target_xyz[2] -= DRAWER_CLOSE_LIFT_OFFSET_M
+        target_xyz[2] -= DRAWER_CLOSE_LIFT_OFFSET_M
         return target_xyz
 
     @staticmethod

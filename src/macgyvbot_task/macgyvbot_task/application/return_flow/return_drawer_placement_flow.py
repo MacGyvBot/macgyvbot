@@ -249,8 +249,6 @@ class ReturnDrawerPlacementFlow:
             safe_z_min,
             float(marker_z) + DRAWER_STORE_MARKER_RELEASE_Z_OFFSET_M,
         )
-        if not self._rotate_wrist_for_drawer_place(tool_name, command, logger):
-            return False
         ori = current_ee_orientation(self.robot)
         logger.info(
             "서랍 marker place 높이 계산: "
@@ -277,6 +275,10 @@ class ReturnDrawerPlacementFlow:
             "서랍 marker 접근 전 clearance 높이 확보에 실패했습니다.",
         ):
             return False
+
+        if not self._rotate_wrist_for_drawer_place(tool_name, command, logger):
+            return False
+        ori = current_ee_orientation(self.robot)
 
         if not self._move_to_pose(
             marker_x,

@@ -99,20 +99,7 @@ class PickSequenceRunner:
         steps = [
             TaskStep("pick/open_gripper", self._open_gripper),
             TaskStep(
-                "pick/drawer_wall_clearance",
-                lambda: self._move_to_pose(
-                    "1단계: 서랍 벽 회피 높이 확보",
-                    context["plan"].current_x,
-                    context["plan"].current_y,
-                    context["plan"].drawer_wall_clearance_z,
-                    context["ori"],
-                    "서랍 벽 회피 높이 확보 실패. Pick 시퀀스 중단",
-                    "서랍 벽 회피 높이 확보 실패",
-                    "drawer_wall_clearance_plan_failed",
-                ),
-            ),
-            TaskStep(
-                "pick/xy_move",
+                "pick/observe_offset_move",
                 lambda: self._move_to_vlm_observe_pose(context),
             ),
             TaskStep(
@@ -260,14 +247,14 @@ class PickSequenceRunner:
 
     def _move_to_vlm_observe_pose(self, context):
         ok = self._move_to_pose(
-            "2단계: 안전 높이에서 XY 수평 이동",
+            "1단계: 서랍 내부 관찰 offset 위치로 이동",
             context["plan"].target_x - TOOL_OBSERVE_X_BACKOFF_M,
             context["plan"].target_y,
             context["plan"].drawer_wall_clearance_z,
             context["ori"],
-            "XY 이동 실패. Pick 시퀀스 중단",
-            "XY 이동 실패",
-            "xy_move_failed",
+            "서랍 내부 관찰 offset 이동 실패. Pick 시퀀스 중단",
+            "서랍 내부 관찰 offset 이동 실패",
+            "observe_offset_move_failed",
         )
         if not ok:
             return False

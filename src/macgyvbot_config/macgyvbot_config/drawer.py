@@ -49,7 +49,7 @@ DRAWER_HANDLE_PREAPPROACH_X_OFFSET_M = -0.02
 DRAWER_GRIPPER_SETTLE_SEC = 0.8
 # Drawer floor heights are modeled as offsets above the global minimum safe Z.
 DRAWER_1_SAFE_Z_OFFSET_M = 0.087
-DRAWER_2_SAFE_Z_OFFSET_M = DRAWER_1_SAFE_Z_OFFSET_M * 2.0
+DRAWER_2_SAFE_Z_OFFSET_M = 0.169
 # Clearance above each drawer floor used to cross drawer walls or lips.
 DRAWER_WALL_CLEARANCE_Z_OFFSET_M = 0.10
 DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M = [-0.15, 0.0, 0.0]
