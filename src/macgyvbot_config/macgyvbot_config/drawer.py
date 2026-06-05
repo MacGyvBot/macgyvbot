@@ -96,5 +96,5 @@ DRAWER_COLLISION_SCENE_KEY_PROFILES = {
     "drawer/approach_to_close": DRAWER_COLLISION_PROFILE_DRAWER_OPENED,
 
     # on return
-
+    # considered not needed. but it is ready to be applied.
 }

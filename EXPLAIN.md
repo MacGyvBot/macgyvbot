@@ -52,10 +52,21 @@ ROS 패키지가 아니라 colcon workspace root이며, 실행 entrypoint는
     state 기준 IK seed sampling을 수행합니다. 후보 IK 해는 현재 joint와 가장
     가까운 동치 각도로 보정하고, joint delta가 큰 후보는 planning 전에
     거부합니다.
+  - 모든 로봇팔 motion은 `MoveItController.plan_and_execute()`를 공통 관문으로
+    지나며, 이 함수가 drawer collision scene과 RG2 self-collision ACM 준비
+    상태를 planning 직전에 확인합니다.
+  - `drawer_collision_scene.py`는 MoveIt planning scene에 drawer keep-out
+    collision object를 추가하고, motion key에 따라 `drawer_only` 또는
+    `drawer_opened` profile을 선택합니다.
+  - `gripper_collision_scene.py`는 RG2 내부 링크끼리만 허용할 self-collision
+    ACM patch를 적용합니다. 이 ACM은 drawer 같은 외부 collision object와의
+    충돌을 허용하지 않습니다.
 
 - `src/macgyvbot_config`
   - ROS topic 이름, robot frame/link, model filename, pick/return/handoff/grasp
     threshold, timing, UI, VLM 설정 등 Python runtime constant를 소유합니다.
+  - `drawer.py`는 drawer handle pose, drawer/tool mapping, drawer collision
+    box 좌표, collision profile, motion key별 opened-scene 매핑을 소유합니다.
 
 - `src/macgyvbot_domain`
   - package 간 공유되는 in-process Python dataclass를 소유합니다.
@@ -131,6 +142,33 @@ macgyvbot_perception.hand_grasp_detection_node
   여러 IK seed를 시도한 뒤, `q_curr` 기준 가장 가까운 joint goal을 선택합니다.
   선택된 IK 후보의 joint별 `raw`/`short` delta를 로그로 남기며, 최대 joint delta가
   안전 한계를 넘으면 기존 pose fallback으로 우회하지 않고 planning을 중단합니다.
+- task coordinator는 MoveItPy `PlanRequestParameters`를 전역 OMPL
+  `RRTConnectkConfigDefault`로 설정합니다. 이전 Pilz PTP처럼 단일 점대점
+  trajectory를 만든 뒤 collision validation에서 실패하는 대신, drawer collision
+  object를 고려한 sampling 기반 경로 탐색을 시도합니다.
+- `moveit_py.yaml`에는 `ompl`, `pilz_industrial_motion_planner`, `chomp`,
+  `ompl_rrt_star` pipeline 목록과 profile별 request parameter가 정의되어 있습니다.
+  Python runtime에서 실제로 사용하는 기본값은 `task_coordinator_node.py`의
+  `self.planning_params`입니다.
+- drawer collision scene은 항상 기본 `drawer_only` profile에서 시작합니다.
+  `MoveItController.plan_and_execute(..., collision_scene_key=...)`가 호출될 때
+  `DrawerCollisionSceneManager`는 key를
+  `macgyvbot_config.drawer.DRAWER_COLLISION_SCENE_KEY_PROFILES`에서 조회합니다.
+  등록되지 않은 key는 기본 `drawer_only`로 처리되고, 등록된 key만 열린 서랍
+  boundary까지 포함하는 `drawer_opened`로 처리됩니다.
+- 현재 opened profile은 pick handoff의 사용자 이동과 서랍 닫기 접근처럼 열린
+  서랍을 반드시 피해야 하는 motion에만 최소 등록합니다. pick fallback으로 공구를
+  다시 서랍에 넣는 경로와 return 초기 handoff/임시 배치 경로는 drawer-only를
+  기본으로 둡니다.
+- drawer scene manager는 같은 profile이 반복되는 planning에서는 MoveItPy local
+  scene을 refresh하고, profile 또는 object id가 바뀔 때만 RViz/move_group 쪽 topic
+  publish와 `/apply_planning_scene` service update를 요청합니다.
+- `/apply_planning_scene` service가 실패해도 local MoveItPy planning scene에 object
+  적용이 성공하면 task node 내부 planning은 계속 진행할 수 있습니다. RViz 표시와
+  외부 planning scene 동기화가 필요한 경우 로그의 `apply_service` 결과를 확인합니다.
+- drawer collision object가 목표 pose 자체 또는 손잡이 접촉 공간을 덮으면 OMPL도
+  경로를 만들 수 없습니다. 이런 경우에는 key를 더 세분화하거나 drawer collision
+  geometry를 손잡이 접근 corridor와 겹치지 않게 조정해야 합니다.
 
 ## Assets
 
