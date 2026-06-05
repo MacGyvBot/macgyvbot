@@ -1,4 +1,4 @@
-"""Pick target planning helpers."""
+﻿"""Pick target planning helpers."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from macgyvbot_config.pick import (
 from macgyvbot_manipulation.robot_pose import get_ee_matrix
 from macgyvbot_manipulation.robot_safezone import SAFE_Z_MIN
 from macgyvbot_domain.pick_models import PickMotionPlan
+from macgyvbot_task.application.logging_utils import log_warn
 
 
 class PickTargetPlanner:
@@ -33,25 +34,35 @@ class PickTargetPlanner:
         travel_z = SAFE_Z
 
         if approach_z < grasp_z:
-            logger.warn(
-                f"계산된 approach_z({approach_z:.3f})가 "
-                f"grasp_z({grasp_z:.3f})보다 낮아 grasp_z로 맞춥니다."
+            log_warn(
+                logger,
+                "approach z clamped to grasp z",
+                step="plan",
+                event="clamp",
+                approach_z=approach_z,
+                grasp_z=grasp_z,
             )
             approach_z = grasp_z
 
         if grasp_z < safe_z_min:
-            logger.warn(
-                f"계산된 grasp_z({grasp_z:.3f})가 "
-                f"safe_z_min({safe_z_min:.3f})보다 낮아 "
-                "safe_z_min으로 맞춥니다."
+            log_warn(
+                logger,
+                "grasp z clamped to safe minimum",
+                step="plan",
+                event="clamp",
+                grasp_z=grasp_z,
+                safe_z_min=safe_z_min,
             )
             grasp_z = safe_z_min
 
         if approach_z < safe_z_min:
-            logger.warn(
-                f"계산된 approach_z({approach_z:.3f})가 "
-                f"safe_z_min({safe_z_min:.3f})보다 낮아 "
-                "safe_z_min으로 맞춥니다."
+            log_warn(
+                logger,
+                "approach z clamped to safe minimum",
+                step="plan",
+                event="clamp",
+                approach_z=approach_z,
+                safe_z_min=safe_z_min,
             )
             approach_z = safe_z_min
 

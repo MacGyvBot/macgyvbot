@@ -1,6 +1,8 @@
-"""Status reporting for return workflow."""
+﻿"""Status reporting for return workflow."""
 
 from __future__ import annotations
+
+from macgyvbot_task.application.logging_utils import log_error
 
 
 class ReturnStatusReporter:
@@ -27,7 +29,15 @@ class ReturnStatusReporter:
         publish_payload(payload)
 
     def fail(self, tool_name, message, reason, command, logger):
-        logger.error(message)
+        log_error(
+            logger,
+            "return flow failed",
+            step="return",
+            event="fail",
+            tool=tool_name,
+            reason=reason,
+            detail=message,
+        )
         self.publish(
             "failed",
             tool_name,
