@@ -171,6 +171,7 @@ class PickSequenceRunner:
                 lambda: self._wait_human_grasp(context["plan"], context),
             ),
             TaskStep("pick/release_to_human", self._release_to_human),
+            TaskStep("pick/home_before_close_drawer", self._home_before_close_drawer),
             TaskStep(
                 "pick/close_drawer",
                 lambda: self._close_drawer_after_handoff(context),
@@ -597,8 +598,12 @@ class PickSequenceRunner:
         cooperative_wait(0.8)
         return True
 
+    def _home_before_close_drawer(self):
+        self.state.logger().info("11단계: 서랍 닫기 전 Home 위치로 이동")
+        return self.handoff.move_home_after_handoff(self.state.logger())
+
     def _home_after_handoff(self):
-        self.state.logger().info("11단계: 전달 후 Home 위치로 복귀")
+        self.state.logger().info("12단계: 서랍 닫은 후 Home 위치로 복귀")
         return self.handoff.move_home_after_handoff(self.state.logger())
 
     def _close_drawer_after_handoff(self, context):
