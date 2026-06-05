@@ -33,6 +33,10 @@ from macgyvbot_interfaces.msg import (
 from macgyvbot_interfaces.srv import SetGripper
 
 from macgyvbot_config.drawer import DRAWER_OBSERVATION_J6_DEG
+from macgyvbot_config.structured_logging import (
+    format_structured_log,
+    translate_log_message,
+)
 from macgyvbot_config.models import HAND_GRASP_SAM_CHECKPOINT_NAME, YOLO_MODEL_NAME
 from macgyvbot_config.robot import GROUP_NAME, HOME_JOINTS, WRIST_JOINT_NAME
 from macgyvbot_config.timing import (
@@ -254,38 +258,21 @@ class PipelineLogger:
 
 def _format_pipeline_log(*, svc, pipe, step, event, msg="", **fields):
     msg = _compact_legacy_message(msg, has_fields=bool(fields))
-    values = {
-        "svc": svc,
-        "pipe": pipe,
-        "step": step,
-        "event": event,
-        "msg": msg,
-    }
-    values.update(fields)
-    return " ".join(
-        f"{key}={_format_log_value(value)}"
-        for key, value in values.items()
-        if value is not None and value != ""
+    return format_structured_log(
+        svc=svc,
+        pipe=pipe,
+        step=step,
+        event=event,
+        msg=msg,
+        **fields,
     )
 
 
 def _compact_legacy_message(message, *, has_fields):
     text = str(message or "")
     if has_fields or text.isascii():
-        return text
+        return translate_log_message(text)
     return "legacy flow message"
-
-
-def _format_log_value(value):
-    text = " ".join(str(value or "").replace("\r", " ").replace("\n", " ").split())
-    if not text:
-        return '""'
-    if len(text) > 240:
-        text = text[:237] + "..."
-    if any(char.isspace() for char in text) or '"' in text:
-        text = text.replace("\\", "\\\\").replace('"', '\\"')
-        return f'"{text}"'
-    return text
 
 
 class TaskCoordinatorNode(Node):

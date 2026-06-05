@@ -16,6 +16,9 @@ from macgyvbot_config.hand_grasp import (
     HAND_GRASP_LOCK_ON_STATUS,
     HAND_GRASP_ML_CONFIDENCE,
 )
+from macgyvbot_config.structured_logging import (
+    format_structured_log,
+)
 from macgyvbot_config.models import (
     HAND_GRASP_MODEL_NAME,
     HAND_GRASP_SAM_CHECKPOINT_NAME,
@@ -70,33 +73,15 @@ from macgyvbot_perception.hand_tool_grasp.visualization import (
     draw_return_overlay,
 )
 
-
 def _format_pipeline_log(*, svc, pipe, step, event, msg="", **fields):
-    values = {
-        "svc": svc,
-        "pipe": pipe,
-        "step": step,
-        "event": event,
-        "msg": msg,
-    }
-    values.update(fields)
-    return " ".join(
-        f"{key}={_format_log_value(value)}"
-        for key, value in values.items()
-        if value is not None and value != ""
+    return format_structured_log(
+        svc=svc,
+        pipe=pipe,
+        step=step,
+        event=event,
+        msg=msg,
+        **fields,
     )
-
-
-def _format_log_value(value):
-    if isinstance(value, str):
-        if value == "" or value.replace("_", "").replace("-", "").isalnum():
-            return value
-        return '"' + value.replace('"', '\\"') + '"'
-    if isinstance(value, float):
-        return f"{value:.3f}"
-    if isinstance(value, (list, tuple, set)):
-        return "[" + ",".join(_format_log_value(item) for item in value) + "]"
-    return str(value)
 
 
 class _StructuredLoggerAdapter:

@@ -11,30 +11,18 @@ from macgyvbot_config.topics import (
     TASK_REQUEST_TOPIC,
     TOOL_COMMAND_TOPIC,
 )
+from macgyvbot_config.structured_logging import format_structured_log
 from macgyvbot_interfaces.msg import RobotTaskStatus, TaskRequest, ToolCommand
 from macgyvbot_task.application import RobotStatusPublisher, ToolCommandController
 
-
-def _format_log_value(value):
-    text = str(value)
-    if text == "" or text.replace("_", "").replace("-", "").replace("/", "").isalnum():
-        return text
-    return '"' + text.replace('"', '\\"') + '"'
-
-
 def _format_router_log(message, *, step="log", event="status", **fields):
-    values = {
-        "svc": "task",
-        "pipe": "router",
-        "step": step,
-        "event": event,
-        "msg": message,
-    }
-    values.update(fields)
-    return " ".join(
-        f"{key}={_format_log_value(value)}"
-        for key, value in values.items()
-        if value is not None and value != ""
+    return format_structured_log(
+        svc="task",
+        pipe="router",
+        step=step,
+        event=event,
+        msg=message,
+        **fields,
     )
 
 

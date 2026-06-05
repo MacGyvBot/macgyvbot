@@ -19,6 +19,7 @@ from macgyvbot_config.topics import (
     TASK_CONTROL_TOPIC,
     TOOL_COMMAND_TOPIC,
 )
+from macgyvbot_config.structured_logging import format_structured_log
 from macgyvbot_interfaces.msg import (
     CommandFeedback,
     CommandShutdown,
@@ -28,27 +29,14 @@ from macgyvbot_interfaces.msg import (
     ToolCommand,
 )
 
-
-def _format_log_value(value):
-    text = str(value)
-    if text == "" or text.replace("_", "").replace("-", "").replace("/", "").isalnum():
-        return text
-    return '"' + text.replace('"', '\\"') + '"'
-
-
 def _format_command_log(message, *, step="log", event="status", **fields):
-    values = {
-        "svc": "command",
-        "pipe": "input",
-        "step": step,
-        "event": event,
-        "msg": message,
-    }
-    values.update(fields)
-    return " ".join(
-        f"{key}={_format_log_value(value)}"
-        for key, value in values.items()
-        if value is not None and value != ""
+    return format_structured_log(
+        svc="command",
+        pipe="input",
+        step=step,
+        event=event,
+        msg=message,
+        **fields,
     )
 
 
@@ -76,8 +64,6 @@ class _StructuredLoggerAdapter:
         text = str(message or "")
         if text.startswith("svc="):
             return text
-        if not text.isascii():
-            return _format_command_log("legacy command log")
         return _format_command_log(text)
 
 

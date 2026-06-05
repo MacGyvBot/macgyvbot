@@ -24,6 +24,7 @@ from macgyvbot_config.topics import (
     TOOL_DROP_TOPIC,
     TOOL_COMMAND_TOPIC,
 )
+from macgyvbot_config.structured_logging import format_structured_log
 from macgyvbot_interfaces.msg import (
     CommandFeedback,
     CommandShutdown,
@@ -46,22 +47,17 @@ from macgyvbot_ui.voice_command_window import (
     VoiceCommandGuiWindow,
 )
 
-
 def _format_operator_ros_log(message):
     text = str(message or "").strip()
     if not text or text.startswith("svc="):
         return text
-    return (
-        "svc=ui pipe=operator step=log event=status "
-        f"msg={_format_log_value(text)}"
+    return format_structured_log(
+        svc="ui",
+        pipe="operator",
+        step="log",
+        event="status",
+        msg=text,
     )
-
-
-def _format_log_value(value):
-    text = str(value)
-    if text == "" or text.replace("_", "").replace("-", "").replace("/", "").isalnum():
-        return text
-    return '"' + text.replace('"', '\\"') + '"'
 
 
 class _StructuredLoggerAdapter:
