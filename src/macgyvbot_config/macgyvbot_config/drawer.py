@@ -48,7 +48,8 @@ DRAWER_CLOSE_LIFT_OFFSET_M = 0.01
 DRAWER_OBSERVATION_J6_DEG = 0.0
 
 # Drawer collision boundary in the robot base frame. The measured bottom
-# rectangle is (262,148,0), (439,148,0), (439,398,0), (262,398,0) in mm.
+# rectangle is (0.4731,0.1489,0), (0.4731,-0.0225,0),
+# (0.7131,-0.0225,0), (0.7131,0.1489,0) in meters.
 DRAWER_COLLISION_FRAME_ID = "base_link"
 DRAWER_COLLISION_APPLY_SERVICE = "/apply_planning_scene"
 DRAWER_COLLISION_SCENE_TOPICS = [
@@ -59,8 +60,8 @@ DRAWER_COLLISION_BOXES = [
     {
         "id": "drawer_body_boundary",
         "frame_id": DRAWER_COLLISION_FRAME_ID,
-        "center_xyz": [0.3505, 0.2730, 0.1265],
-        "size_xyz": [0.1770, 0.2500, 0.2530],
+        "center_xyz": [0.5931, 0.0632, 0.1265],
+        "size_xyz": [0.2400, 0.1714, 0.2530],
         "color_rgba": [0.12, 0.45, 0.85, 0.35],
     },
 ]
