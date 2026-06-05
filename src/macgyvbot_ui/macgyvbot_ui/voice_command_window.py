@@ -151,6 +151,7 @@ else:
                 self._gripper_slider.minimum(),
                 self._gripper_slider.maximum(),
             )
+            self._gripper_width_input.setButtonSymbols(QSpinBox.NoButtons)
             self._gripper_width_input.setSuffix(' mm')
             self._gripper_width_input.setValue(self._gripper_slider.value())
             self._gripper_width_input.valueChanged.connect(
