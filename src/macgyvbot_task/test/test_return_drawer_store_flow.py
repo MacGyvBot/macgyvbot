@@ -133,7 +133,13 @@ class FakeMotion:
         self.targets = []
         self.min_z_values = []
 
-    def plan_and_execute(self, _logger, pose_goal, min_z=None):
+    def plan_and_execute(
+        self,
+        _logger,
+        pose_goal,
+        min_z=None,
+        collision_scene_key=None,
+    ):
         self.targets.append(pose_goal)
         self.min_z_values.append(min_z)
         return True

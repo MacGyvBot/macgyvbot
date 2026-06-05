@@ -16,7 +16,7 @@ from macgyvbot_config.drawer import (
     DRAWER_COLLISION_BOXES,
     DRAWER_COLLISION_DEFAULT_PROFILE,
     DRAWER_COLLISION_SCENE_TOPICS,
-    DRAWER_COLLISION_STEP_PROFILES,
+    DRAWER_COLLISION_SCENE_KEY_PROFILES,
 )
 
 
@@ -29,7 +29,7 @@ class DrawerCollisionSceneManager:
         moveit_robot=None,
         boxes=None,
         profiles=None,
-        profile_by_task_step=None,
+        profile_by_scene_key=None,
         default_profile=DRAWER_COLLISION_DEFAULT_PROFILE,
         planning_scene_topics=None,
         apply_service_name=DRAWER_COLLISION_APPLY_SERVICE,
@@ -52,10 +52,10 @@ class DrawerCollisionSceneManager:
         self.boxes = list(
             self.profiles.get(self.default_profile, DRAWER_COLLISION_BOXES)
         )
-        self.profile_by_task_step = {
-            str(step_name): str(profile_name)
-            for step_name, profile_name in (
-                profile_by_task_step or DRAWER_COLLISION_STEP_PROFILES
+        self.profile_by_scene_key = {
+            str(scene_key): str(profile_name)
+            for scene_key, profile_name in (
+                profile_by_scene_key or DRAWER_COLLISION_SCENE_KEY_PROFILES
             ).items()
         }
         self._known_object_ids = {
@@ -134,17 +134,17 @@ class DrawerCollisionSceneManager:
             and self._applied_object_ids == active_object_ids
         )
 
-    def profile_for_task_step(self, task_step_name):
-        if task_step_name is None:
+    def profile_for_scene_key(self, scene_key):
+        if scene_key is None:
             return self.default_profile
-        return self.profile_by_task_step.get(
-            str(task_step_name),
+        return self.profile_by_scene_key.get(
+            str(scene_key),
             self.default_profile,
         )
 
-    def ensure_ready_for_task_step(
+    def ensure_ready_for_scene_key(
         self,
-        task_step_name,
+        scene_key,
         logger=None,
         attempts=1,
         retry_delay_sec=0.0,
@@ -155,7 +155,7 @@ class DrawerCollisionSceneManager:
             attempts=attempts,
             retry_delay_sec=retry_delay_sec,
             refresh=refresh,
-            profile=self.profile_for_task_step(task_step_name),
+            profile=self.profile_for_scene_key(scene_key),
         )
 
     def ensure_ready(

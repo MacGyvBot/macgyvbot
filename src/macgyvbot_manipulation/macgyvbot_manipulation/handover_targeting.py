@@ -77,7 +77,11 @@ def move_to_observation_pose(
         "관찰 자세 이동(joint): "
         "j1=0, j2=-40, j3=55, j4=0, j5=120, j6=90"
     )
-    ok = motion.plan_and_execute(logger, state_goal=state_goal)
+    ok = motion.plan_and_execute(
+        logger,
+        state_goal=state_goal,
+        collision_scene_key="handoff/observation_pose",
+    )
     if not ok:
         logger.warn("관찰 자세 이동 실패")
         return False, SearchStartPose(0.0, 0.0, 0.0)
@@ -307,6 +311,7 @@ def move_to_candidate_with_offset(
         ok = motion.plan_and_execute(
             logger,
             pose_goal=pose_goal,
+            collision_scene_key="handoff/move_to_user",
         )
         last_pose = SearchStartPose(
             float(pose_goal.pose.position.x),

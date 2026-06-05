@@ -81,7 +81,13 @@ class FakeMotion:
         self.plan_results = list(plan_results or [True, True, True, True])
         self.plan_calls = 0
 
-    def plan_and_execute(self, logger, pose_goal=None, state_goal=None):
+    def plan_and_execute(
+        self,
+        logger,
+        pose_goal=None,
+        state_goal=None,
+        collision_scene_key=None,
+    ):
         self.plan_calls += 1
         return self.plan_results.pop(0)
 

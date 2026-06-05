@@ -73,6 +73,7 @@ class DrawerMotionFlow:
             DRAWER_OPEN_OFFSET_XYZ_M,
             f"drawer {drawer_id} open",
             logger,
+            collision_scene_key="drawer/open_pull",
         ):
             return False
 
@@ -99,6 +100,7 @@ class DrawerMotionFlow:
             DRAWER_OBSERVE_OFFSET_XYZ_M,
             f"drawer {drawer_id} observe",
             logger,
+            collision_scene_key="drawer/observe",
         )
 
     def close_drawer(self, drawer_id, logger):
@@ -114,6 +116,7 @@ class DrawerMotionFlow:
             opened["ori"],
             f"drawer {drawer_id} return_to_open_handle",
             logger,
+            collision_scene_key="drawer/approach_to_close",
         ):
             return False
 
@@ -127,6 +130,7 @@ class DrawerMotionFlow:
                 offset,
                 f"drawer {drawer_id} {label}",
                 logger,
+                collision_scene_key="drawer/close_push",
             ):
                 return False
 
@@ -178,16 +182,29 @@ class DrawerMotionFlow:
             handle_ori,
             f"drawer {drawer_id} handle preapproach",
             logger,
+            collision_scene_key="drawer/handle_preapproach",
         ):
             return False
-        return self.motion.plan_and_execute(logger, state_goal=state_goal)
+        return self.motion.plan_and_execute(
+            logger,
+            state_goal=state_goal,
+            collision_scene_key="drawer/handle_pose",
+        )
 
-    def _move_to_handle_pose_with_preapproach(self, target_xyz, ori, label, logger):
+    def _move_to_handle_pose_with_preapproach(
+        self,
+        target_xyz,
+        ori,
+        label,
+        logger,
+        collision_scene_key=None,
+    ):
         if not self._move_to_handle_preapproach(
             target_xyz,
             ori,
             f"{label} preapproach",
             logger,
+            collision_scene_key=collision_scene_key,
         ):
             return False
         return self._move_by_offset(
@@ -196,18 +213,35 @@ class DrawerMotionFlow:
             [0.0, 0.0, 0.0],
             label,
             logger,
+            collision_scene_key=collision_scene_key,
         )
 
-    def _move_to_handle_preapproach(self, target_xyz, ori, label, logger):
+    def _move_to_handle_preapproach(
+        self,
+        target_xyz,
+        ori,
+        label,
+        logger,
+        collision_scene_key=None,
+    ):
         return self._move_by_offset(
             target_xyz,
             ori,
             [DRAWER_HANDLE_PREAPPROACH_X_OFFSET_M, 0.0, 0.0],
             label,
             logger,
+            collision_scene_key=collision_scene_key,
         )
 
-    def _move_by_offset(self, base_xyz, ori, offset_xyz, label, logger):
+    def _move_by_offset(
+        self,
+        base_xyz,
+        ori,
+        offset_xyz,
+        label,
+        logger,
+        collision_scene_key=None,
+    ):
         target_xyz = [
             float(base_xyz[0]) + float(offset_xyz[0]),
             float(base_xyz[1]) + float(offset_xyz[1]),
@@ -230,6 +264,7 @@ class DrawerMotionFlow:
                 ori,
                 logger,
             ),
+            collision_scene_key=collision_scene_key,
         )
 
     def _observation_orientation(self, fallback_ori, logger):

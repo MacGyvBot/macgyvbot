@@ -86,7 +86,13 @@ class FakeMotion:
         self.results = list(results)
         self.targets = []
 
-    def plan_and_execute(self, logger, pose_goal=None, state_goal=None):
+    def plan_and_execute(
+        self,
+        logger,
+        pose_goal=None,
+        state_goal=None,
+        collision_scene_key=None,
+    ):
         if pose_goal is not None:
             x = pose_goal.pose.position.x
             y = pose_goal.pose.position.y

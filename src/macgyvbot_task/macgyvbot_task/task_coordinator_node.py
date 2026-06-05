@@ -292,7 +292,6 @@ class TaskCoordinatorNode(Node):
         self.robot = MoveItPy(node_name="task_coordinator_moveit_py")
         self.arm = self.robot.get_planning_component(GROUP_NAME)
         self.gripper_self_collision_scene = None
-        self._gripper_self_collision_acm_applied = False
         if self.enable_gripper_self_collision_acm:
             self.gripper_self_collision_scene = GripperSelfCollisionManager(
                 self,
@@ -335,7 +334,12 @@ class TaskCoordinatorNode(Node):
             self.pilz_params,
             should_interrupt=self._motion_interrupted,
             node=self,
-            planning_precondition=self._ensure_collision_planning_scene_ready,
+            drawer_collision_scene=self.drawer_collision_scene,
+            gripper_self_collision_scene=self.gripper_self_collision_scene,
+            enable_drawer_collision_scene=self.enable_drawer_collision_scene,
+            enable_gripper_self_collision_acm=(
+                self.enable_gripper_self_collision_acm
+            ),
         )
         self.drawer_flow = DrawerMotionFlow(
             self.robot,
@@ -428,61 +432,6 @@ class TaskCoordinatorNode(Node):
 
     def _apply_drawer_collision_scene(self):
         return self.drawer_collision_scene.apply(self.get_logger())
-
-    def _current_task_step_name(self):
-        with self._queue_lock:
-            step = self._current_step
-            return step.name if step is not None else None
-
-    def _ensure_collision_planning_scene_ready(self, logger=None):
-        log = logger or self.get_logger()
-        if not self._ensure_gripper_self_collision_acm(
-            attempts=1,
-            retry_delay_sec=0.0,
-        ):
-            return False
-        return self._ensure_drawer_collision_scene_ready(log)
-
-    def _ensure_drawer_collision_scene_ready(self, logger=None):
-        if not self.enable_drawer_collision_scene:
-            return True
-        log = logger or self.get_logger()
-        return self.drawer_collision_scene.ensure_ready_for_task_step(
-            self._current_task_step_name(),
-            logger=log,
-            attempts=2,
-            retry_delay_sec=0.1,
-            refresh=True,
-        )
-
-    def _ensure_gripper_self_collision_acm(
-        self,
-        attempts=1,
-        retry_delay_sec=0.0,
-    ):
-        if not self.enable_gripper_self_collision_acm:
-            return True
-        if self._gripper_self_collision_acm_applied:
-            return True
-        if self.gripper_self_collision_scene is None:
-            self.get_logger().error(
-                "RG2 self-collision ACM manager is not initialized"
-            )
-            return False
-
-        attempts = max(1, int(attempts))
-        for attempt_index in range(attempts):
-            if self.gripper_self_collision_scene.apply(self.get_logger()):
-                self._gripper_self_collision_acm_applied = True
-                return True
-            if attempt_index + 1 < attempts and retry_delay_sec > 0.0:
-                time.sleep(float(retry_delay_sec))
-
-        self.get_logger().error(
-            "RG2 self-collision ACM patch failed; planning may start in "
-            "gripper self-collision"
-        )
-        return False
 
     def _retry_drawer_collision_scene(self):
         if self._drawer_collision_scene_retries_remaining <= 0:
@@ -967,7 +916,8 @@ class TaskCoordinatorNode(Node):
             )
             return
 
-        if not self._ensure_gripper_self_collision_acm(
+        if not self.motion.ensure_gripper_self_collision_acm(
+            self.get_logger(),
             attempts=3,
             retry_delay_sec=0.3,
         ):
@@ -1150,7 +1100,8 @@ class TaskCoordinatorNode(Node):
             command=command,
         )
 
-        if not self._ensure_gripper_self_collision_acm(
+        if not self.motion.ensure_gripper_self_collision_acm(
+            log,
             attempts=3,
             retry_delay_sec=0.3,
         ):
@@ -1694,7 +1645,8 @@ class TaskCoordinatorNode(Node):
         self.state.latest_wrench = msg.wrench
 
     def run(self):
-        if not self._ensure_gripper_self_collision_acm(
+        if not self.motion.ensure_gripper_self_collision_acm(
+            self.get_logger(),
             attempts=5,
             retry_delay_sec=0.5,
         ):

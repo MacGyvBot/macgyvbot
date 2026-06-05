@@ -470,6 +470,7 @@ class ReturnDrawerPlacementFlow:
             logger,
             pose_goal=make_safe_pose(x, y, z, ori, logger),
             min_z=min_z,
+            collision_scene_key="return/drawer_placement",
         )
         if ok:
             return True

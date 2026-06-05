@@ -153,7 +153,11 @@ class ReturnStagingPlacementFlow:
         state_goal = RobotState(self.robot.get_robot_model())
         state_goal.joint_positions = dict(DRAWER_STORE_TOOL_OBSERVE_POINT)
         state_goal.update()
-        return self.motion.plan_and_execute(logger, state_goal=state_goal)
+        return self.motion.plan_and_execute(
+            logger,
+            state_goal=state_goal,
+            collision_scene_key="return/staging_observe_point",
+        )
 
     def _move_to_force_descent_start(
         self,
@@ -183,6 +187,7 @@ class ReturnStagingPlacementFlow:
                 ori,
                 logger,
             ),
+            collision_scene_key="return/staging_descent_start",
         )
         if ok:
             return True
@@ -217,6 +222,7 @@ class ReturnStagingPlacementFlow:
         ok = self.motion.plan_and_execute(
             logger,
             pose_goal=make_safe_pose(target_x, target_y, approach_z, ori, logger),
+            collision_scene_key="return/staging_retreat_after_release",
         )
         if not ok:
             if self.interrupted():
