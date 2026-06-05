@@ -4,10 +4,7 @@ import time
 
 import rclpy
 
-from macgyvbot_config.pick import (
-    OBSERVE_X_OFFSET_M,
-    PICK_PREGRASP_WRIST_YAW_DEG,
-)
+from macgyvbot_config.pick import OBSERVE_X_OFFSET_M
 
 from macgyvbot_manipulation.robot_pose import (
     current_ee_orientation,
@@ -138,10 +135,6 @@ class PickSequenceRunner:
                     "상단 접근 실패",
                     "approach_failed",
                 ),
-            ),
-            TaskStep(
-                "pick/rotate_wrist_before_grasp_descent",
-                lambda: self._rotate_wrist_before_grasp_descent(context),
             ),
             TaskStep(
                 "pick/grasp_descent",
@@ -339,13 +332,6 @@ class PickSequenceRunner:
             command=self.state.current_command,
         )
         return False
-
-    def _rotate_wrist_before_grasp_descent(self, context):
-        self.state.logger().info(
-            "3-1단계: 잡기 전 하강 전에 "
-            f"J6를 {PICK_PREGRASP_WRIST_YAW_DEG:.1f}도 회전"
-        )
-        return self._rotate_wrist(PICK_PREGRASP_WRIST_YAW_DEG, context)
 
     def _descend_to_grasp(self, plan, ori):
         self.state._publish_robot_status(
