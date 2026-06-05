@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
-PKG_WIDTH = 22
-PIPE_WIDTH = 30
+PKG_WIDTH = 21
+PIPE_WIDTH = 36
 
 PKG_LABELS = {
-    "command": "macgyvbot_command",
-    "task": "macgyvbot_task",
-    "perception": "macgyvbot_perception",
-    "ui": "macgyvbot_ui",
-    "manipulation": "macgyvbot_manipulation",
+    "command": "command",
+    "macgyvbot_command": "command",
+    "manipulation": "manipulation",
+    "macgyvbot_manipulation": "manipulation",
+    "perception": "perception",
+    "macgyvbot_perception": "perception",
+    "task": "task",
+    "macgyvbot_task": "task",
+    "ui": "ui",
+    "macgyvbot_ui": "ui",
 }
 
 PIPE_LABELS = {
@@ -99,6 +104,14 @@ MESSAGE_TRANSLATIONS = {
     "return flow failed": "반납 흐름 실패",
     "grasp state changed": "파지 상태 변경",
     "Robot grasp success received. Tool mask lock requested.": "로봇 파지 성공 상태를 받아 공구 마스크 고정을 요청했습니다.",
+    "YOLO tool detector enabled": "YOLO 공구 검출기 사용 가능",
+    "depth recognition enabled": "depth recognition 사용 가능",
+    "ML grasp classifier enabled": "ML grasp classifier 사용 가능",
+    "SAM tool mask enabled": "SAM 공구 마스크 사용 가능",
+    "SAM tool mask disabled": "SAM 공구 마스크 비활성화",
+    "YOLO tool detector init failed": "YOLO 공구 검출기 초기화 실패",
+    "ML grasp classifier init failed": "ML grasp classifier 초기화 실패",
+    "SAM tool mask init failed": "SAM 공구 마스크 초기화 실패",
     "Depth locked tool mask accumulation started.": "깊이 기반 공구 마스크 누적을 시작합니다.",
     "Pre-grasp tool mask lock failed.": "pre-grasp 공구 마스크 고정에 실패했습니다.",
     "Pre-grasp SAM returned an empty tool mask.": "pre-grasp SAM이 비어 있는 공구 마스크를 반환했습니다.",
@@ -208,15 +221,15 @@ def format_structured_log(
     message = translate_log_message(msg) if translate else str(msg or "")
 
     parts = [
-        _pad_segment(f"pkg={format_log_value(package_name)}", PKG_WIDTH),
-        _pad_segment(f"pipe={format_log_value(pipe_name)}", PIPE_WIDTH),
+        _pad_segment(f"[pkg] {format_log_value(package_name)}", PKG_WIDTH),
+        _pad_segment(f"[pipe] {format_log_value(pipe_name)}", PIPE_WIDTH),
     ]
     if message != "":
-        parts.append(f"msg={format_log_value(message)}")
+        parts.append(f"[msg] {format_log_value(message)}")
     for key, value in fields.items():
         if key in {"step", "event", "svc", "pkg"}:
             continue
         if value is None or value == "":
             continue
-        parts.append(f"{key}={format_log_value(value)}")
+        parts.append(f"[{key}] {format_log_value(value)}")
     return " | ".join(parts)

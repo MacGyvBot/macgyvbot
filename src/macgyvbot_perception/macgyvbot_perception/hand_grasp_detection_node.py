@@ -107,7 +107,7 @@ class _StructuredLoggerAdapter:
 
     def _format(self, message):
         text = str(message or "")
-        if text.startswith("pkg="):
+        if text.startswith("[pkg] ") or text.startswith("pkg="):
             return text
         return _format_pipeline_log(
             svc=self._svc,

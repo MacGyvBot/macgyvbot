@@ -252,7 +252,7 @@ class _StructuredLoggerAdapter:
     @staticmethod
     def _format(message):
         text = str(message or "")
-        if text.startswith("pkg="):
+        if text.startswith("[pkg] ") or text.startswith("pkg="):
             return text
         return format_structured_log(
             svc="perception",
