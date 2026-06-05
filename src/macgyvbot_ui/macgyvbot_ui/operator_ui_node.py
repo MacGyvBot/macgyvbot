@@ -35,7 +35,6 @@ from macgyvbot_interfaces.msg import (
 )
 from macgyvbot_ui.event_chat import (
     command_feedback_chat,
-    hand_detection_chat,
     robot_status_chat,
     tool_drop_chat,
 )
@@ -529,7 +528,6 @@ class OperatorUiNode(Node):
 
     def _hand_grasp_cb(self, msg):
         hand_present = bool(msg.hand_present)
-        chat_message = hand_detection_chat(self._last_hand_present, hand_present)
         payload = self._hand_grasp_payload(msg)
         detail = self._format_detail(payload)
         log_key = (
@@ -549,11 +547,6 @@ class OperatorUiNode(Node):
             )
 
         self._last_hand_present = hand_present
-        if chat_message:
-            self._append_event_chat(
-                'hand_detected' if hand_present else 'hand_not_found',
-                chat_message,
-            )
 
     def _tool_drop_cb(self, msg):
         payload = self._tool_drop_payload(msg)
@@ -903,7 +896,11 @@ class OperatorUiNode(Node):
             'lifting_tool': '공구를 안전 높이로 들어 올리는 중입니다.',
             'moving_to_handoff': '사용자 전달 위치로 이동 중입니다.',
             'searching_hand': '사용자 손을 찾는 중입니다.',
-            'waiting_handoff': '손으로 공구를 잡아주세요.',
+            'waiting_handoff': '손이 인식되었습니다. 손으로 공구를 잡아주세요.',
+            'handoff_inspection_pending': (
+                '사용자의 손을 인식하지 못했습니다. '
+                '다시 인식할까요, 복귀할까요?'
+            ),
             'handoff_complete': '공구 전달을 완료했습니다.',
             'waiting_return_handoff': '반납할 공구를 받을 준비를 하고 있습니다.',
             'moving_return_grasp_pose': '반납 공구를 감지할 위치로 이동 중입니다.',
@@ -951,6 +948,7 @@ class OperatorUiNode(Node):
             'moving_to_handoff': '전달 위치 이동',
             'searching_hand': '손 탐색',
             'waiting_handoff': '전달 대기',
+            'handoff_inspection_pending': '손 인식 선택 대기',
             'handoff_complete': '전달 완료',
             'waiting_return_handoff': '반납 대기',
             'moving_return_grasp_pose': '반납 위치 이동',
@@ -994,6 +992,7 @@ class OperatorUiNode(Node):
             'moving_to_handoff': '전달 위치 이동 중',
             'searching_hand': '사용자 손 찾는 중',
             'waiting_handoff': '사용자 잡기 대기',
+            'handoff_inspection_pending': '재인식 또는 복귀 선택 대기',
             'handoff_complete': '공구 전달 완료',
             'waiting_return_handoff': '반납 공구 수령 대기',
             'moving_return_grasp_pose': '반납 공구 감지 위치 이동 중',
@@ -1037,6 +1036,7 @@ class OperatorUiNode(Node):
             'moving_to_handoff',
             'searching_hand',
             'waiting_handoff',
+            'handoff_inspection_pending',
             'handoff_complete',
             'waiting_return_handoff',
             'moving_return_grasp_pose',
@@ -1065,7 +1065,6 @@ class OperatorUiNode(Node):
     @staticmethod
     def _always_show_robot_statuses():
         return {
-            'waiting_handoff',
             'waiting_return_handoff',
             'done',
             'completed',
@@ -1087,7 +1086,14 @@ class OperatorUiNode(Node):
     def _robot_status_severity(state):
         if state in ('failed', 'error', 'tool_dropped', 'vlm_error'):
             return 'error'
-        if state in ('busy', 'paused', 'cancelled', 'rejected', 'vlm_warning'):
+        if state in (
+            'busy',
+            'paused',
+            'cancelled',
+            'rejected',
+            'handoff_inspection_pending',
+            'vlm_warning',
+        ):
             return 'warn'
         return 'info'
 
