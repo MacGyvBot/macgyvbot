@@ -1,9 +1,51 @@
 """Speech-to-text utility wrapper using speech_recognition."""
 
+from contextlib import contextmanager
+import os
+import sys
+
 try:
     import speech_recognition as sr
 except ImportError:  # pragma: no cover - runtime dependency check
     sr = None
+
+
+@contextmanager
+def _suppress_native_stderr():
+    """Hide noisy native-library stderr during PyAudio device open only."""
+    try:
+        stderr_fd = sys.stderr.fileno()
+    except (AttributeError, OSError, ValueError):
+        stderr_fd = None
+
+    if stderr_fd is None:
+        yield
+        return
+
+    saved_stderr_fd = None
+    devnull_fd = None
+    try:
+        saved_stderr_fd = os.dup(stderr_fd)
+        devnull_fd = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull_fd, stderr_fd)
+        yield
+    finally:
+        if saved_stderr_fd is not None:
+            os.dup2(saved_stderr_fd, stderr_fd)
+            os.close(saved_stderr_fd)
+        if devnull_fd is not None:
+            os.close(devnull_fd)
+
+
+if sr is not None:
+
+    class QuietMicrophone(sr.Microphone):
+        def __enter__(self):
+            with _suppress_native_stderr():
+                return super().__enter__()
+
+else:
+    QuietMicrophone = None
 
 
 class SpeechToTextService:
@@ -44,7 +86,8 @@ class SpeechToTextService:
         self._recognizer.dynamic_energy_threshold = bool(dynamic_energy)
 
         device = self._device_index if self._device_index >= 0 else None
-        self._microphone = sr.Microphone(device_index=device)
+        with _suppress_native_stderr():
+            self._microphone = QuietMicrophone(device_index=device)
 
         with self._microphone as source:
             self._logger("info", f"주변 소음 측정 중 ({ambient_duration:.1f}s)...")

@@ -436,7 +436,7 @@ class HandGraspDetectionNode(Node):
             "YOLO tool detector enabled",
             step="tool_detector",
             event="ready",
-            model=detector.model_path,
+            model=Path(detector.model_path).name,
             classes=target_classes or "ANY",
         )
         return detector
@@ -459,7 +459,7 @@ class HandGraspDetectionNode(Node):
             "ML grasp classifier enabled",
             step="ml_classifier",
             event="ready",
-            model=classifier.path,
+            model=Path(classifier.path).name,
         )
         return classifier
 
@@ -497,7 +497,7 @@ class HandGraspDetectionNode(Node):
             step="sam",
             event="ready",
             backend=self.sam_backend,
-            checkpoint=self.sam_checkpoint,
+            checkpoint=Path(self.sam_checkpoint).name,
         )
         return segmenter
 

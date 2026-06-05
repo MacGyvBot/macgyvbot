@@ -693,7 +693,13 @@ class TaskCoordinatorNode(Node):
             name="manual_gripper",
             service=self.manual_gripper_service_name,
         )
-        log.info("YOLO model ready", step="model", event="status", name="yolo", model=self.yolo_model)
+        log.info(
+            "YOLO model ready",
+            step="model",
+            event="status",
+            name="yolo",
+            model=Path(self.yolo_model).name,
+        )
         log.info("grasp point mode ready", step="grasp_point", event="status", mode=self.grasp_point_mode)
 
     def _task_log(self, pipe="system", *, quiet_info=False):
