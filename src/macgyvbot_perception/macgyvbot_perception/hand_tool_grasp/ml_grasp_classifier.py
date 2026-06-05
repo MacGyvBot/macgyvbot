@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from math import sqrt
 from pathlib import Path
 from typing import Optional
+import warnings
 
 from macgyvbot_perception.model_paths import resolve_weight_path
 
@@ -44,7 +45,9 @@ class MLHandGraspClassifier:
         if not path.exists():
             raise RuntimeError(f"grasp classifier not found: {path}")
 
-        self.model = joblib.load(path)
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore")
+            self.model = joblib.load(path)
         self.path = path
         self.buffer: deque[str] = deque(maxlen=stable_window_size)
         self.stable_min_count = stable_min_count

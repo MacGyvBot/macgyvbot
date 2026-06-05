@@ -18,6 +18,7 @@ from macgyvbot_config.vlm import (
     VLM_ONLY_MODEL_BY_MODE,
     VLM_ONLY_MODES,
 )
+from macgyvbot_config.structured_logging import format_structured_log
 from macgyvbot_interfaces.srv import VLMGrasp
 from macgyvbot_perception.grasp_point.vlm_grasp_point_selector import (
     VLMGraspPointSelector,
@@ -61,9 +62,11 @@ class VLMGraspServiceNode(Node):
         )
         self._preload_default_mode()
         self.get_logger().info(
-            "VLM grasp service ready: "
-            f"service={service_name}, default_mode={self.grasp_point_mode}"
+            f"{self.grasp_point_mode} 서비스 준비 완료"
         )
+
+    def get_logger(self):
+        return _StructuredLoggerAdapter(super().get_logger())
 
     def _handle_request(self, request, response):
         request_received_wall = self._timestamp()
@@ -225,6 +228,39 @@ class VLMGraspServiceNode(Node):
         if isinstance(value, str):
             return value.strip().lower() in {"1", "true", "yes", "on"}
         return bool(value)
+
+
+class _StructuredLoggerAdapter:
+    def __init__(self, logger):
+        self._logger = logger
+
+    def debug(self, message):
+        self._logger.debug(self._format(message))
+
+    def info(self, message):
+        self._logger.info(self._format(message))
+
+    def warn(self, message):
+        self._logger.warn(self._format(message))
+
+    def warning(self, message):
+        self.warn(message)
+
+    def error(self, message):
+        self._logger.error(self._format(message))
+
+    @staticmethod
+    def _format(message):
+        text = str(message or "")
+        if text.startswith("[pkg] ") or text.startswith("pkg="):
+            return text
+        return format_structured_log(
+            svc="perception",
+            pipe="vlm_service",
+            step="log",
+            event="status",
+            msg=text,
+        )
 
 
 def main() -> None:
