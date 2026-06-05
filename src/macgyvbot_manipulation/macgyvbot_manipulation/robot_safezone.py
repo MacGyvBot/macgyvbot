@@ -24,28 +24,28 @@ def clamp_to_safe_workspace(x: float, y: float, z: float, logger, min_z=None):
 
     if safe_x < SAFE_X_MIN:
         logger.warning(
-            f"Requested x ({safe_x:.3f} m) is below safety limit "
-            f"({SAFE_X_MIN:.3f} m). Clamping to SAFE_X_MIN."
+            f"요청 x ({safe_x:.3f} m)가 안전 하한 "
+            f"({SAFE_X_MIN:.3f} m)보다 낮아 SAFE_X_MIN으로 제한합니다."
         )
         safe_x = SAFE_X_MIN
 
     if safe_y < SAFE_Y_MIN:
         logger.warning(
-            f"Requested y ({safe_y:.3f} m) is below safety limit "
-            f"({SAFE_Y_MIN:.3f} m). Clamping to SAFE_Y_MIN."
+            f"요청 y ({safe_y:.3f} m)가 안전 하한 "
+            f"({SAFE_Y_MIN:.3f} m)보다 낮아 SAFE_Y_MIN으로 제한합니다."
         )
         safe_y = SAFE_Y_MIN
     elif safe_y > SAFE_Y_MAX:
         logger.warning(
-            f"Requested y ({safe_y:.3f} m) is above safety limit "
-            f"({SAFE_Y_MAX:.3f} m). Clamping to SAFE_Y_MAX."
+            f"요청 y ({safe_y:.3f} m)가 안전 상한 "
+            f"({SAFE_Y_MAX:.3f} m)보다 높아 SAFE_Y_MAX로 제한합니다."
         )
         safe_y = SAFE_Y_MAX
 
     if safe_z < z_min:
         logger.warning(
-            f"Requested z ({safe_z:.3f} m) is below safety limit "
-            f"({z_min:.3f} m). Clamping to minimum safe z."
+            f"요청 z ({safe_z:.3f} m)가 안전 하한 "
+            f"({z_min:.3f} m)보다 낮아 최소 안전 z로 제한합니다."
         )
         safe_z = z_min
 

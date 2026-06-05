@@ -90,7 +90,7 @@ class DepthProjector:
         bx, by, bz = self.camera_to_base(camera_point)
 
         logger.info(
-            f"'{label}' detected: source={source}, "
+            f"'{label}' 감지: source={source}, "
             f"pixel=({u}, {v}), "
             f"camera=({cam_x:.3f}, {cam_y:.3f}, {z_m:.3f}), "
             f"base=({bx:.3f}, {by:.3f}, {bz:.3f})"

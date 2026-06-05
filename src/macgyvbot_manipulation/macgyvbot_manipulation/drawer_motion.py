@@ -58,7 +58,9 @@ class DrawerMotionFlow:
         handle_pose = get_ee_matrix(self.robot)
         handle_xyz = self._xyz_from_pose(handle_pose)
         handle_ori = current_ee_orientation(self.robot)
-        logger.info(f"drawer {drawer_id} handle xyz={self._format_xyz(handle_xyz)}")
+        logger.info(
+            f"drawer {drawer_id} handle 위치 xyz={self._format_xyz(handle_xyz)}"
+        )
 
         if not self._close_gripper("drawer/open/grip_handle", logger):
             return False
@@ -172,9 +174,9 @@ class DrawerMotionFlow:
             float(base_xyz[2]) + float(offset_xyz[2]),
         ]
         logger.info(
-            f"{label}: base={self._format_xyz(base_xyz)}, "
+            f"{label}: 기준={self._format_xyz(base_xyz)}, "
             f"offset={self._format_xyz(offset_xyz)}, "
-            f"target={self._format_xyz(target_xyz)}"
+            f"목표={self._format_xyz(target_xyz)}"
         )
         if self.dry_run:
             return True

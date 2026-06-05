@@ -92,6 +92,24 @@ package that owns the behavior instead of creating cross-package shortcuts.
 - Update `docs/architecture/topics.md` when topic ownership, direction, or
   payload shape changes.
 
+## Logging Contract
+
+- Use `macgyvbot_config.structured_logging.format_structured_log` for runtime
+  node logs. Do not hand-format structured log strings.
+- Terminal logs should follow:
+  `[pkg] <package> | [pipe] <pipeline> | [msg] "<message>" | [field] <value>`.
+- Use short package names in `[pkg]` such as `command`, `task`, `perception`,
+  `manipulation`, and `ui`; omit the `macgyvbot_` prefix.
+- Use stable pipe labels from `PIPE_LABELS` where possible.
+- Keep `[msg]` stable and concise. Put changing values in fields such as
+  `topic`, `tool`, `action`, `model`, `checkpoint`, or `reason`.
+- Add Korean user-facing message text through `MESSAGE_TRANSLATIONS` or
+  `PREFIX_TRANSLATIONS`.
+- Routine startup logs should show model/checkpoint filenames, not full
+  absolute paths.
+- Logger adapters should pass through messages that already start with
+  `[pkg] ` to avoid double wrapping.
+
 ## Robot Safety
 
 - Do not change motion parameters, offsets, force thresholds, safe workspace
