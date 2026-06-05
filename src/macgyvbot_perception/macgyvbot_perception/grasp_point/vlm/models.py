@@ -337,6 +337,7 @@ class _BaseVLM:
     def get_runtime_info(self):
         model_source = self._resolve_model_source()
         return {
+            "model_id": self.model_id,
             "device": self.device,
             "dtype": str(self.torch_dtype).replace("torch.", ""),
             "model_source": model_source,

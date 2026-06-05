@@ -7,4 +7,3 @@ from macgyvbot_perception.grasp_point.api_method.client import (
 from macgyvbot_perception.grasp_point.api_method.selector import APIGraspPointSelector
 
 __all__ = ["APIGraspPointSelector", "APIGraspResult", "GeminiGraspAPIClient"]
-

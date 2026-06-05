@@ -37,6 +37,11 @@ def generate_launch_description():
 
     use_voice_command = LaunchConfiguration("use_voice_command")
     use_stt = LaunchConfiguration("use_stt")
+    stt_pause_threshold = LaunchConfiguration("stt_pause_threshold")
+    stt_phrase_threshold = LaunchConfiguration("stt_phrase_threshold")
+    stt_non_speaking_duration = LaunchConfiguration("stt_non_speaking_duration")
+    stt_phrase_time_limit = LaunchConfiguration("stt_phrase_time_limit")
+    stt_ambient_duration = LaunchConfiguration("stt_ambient_duration")
     use_tts = LaunchConfiguration("use_tts")
     tts_engine = LaunchConfiguration("tts_engine")
     tts_voice = LaunchConfiguration("tts_voice")
@@ -91,6 +96,11 @@ def generate_launch_description():
         parameters=[
             {
                 "enable_microphone": use_stt,
+                "pause_threshold": stt_pause_threshold,
+                "phrase_threshold": stt_phrase_threshold,
+                "non_speaking_duration": stt_non_speaking_duration,
+                "phrase_time_limit": stt_phrase_time_limit,
+                "ambient_duration": stt_ambient_duration,
                 "enable_tts": use_tts,
                 "tts_engine": tts_engine,
                 "tts_voice": tts_voice,
@@ -142,6 +152,31 @@ def generate_launch_description():
                 "use_stt",
                 default_value="true",
                 description="Enable microphone STT.",
+            ),
+            DeclareLaunchArgument(
+                "stt_pause_threshold",
+                default_value="0.45",
+                description="Seconds of silence before STT finalizes a phrase.",
+            ),
+            DeclareLaunchArgument(
+                "stt_phrase_threshold",
+                default_value="0.15",
+                description="Minimum speaking duration accepted as a phrase.",
+            ),
+            DeclareLaunchArgument(
+                "stt_non_speaking_duration",
+                default_value="0.25",
+                description="Silence retained around each STT phrase.",
+            ),
+            DeclareLaunchArgument(
+                "stt_phrase_time_limit",
+                default_value="3.0",
+                description="Maximum seconds captured for one STT phrase.",
+            ),
+            DeclareLaunchArgument(
+                "stt_ambient_duration",
+                default_value="0.5",
+                description="Seconds used for microphone ambient-noise calibration.",
             ),
             DeclareLaunchArgument(
                 "use_tts",

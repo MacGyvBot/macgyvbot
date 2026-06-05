@@ -28,6 +28,8 @@ POSE_GOAL_IK_TIMEOUT_SEC = 0.1
 POSE_GOAL_IK_MAX_SEEDS = 10
 POSE_GOAL_IK_SEED_PERTURB_RAD = math.radians(10.0)
 POSE_GOAL_MAX_JOINT_DELTA_RAD = math.radians(120.0)
+HOME_JOINT_GOAL_TOLERANCE_RAD = math.radians(2.0)
+HOME_JOINT_SETTLE_TIMEOUT_SEC = 1.5
 _TWO_PI = 2.0 * math.pi
 
 
@@ -291,6 +293,7 @@ def plan_and_execute(
     params=None,
     should_interrupt=None,
     execute_trajectory=None,
+    min_z=None,
 ):
     if should_interrupt is not None and should_interrupt():
         logger.info("중단 요청으로 planning/execution을 시작하지 않습니다.")
@@ -302,7 +305,7 @@ def plan_and_execute(
         x = pose_goal.pose.position.x
         y = pose_goal.pose.position.y
         z = pose_goal.pose.position.z
-        sx, sy, sz = clamp_to_safe_workspace(x, y, z, logger)
+        sx, sy, sz = clamp_to_safe_workspace(x, y, z, logger, min_z=min_z)
         pose_goal.pose.position.x = sx
         pose_goal.pose.position.y = sy
         pose_goal.pose.position.z = sz
@@ -376,7 +379,7 @@ class MoveItController:
                 self.trajectory_action_name,
             )
 
-    def plan_and_execute(self, logger, pose_goal=None, state_goal=None):
+    def plan_and_execute(self, logger, pose_goal=None, state_goal=None, min_z=None):
         return plan_and_execute(
             self.robot,
             self.arm,
@@ -388,6 +391,7 @@ class MoveItController:
             execute_trajectory=self._execute_trajectory_action
             if self._trajectory_client is not None
             else None,
+            min_z=min_z,
         )
 
     def cancel_current_goal(self, logger=None, reason=""):
@@ -564,7 +568,11 @@ class MoveItController:
 
     def move_to_home_joints(self, logger):
         """Move to the configured Home joint pose."""
-        if self._is_at_joint_goal(HOME_JOINTS, logger):
+        if self._is_at_joint_goal(
+            HOME_JOINTS,
+            logger,
+            tolerance_rad=HOME_JOINT_GOAL_TOLERANCE_RAD,
+        ):
             logger.info("현재 joint pose가 이미 Home 허용 오차 안에 있어 이동을 생략합니다.")
             return True
 
@@ -577,7 +585,12 @@ class MoveItController:
         if ok:
             return True
 
-        if self._wait_until_at_joint_goal(HOME_JOINTS, logger):
+        if self._wait_until_at_joint_goal(
+            HOME_JOINTS,
+            logger,
+            timeout_sec=HOME_JOINT_SETTLE_TIMEOUT_SEC,
+            tolerance_rad=HOME_JOINT_GOAL_TOLERANCE_RAD,
+        ):
             logger.warn(
                 "Home trajectory 결과는 실패로 보고되었지만 현재 joint pose가 "
                 "Home 허용 오차 안에 있어 Home 복귀 성공으로 처리합니다."

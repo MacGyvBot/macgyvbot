@@ -7,6 +7,7 @@ from collections import deque
 from dataclasses import replace
 import math
 from pathlib import Path
+import re
 import threading
 import time
 import traceback
@@ -117,6 +118,9 @@ from macgyvbot_task.application.task_control.task_step import TaskStep
 class VLMStatusLogger:
     """Forward VLM logs to ROS logger and robot status topic."""
 
+    _MODEL_ID_RE = re.compile(r"\bmodel_id=([^,\s)]+)")
+    _SOURCE_RE = re.compile(r"\bsource=([^,\s)]+)")
+
     def __init__(self, logger, publish_status_payload):
         self._logger = logger
         self._publish_status_payload = publish_status_payload
@@ -138,13 +142,13 @@ class VLMStatusLogger:
         if "VLM" not in text:
             return
 
-        if "로드 시작" in text:
+        if "로드 시작" in text or "weights loading" in text:
             status = "vlm_loading"
-        elif "로드 완료" in text:
+        elif "로드 완료" in text or "weights loaded" in text:
             status = "vlm_ready"
         elif level == "error" or "실패" in text:
             status = "vlm_error"
-        elif level == "warn" or "CPU 실행" in text:
+        elif level == "warn" or "CPU 실행" in text or "not using CUDA" in text:
             status = "vlm_warning"
         else:
             return
@@ -154,9 +158,43 @@ class VLMStatusLogger:
                 "status": status,
                 "tool_name": "unknown",
                 "action": "system",
-                "message": text,
+                "message": self._chat_message(status, text),
             }
         )
+
+    @classmethod
+    def _chat_message(cls, status, text):
+        model_label = cls._extract_model_label(text)
+        model_prefix = f"({model_label}) " if model_label else ""
+
+        if status == "vlm_loading":
+            return f"{model_prefix}VLM 모델을 로드하는 중입니다."
+        if status == "vlm_ready":
+            return f"{model_prefix}VLM 모델 로드가 완료되었습니다."
+        if status == "vlm_warning":
+            return f"{model_prefix}VLM 모델 상태를 확인해야 합니다."
+        if status == "vlm_error":
+            return f"{model_prefix}VLM 모델 처리 중 오류가 발생했습니다."
+        return text
+
+    @classmethod
+    def _extract_model_label(cls, text):
+        match = cls._MODEL_ID_RE.search(text)
+        if match is None:
+            match = cls._SOURCE_RE.search(text)
+        if match is None:
+            return ""
+
+        model = match.group(1).strip()
+        if not model:
+            return ""
+
+        model = model.rstrip(".,)")
+        if "/" in model:
+            model = model.rsplit("/", 1)[-1]
+        if "__" in model:
+            model = model.rsplit("__", 1)[-1]
+        return model
 
 
 class TaskCoordinatorNode(Node):
@@ -185,6 +223,7 @@ class TaskCoordinatorNode(Node):
         self._suspended_step = None
         self._suspended_task_name = None
         self._exit_home_thread = None
+        self._vlm_preload_timer = None
         self._manual_gripper_lock = threading.Lock()
 
         self.grasp_point_mode = self._read_grasp_point_mode()
@@ -341,9 +380,19 @@ class TaskCoordinatorNode(Node):
         self._create_subscriptions()
         self._create_services()
         self._log_startup()
+        self._vlm_preload_timer = self.create_timer(
+            3.0,
+            self._preload_vlm_after_startup,
+        )
 
     def _base_to_camera_matrix(self):
         return get_ee_matrix(self.robot) @ self.gripper2cam
+
+    def _preload_vlm_after_startup(self):
+        if self._vlm_preload_timer is not None:
+            self._vlm_preload_timer.cancel()
+
+        self.grasp_point_selector.preload_vlm_if_needed()
 
     def _drawer_observation_orientation(self):
         joint_positions = dict(HOME_JOINTS)

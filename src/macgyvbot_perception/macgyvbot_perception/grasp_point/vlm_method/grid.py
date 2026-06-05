@@ -76,4 +76,3 @@ class GridPolicy:
         xy = sum((x - mean_x) * (y - mean_y) for x, y in centers) / len(centers)
         angle = 0.5 * math.atan2(2.0 * xy, xx - yy)
         return point, angle
-

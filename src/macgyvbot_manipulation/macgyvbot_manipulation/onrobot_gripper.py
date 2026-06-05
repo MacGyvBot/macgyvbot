@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 
-from pymodbus.client.sync import ModbusTcpClient as ModbusClient
-
 
 class RG():
 
     def __init__(self, gripper, ip, port):
+        from pymodbus.client.sync import ModbusTcpClient as ModbusClient
+
         self.client = ModbusClient(
             ip,
             port=port,
@@ -25,6 +25,12 @@ class RG():
             self.max_width = 1600
             self.max_force = 1200
         self.open_connection()
+
+    @staticmethod
+    def _to_signed_int16(value):
+        if value >= 32768:
+            return value - 65536
+        return value
 
     def open_connection(self):
         """Opens the connection with a gripper."""
@@ -52,6 +58,27 @@ class RG():
             address=267, count=1, unit=65)
         width_mm = result.registers[0] / 10.0
         return width_mm
+
+    def get_depth(self):
+        """Reads current depth compensation value in millimeters.
+
+        The value is provided in 1/10 millimeters as signed two's complement
+        and is based on the completely closed gripper position.
+        """
+        result = self.client.read_holding_registers(
+            address=263, count=1, unit=65)
+        depth_mm = self._to_signed_int16(result.registers[0]) / 10.0
+        return depth_mm
+
+    def get_relative_depth(self):
+        """Reads current relative depth in millimeters.
+
+        The value is based on the recent motion start position.
+        """
+        result = self.client.read_holding_registers(
+            address=264, count=1, unit=65)
+        depth_mm = self._to_signed_int16(result.registers[0]) / 10.0
+        return depth_mm
 
     def get_status(self):
         """Reads current device status.
@@ -168,6 +195,15 @@ class RG():
         print("Start closing gripper.")
         result = self.client.write_registers(
             address=0, values=params, unit=65)
+        try:
+            width_mm = self.get_width()
+            depth_mm = self.get_depth()
+            print(
+                "Gripper state after close command: "
+                f"width={width_mm:.1f} mm, depth={depth_mm:.1f} mm"
+            )
+        except Exception as exc:
+            print(f"Failed to read gripper state after close command: {exc}")
 
     def open_gripper(self, force_val=400):
         """Opens gripper."""

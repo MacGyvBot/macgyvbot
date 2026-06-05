@@ -53,4 +53,3 @@ def test_parse_orientation_uses_yaw_fallback():
         0.0,
         30.0,
     )
-

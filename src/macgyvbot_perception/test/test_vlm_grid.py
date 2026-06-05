@@ -36,4 +36,3 @@ def test_estimate_grasp_pose_returns_mean_and_angle():
 
     assert point == (15.0, 15.0)
     assert math.isclose(angle, math.pi / 4.0)
-

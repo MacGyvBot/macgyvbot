@@ -349,4 +349,3 @@ class Parser:
         cx = min(max(float(x), 0.0), float(max(width - 1, 0)))
         cy = min(max(float(y), 0.0), float(max(height - 1, 0)))
         return (cx, cy)
-
