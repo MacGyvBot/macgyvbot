@@ -4,7 +4,7 @@ import time
 
 import rclpy
 
-from macgyvbot_config.pick import OBSERVE_X_OFFSET_M
+from macgyvbot_config.drawer import TOOL_OBSERVE_X_BACKOFF_M
 
 from macgyvbot_manipulation.robot_pose import (
     current_ee_orientation,
@@ -108,47 +108,20 @@ class PickSequenceRunner:
             target_y=plan.target_y,
             safe_z_min=safe_z_min,
             raw_bz=bz,
-            corrected_bz=plan.corrected_bz,
-            travel_z=plan.travel_z,
-            approach_z=plan.approach_z,
+            drawer_wall_clearance_z=plan.drawer_wall_clearance_z,
             grasp_z=plan.grasp_z,
+            should_descend_to_grasp=plan.should_descend_to_grasp,
         )
 
         steps = [
             TaskStep("pick/open_gripper", self._open_gripper),
             TaskStep(
-                "pick/travel_z",
-                lambda: self._move_to_pose(
-                    "move to travel height",
-                    context["plan"].current_x,
-                    context["plan"].current_y,
-                    context["plan"].travel_z,
-                    context["ori"],
-                    "travel height move failed",
-                    "safe travel height move failed",
-                    "travel_z_plan_failed",
-                ),
-            ),
-            TaskStep(
-                "pick/xy_move",
+                "pick/observe_offset_move",
                 lambda: self._move_to_vlm_observe_pose(context),
             ),
             TaskStep(
                 "pick/refine_target_and_apply_vlm_yaw",
                 lambda: self._refine_target_and_apply_vlm_yaw_step(context),
-            ),
-            TaskStep(
-                "pick/approach",
-                lambda: self._move_to_pose(
-                    "move to approach pose",
-                    context["plan"].target_x,
-                    context["plan"].target_y,
-                    context["plan"].approach_z,
-                    context["ori"],
-                    "approach move failed",
-                    "approach move failed",
-                    "approach_failed",
-                ),
             ),
             TaskStep(
                 "pick/grasp_descent",
@@ -168,10 +141,10 @@ class PickSequenceRunner:
                     "lift after grasp",
                     context["plan"].target_x,
                     context["plan"].target_y,
-                    context["plan"].travel_z,
+                    context["plan"].drawer_wall_clearance_z,
                     context["ori"],
-                    "lift after grasp failed",
-                    "lift after grasp failed",
+                    "서랍 벽 회피 높이 복귀 실패",
+                    "서랍 벽 회피 높이 복귀 실패",
                     "lift_failed",
                 ),
             ),
@@ -309,14 +282,14 @@ class PickSequenceRunner:
 
     def _move_to_vlm_observe_pose(self, context):
         ok = self._move_to_pose(
-            "2?④퀎: ?덉쟾 ?믪씠?먯꽌 XY ?섑룊 ?대룞",
-            context["plan"].target_x - OBSERVE_X_OFFSET_M,
+            "1단계: 서랍 내부 관찰 offset 위치로 이동",
+            context["plan"].target_x - TOOL_OBSERVE_X_BACKOFF_M,
             context["plan"].target_y,
-            context["plan"].travel_z,
+            context["plan"].drawer_wall_clearance_z,
             context["ori"],
-            "XY 이동 실패. Pick 시퀀스를 중단합니다.",
-            "XY 이동 실패",
-            "xy_move_failed",
+            "서랍 내부 관찰 offset 이동 실패. Pick 시퀀스 중단",
+            "서랍 내부 관찰 offset 이동 실패",
+            "observe_offset_move_failed",
         )
         if not ok:
             return False
@@ -375,21 +348,35 @@ class PickSequenceRunner:
             "grasping",
             tool_name=self.state.target_label,
             action="bring",
-            message=f"{self.state.target_label} 파지를 위해 Z 하강합니다.",
+            message=f"{self.state.target_label} 파지를 위해 XY 정렬 후 Z 하강합니다.",
             command=self.state.current_command,
         )
+        if not self._move_to_pose(
+            "4단계: 파지 XY 위치 정렬",
+            plan.target_x,
+            plan.target_y,
+            plan.drawer_wall_clearance_z,
+            ori,
+            "파지 XY 위치 정렬 실패. Pick 시퀀스 중단",
+            "파지 XY 위치 정렬 실패",
+            "grasp_xy_move_failed",
+        ):
+            return False
+
         if not plan.should_descend_to_grasp:
             log_info(
                 self.state.logger(),
                 "grasp descent skipped",
                 step="grasp_descent",
                 event="skip",
-                reason="approach_equals_grasp",
+                reason="same_height",
+                drawer_wall_clearance_z=plan.drawer_wall_clearance_z,
+                grasp_z=plan.grasp_z,
             )
             return True
 
         return self._move_to_pose(
-            "4?④퀎: ?뚯? ?믪씠 ?섍컯",
+            "4단계: 파지 Z 높이 하강",
             plan.target_x,
             plan.target_y,
             plan.grasp_z,
@@ -526,7 +513,12 @@ class PickSequenceRunner:
                 log,
             )
             if decision == "retry":
-                log.info("사용자 요청으로 handoff 위치 관측을 다시 시도합니다.")
+                log_info(
+                    log,
+                    "handoff pose retry requested",
+                    step="handoff",
+                    event="retry",
+                )
                 continue
             if decision == "interrupted":
                 return False
@@ -584,7 +576,12 @@ class PickSequenceRunner:
 
             decision = self._wait_for_handoff_decision("handoff_timeout", log)
             if decision == "retry":
-                log.info("사용자 요청으로 사용자 잡기 인식을 다시 기다립니다.")
+                log_info(
+                    log,
+                    "human grasp wait retry requested",
+                    step="human_grasp",
+                    event="retry",
+                )
                 continue
             if decision == "interrupted":
                 return False
@@ -638,9 +635,13 @@ class PickSequenceRunner:
             reason=reason,
             command=self.state.current_command,
         )
-        log.warn(
-            "handoff inspection 선택 대기: "
-            f"reason={reason}, options=retry/fallback"
+        log_warn(
+            log,
+            "handoff inspection decision pending",
+            step="handoff_decision",
+            event="pending",
+            reason=reason,
+            options="retry/fallback",
         )
 
         try:
@@ -670,7 +671,7 @@ class PickSequenceRunner:
         returned = self.handoff.return_tool_to_original_position(
             plan.target_x,
             plan.target_y,
-            plan.travel_z,
+            plan.drawer_wall_clearance_z,
             plan.grasp_z,
             context["ori"],
             log,
@@ -716,7 +717,12 @@ class PickSequenceRunner:
         return True
 
     def _home_before_close_drawer(self):
-        self.state.logger().info("11단계: 서랍 닫기 전 Home 위치로 이동")
+        log_info(
+            self.state.logger(),
+            "home before close drawer",
+            step="home_before_close_drawer",
+            event="start",
+        )
         return self.handoff.move_home_after_handoff(self.state.logger())
 
     def _home_after_handoff(self):
