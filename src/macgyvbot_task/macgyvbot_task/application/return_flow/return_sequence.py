@@ -1,5 +1,4 @@
 """Return sequence step construction for receiving and storing a user-held tool."""
-from macgyvbot_domain.logging import emit_structured_log
 
 from macgyvbot_config.return_flow import RETURN_PREPARE_GRIPPER_OPEN_WAIT_SEC
 from macgyvbot_manipulation.handover_targeting import move_to_observation_pose
@@ -166,8 +165,10 @@ class ReturnSequenceRunner:
             "사용자 반납 공구를 받을 준비를 시작합니다.",
             command,
         )
-        emit_structured_log(self.state.logger(), 'info', "log", "status", svc='task', pipe='return', msg=f"반납 명령 수신: tool={requested_tool}, raw_text='{raw_text}'. "
-            "그리퍼를 열고 사용자 hand-tool grasp 인식을 기다립니다.")
+        self.state.logger().info(
+            f"반납 명령 수신: tool={requested_tool}, raw_text='{raw_text}'. "
+            "그리퍼를 열고 사용자 hand-tool grasp 인식을 기다립니다."
+        )
         self.gripper.open_gripper()
         cooperative_wait(RETURN_PREPARE_GRIPPER_OPEN_WAIT_SEC)
         return True
@@ -200,8 +201,10 @@ class ReturnSequenceRunner:
                 log,
             )
         else:
-            emit_structured_log(log, 'info', "log", "status", svc='task', pipe='return', msg="손 위치 목표를 찾지 못했습니다. "
-                "현재 카메라 ROI/depth 조건으로 grasp 가능 여부를 확인합니다.")
+            log.info(
+                "손 위치 목표를 찾지 못했습니다. "
+                "현재 카메라 ROI/depth 조건으로 grasp 가능 여부를 확인합니다."
+            )
             self.reporter.publish(
                 "checking_return_target",
                 requested_tool,
@@ -282,8 +285,10 @@ class ReturnSequenceRunner:
 
         context["observed_tool"] = observed_tool
         context["drawer_id"] = drawer_id
-        emit_structured_log(self.state.logger(), 'info', "log", "status", svc='task', pipe='return', msg=f"임시 관찰 라벨 기준 drawer 선택: tool={observed_tool}, "
-            f"drawer={drawer_id}")
+        self.state.logger().info(
+            f"임시 관찰 라벨 기준 drawer 선택: tool={observed_tool}, "
+            f"drawer={drawer_id}"
+        )
         return True
 
     def _open_observed_tool_drawer(self, context):
@@ -336,9 +341,11 @@ class ReturnSequenceRunner:
             return False
 
         context["drawer_marker_target"] = target
-        emit_structured_log(self.state.logger(), 'info', "log", "status", svc='task', pipe='return', msg="서랍 marker target 확정: "
+        self.state.logger().info(
+            "서랍 marker target 확정: "
             f"tool={observed_tool}, drawer={drawer_id}, "
-            f"pixel={target.pixel}, base={target.base_xyz}")
+            f"pixel={target.pixel}, base={target.base_xyz}"
+        )
         return True
 
     def _move_to_store_tool_observe_point(self, context):
@@ -382,8 +389,10 @@ class ReturnSequenceRunner:
             return False
 
         context["store_tool_target"] = target
-        emit_structured_log(self.state.logger(), 'info', "log", "status", svc='task', pipe='return', msg="임시 위치 공구 bbox target 확정: "
-            f"tool={observed_tool}, pixel={target.pixel}, base={target.base_xyz}")
+        self.state.logger().info(
+            "임시 위치 공구 bbox target 확정: "
+            f"tool={observed_tool}, pixel={target.pixel}, base={target.base_xyz}"
+        )
         return True
 
     def _grasp_store_tool(self, context):
@@ -482,8 +491,10 @@ class ReturnSequenceRunner:
             command,
         )
         ok, start_pose = move_to_observation_pose(self.motion, self.robot, logger)
-        emit_structured_log(logger, 'info', "log", "status", svc='task', pipe='return', msg="반납 1단계: 공구 감지 전 관찰 자세 이동 "
-            f"pose=({start_pose.x:.3f},{start_pose.y:.3f},{start_pose.z:.3f})")
+        logger.info(
+            "반납 1단계: 공구 감지 전 관찰 자세 이동 "
+            f"pose=({start_pose.x:.3f},{start_pose.y:.3f},{start_pose.z:.3f})"
+        )
         if ok:
             return True
 
@@ -516,7 +527,7 @@ class ReturnSequenceRunner:
             return True
 
         if self._interrupted():
-            emit_structured_log(logger, 'info', "log", "status", svc='task', pipe='return', msg="실패 후 Home 복귀 중 stop/pause 요청으로 중단합니다.")
+            logger.info("실패 후 Home 복귀 중 stop/pause 요청으로 중단합니다.")
             return False
 
         self.reporter.publish(

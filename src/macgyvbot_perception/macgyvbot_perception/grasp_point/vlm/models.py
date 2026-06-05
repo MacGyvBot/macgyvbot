@@ -1,7 +1,6 @@
 """Local VLM model wrappers for grasp point inference."""
 
 from __future__ import annotations
-from macgyvbot_domain.logging import emit_structured_log
 
 import importlib.util
 import json
@@ -116,8 +115,10 @@ class VLMProgressLogger:
         generated = max(0, int(input_ids.shape[-1]) - self.prompt_len)
         percent = min(99, int(generated * 100 / self.max_new_tokens))
         if percent >= self.next_percent:
-            emit_structured_log(self.logger, 'info', "log", "status", svc='perception', pipe='vlm', msg="VLM inference progress: "
-                f"{percent}% ({generated}/{self.max_new_tokens} tokens)")
+            self.logger.info(
+                "VLM inference progress: "
+                f"{percent}% ({generated}/{self.max_new_tokens} tokens)"
+            )
             while self.next_percent <= percent:
                 self.next_percent += self.step_percent
         return False
@@ -336,6 +337,7 @@ class _BaseVLM:
     def get_runtime_info(self):
         model_source = self._resolve_model_source()
         return {
+            "model_id": self.model_id,
             "device": self.device,
             "dtype": str(self.torch_dtype).replace("torch.", ""),
             "model_source": model_source,
@@ -418,12 +420,14 @@ class _BaseVLM:
         input_device = getattr(input_ids, "device", "unknown")
         model_device = self._model_input_device()
         placement = self._model_placement_summary()
-        emit_structured_log(self.logger, 'info', "log", "status", svc='perception', pipe='vlm', msg="VLM inference device check: "
+        self.logger.info(
+            "VLM inference device check: "
             f"cuda_available={cuda_available}, "
             f"configured_device={self.device}, "
             f"model_input_device={model_device}, "
             f"input_ids_device={input_device}, "
-            f"model_placement={placement}")
+            f"model_placement={placement}"
+        )
 
     def _build_progress_criteria(self, prompt_len):
         if self.logger is None:
@@ -460,8 +464,10 @@ class _BaseVLM:
         generated_tokens = (
             int(generated_ids.shape[-1]) if hasattr(generated_ids, "shape") else 0
         )
-        emit_structured_log(self.logger, 'info', "log", "status", svc='perception', pipe='vlm', msg="VLM inference complete: "
-            f"generated_tokens={generated_tokens}/{self.max_new_tokens}")
+        self.logger.info(
+            "VLM inference complete: "
+            f"generated_tokens={generated_tokens}/{self.max_new_tokens}"
+        )
 
     def _model_placement_summary(self):
         device_map = getattr(self.model, "hf_device_map", None)

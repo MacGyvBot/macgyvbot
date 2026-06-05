@@ -1,7 +1,6 @@
 """Resolve a user-held return target from hand observation data."""
 
 from __future__ import annotations
-from macgyvbot_domain.logging import emit_structured_log
 
 import time
 from dataclasses import dataclass
@@ -68,7 +67,9 @@ class ReturnTargetResolver:
             self.wait_fn(self.poll_sec)
 
         if saw_hand_without_position:
-            emit_structured_log(logger, 'warn', "log", "status", svc='task', pipe='return', msg="손은 감지했지만 base 좌표를 계산하지 못했습니다.")
+            logger.warn(
+                "손은 감지했지만 base 좌표를 계산하지 못했습니다."
+            )
             return ReturnTarget(
                 source=RETURN_SOURCE_NONE,
                 tool_name=tool_name,

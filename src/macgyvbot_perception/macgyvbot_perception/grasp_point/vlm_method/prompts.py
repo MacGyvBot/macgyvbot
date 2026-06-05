@@ -97,4 +97,3 @@ def build_orientation_prompt(
         f"Context: {context}\n"
         f"{hint}"
     )
-

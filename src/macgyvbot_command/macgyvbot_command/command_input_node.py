@@ -1,12 +1,11 @@
 """Headless command-input node for MacGyvBot.
 
 - 마이크 STT와 `/stt_text` 입력을 명령 해석 파이프라인으로 수집한다.
-- LLM 중심 parser를 실행하고 `/tool_command`, `/command_feedback`를 발행한다.
-- TTS는 command 패키지 안에서 MacGyvBot 응답을 음성으로 출력한다.
+- LLM 중심 parser를 실행하고 `/tool_command`, `/command_feedback`을 발행한다.
+- TTS는 command 패키지에 남겨 MacGyvBot 응답을 음성으로 출력한다.
 
 GUI 표시는 `macgyvbot_ui/operator_ui_node`가 ROS topic만 구독해서 담당한다.
 """
-from macgyvbot_domain.logging import emit_structured_log
 
 import rclpy
 from rclpy.node import Node
@@ -19,7 +18,6 @@ from macgyvbot_config.topics import (
     TASK_CONTROL_TOPIC,
     TOOL_COMMAND_TOPIC,
 )
-from macgyvbot_domain.logging import MacGyvbotLogger
 from macgyvbot_interfaces.msg import (
     CommandFeedback,
     CommandShutdown,
@@ -27,6 +25,9 @@ from macgyvbot_interfaces.msg import (
     RobotTaskControl,
     RobotTaskStatus,
     ToolCommand,
+)
+from macgyvbot_command.input_mapping.command_hard_parser import (
+    find_short_control_action,
 )
 from macgyvbot_command.input_mapping.command_llm_parser import CommandLlmParser
 from macgyvbot_command.stt.speech_to_text import SpeechToTextService
@@ -36,16 +37,17 @@ from macgyvbot_command.tts import TtsService
 class CommandInputNode(Node):
     def __init__(self):
         super().__init__('command_input_node')
-        self.service_log = MacGyvbotLogger(super().get_logger(), svc="command")
 
         self.declare_parameter('enable_microphone', False)
         self.declare_parameter('language', 'ko-KR')
         self.declare_parameter('device_index', -1)
         self.declare_parameter('energy_threshold', 300.0)
-        self.declare_parameter('pause_threshold', 0.8)
-        self.declare_parameter('phrase_time_limit', 5.0)
+        self.declare_parameter('pause_threshold', 0.45)
+        self.declare_parameter('phrase_threshold', 0.15)
+        self.declare_parameter('non_speaking_duration', 0.25)
+        self.declare_parameter('phrase_time_limit', 3.0)
         self.declare_parameter('dynamic_energy', True)
-        self.declare_parameter('ambient_duration', 1.0)
+        self.declare_parameter('ambient_duration', 0.5)
         self.declare_parameter('stt_text_topic', STT_TEXT_TOPIC)
 
         self.declare_parameter('tool_command_topic', TOOL_COMMAND_TOPIC)
@@ -136,62 +138,47 @@ class CommandInputNode(Node):
                 device_index=self._device_index,
                 energy_threshold=float(self.get_parameter('energy_threshold').value),
                 pause_threshold=float(self.get_parameter('pause_threshold').value),
+                phrase_threshold=float(self.get_parameter('phrase_threshold').value),
+                non_speaking_duration=float(
+                    self.get_parameter('non_speaking_duration').value
+                ),
                 dynamic_energy=bool(self.get_parameter('dynamic_energy').value),
                 ambient_duration=float(self.get_parameter('ambient_duration').value),
                 phrase_time_limit=self._phrase_time_limit,
                 logger=self._log_stt,
             )
             self._stt_service.start(self._on_stt_text)
-            self.service_log.info(
-                "stt",
-                "done",
-                pipe="stt",
-                language=self._language,
-                device_index=self._device_index,
-                phrase_time_limit_sec=f"{self._phrase_time_limit:.1f}",
-                msg="STT service ready",
-            )
-            emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg=f'STT 준비 완료: language={self._language}, '
+            self.get_logger().info(
+                f'STT 준비 완료: language={self._language}, '
                 f'device_index={self._device_index}, '
-                f'phrase_time_limit={self._phrase_time_limit:.1f}s')
+                f'phrase_time_limit={self._phrase_time_limit:.1f}s'
+            )
         else:
-            emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg='마이크 STT 비활성화 모드로 실행합니다.')
+            self.get_logger().info('마이크 STT 비활성화 모드로 실행합니다.')
 
-        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg=f'입력 topic: {stt_text_topic}')
-        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg=f'출력 topic: {tool_command_topic}, {command_feedback_topic}')
-        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg=f'로봇 상태 topic: {robot_status_topic}')
+        self.get_logger().info(f'입력 topic: {stt_text_topic}')
+        self.get_logger().info(
+            f'출력 topic: {tool_command_topic}, {command_feedback_topic}'
+        )
+        self.get_logger().info(f'로봇 상태 topic: {robot_status_topic}')
         if self._tts_service.enabled:
-            emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg='TTS 모드 활성화: MacGyvBot 응답을 음성으로 출력합니다.')
+            self.get_logger().info('TTS 모드 활성화: MacGyvBot 응답을 음성으로 출력합니다.')
 
     def _log_stt(self, level, message):
-        logger = self.service_log.bind("stt")
+        logger = self.get_logger()
         if level == 'warn':
-            logger.warn("runtime", "status", msg=message)
+            logger.warn(message)
             return
         if level == 'error':
-            logger.error("runtime", "status", msg=message)
+            logger.error(message)
             return
-        logger.info("runtime", "status", msg=message)
+        logger.info(message)
 
     def _log_parser(self, level, message):
-        logger = self.service_log.bind("parser")
-        if level == 'warn':
-            logger.warn("runtime", "status", msg=message)
-            return
-        if level == 'error':
-            logger.error("runtime", "status", msg=message)
-            return
-        logger.info("runtime", "status", msg=message)
+        self._log_stt(level, message)
 
     def _log_tts(self, level, message):
-        logger = self.service_log.bind("tts")
-        if level == 'warn':
-            logger.warn("runtime", "status", msg=message)
-            return
-        if level == 'error':
-            logger.error("runtime", "status", msg=message)
-            return
-        logger.info("runtime", "status", msg=message)
+        self._log_stt(level, message)
 
     def _on_stt_text(self, text):
         text = (text or '').strip()
@@ -202,16 +189,8 @@ class CommandInputNode(Node):
         msg.text = text
         msg.source = 'microphone'
         self._stt_pub.publish(msg)
-        self.service_log.info(
-            "recognition",
-            "done",
-            pipe="stt",
-            source="microphone",
-            text=text,
-            msg="STT recognized text",
-        )
 
-        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg=f'STT 인식 결과: "{text}"')
+        self.get_logger().info(f'STT 인식 결과: "{text}"')
 
     def _text_cb(self, msg):
         text = (msg.text or '').strip()
@@ -219,30 +198,37 @@ class CommandInputNode(Node):
             return
 
         if self._is_recent_bot_echo(text):
-            emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg=f'TTS echo로 보이는 입력을 무시합니다: "{text}"')
+            self.get_logger().info(f'TTS echo로 보이는 입력을 무시합니다: "{text}"')
             return
 
-        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg=f'명령 해석 요청: "{text}"')
+        self.get_logger().info(f'명령 해석 요청: "{text}"')
         self._handle_text(text)
 
     def _handle_text(self, text):
+        if self._handle_fast_control_text(text):
+            return
+
         result = self._parser.interpret(text)
 
         command = result.get('command')
         if command is not None:
             action = command.get('action')
             if action in ('pause', 'resume', 'cancel'):
-                emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg=f'작업 제어 명령 해석: action={action}, raw_text="{text}"')
+                self.get_logger().info(
+                    f'작업 제어 명령 해석: action={action}, raw_text="{text}"'
+                )
                 for payload in result.get('feedbacks', []):
                     self._publish_feedback_payload(payload)
                 self._send_task_control_request(action=action, reason=text)
                 return
             if action == 'exit':
                 if self._exit_pending:
-                    emit_structured_log(self.service_log.bind("legacy"), 'warn', "log", "status", svc='command', pipe='command', msg='이미 종료 요청을 처리 중입니다.')
+                    self.get_logger().warn('이미 종료 요청을 처리 중입니다.')
                     return
                 self._exit_pending = True
-                emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg=f'종료 제어 명령 해석: action={action}, raw_text="{text}"')
+                self.get_logger().info(
+                    f'종료 제어 명령 해석: action={action}, raw_text="{text}"'
+                )
                 for payload in result.get('feedbacks', []):
                     self._publish_feedback_payload(payload)
                 self._send_task_control_request(action=action, reason=text)
@@ -253,21 +239,60 @@ class CommandInputNode(Node):
         for payload in result.get('feedbacks', []):
             self._publish_feedback_payload(payload)
 
+    def _handle_fast_control_text(self, text):
+        action = find_short_control_action(text)
+        if not action:
+            return False
+
+        command = {
+            'tool_name': 'unknown',
+            'action': action,
+            'target_mode': 'unknown',
+            'raw_text': text,
+            'match_method': f'{action}_fast_keyword',
+            'match_score': 1.0,
+            'confidence': 1.0,
+        }
+        feedback = {
+            'status': 'accepted',
+            'reason': 'fast_control_keyword',
+            'message': self._fast_control_feedback_message(action),
+            'raw_text': text,
+            'command': command,
+        }
+
+        self.get_logger().info(
+            f'짧은 작업 제어 명령 즉시 처리: action={action}, raw_text="{text}"'
+        )
+        self._publish_feedback_payload(feedback)
+
+        if action in ('pause', 'resume', 'cancel'):
+            self._send_task_control_request(action=action, reason=text)
+            return True
+
+        if action == 'home':
+            self._publish_command(command)
+            return True
+
+        return False
+
+    @staticmethod
+    def _fast_control_feedback_message(action):
+        return {
+            'pause': '정지 명령으로 이해했습니다.',
+            'resume': '재개 명령으로 이해했습니다. 작업 재개 요청으로 전달합니다.',
+            'cancel': '현재 작업을 취소합니다. 다음 명령을 기다리겠습니다.',
+            'home': 'Home 위치로 복귀하라는 뜻으로 이해했습니다.',
+        }.get(action, '명령을 올바른 입력으로 판단했습니다.')
+
     def _publish_command(self, command):
         command_msg = self._tool_command_message(command)
         self._tool_command_pub.publish(command_msg)
-        self.service_log.info(
-            "publish",
-            "done",
-            pipe="command",
-            action=command.get("action", "unknown"),
-            target=command.get("tool_name", "unknown"),
-            topic=TOOL_COMMAND_TOPIC,
-            msg="tool command published",
-        )
-        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg='/tool_command 발행: '
+        self.get_logger().info(
+            '/tool_command 발행: '
             f'action={command.get("action", "unknown")}, '
-            f'tool={command.get("tool_name", "unknown")}')
+            f'tool={command.get("tool_name", "unknown")}'
+        )
 
     def _publish_feedback_payload(self, payload):
         msg = CommandFeedback()
@@ -284,22 +309,15 @@ class CommandInputNode(Node):
         msg.reason = reason
         msg.source = 'command_input'
         self._task_control_pub.publish(msg)
-        self.service_log.info(
-            "publish",
-            "done",
-            pipe="command",
-            action=action,
-            reason=reason,
-            topic=TASK_CONTROL_TOPIC,
-            msg="task control request published",
+        self.get_logger().info(
+            f'{TASK_CONTROL_TOPIC} 발행: action={action}, reason={reason}'
         )
-        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg=f'{TASK_CONTROL_TOPIC} 발행: action={action}, reason={reason}')
 
     def _shutdown_cb(self, msg):
         if msg.action != 'shutdown':
             return
 
-        emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg='operator UI 종료 신호 수신: command_input_node를 종료합니다.')
+        self.get_logger().info('operator UI 종료 신호 수신: command_input_node를 종료합니다.')
         if rclpy.ok():
             rclpy.shutdown()
 
@@ -325,12 +343,16 @@ class CommandInputNode(Node):
         if self._exit_pending and str(status.get('action', '')).lower() == 'exit':
             if state in ('done', 'completed', 'success'):
                 self._exit_pending = False
-                emit_structured_log(self.service_log.bind("legacy"), 'info', "log", "status", svc='command', pipe='command', msg='종료 완료 상태 확인: command_input_node를 종료합니다.')
+                self.get_logger().info(
+                    '종료 완료 상태 확인: command_input_node를 종료합니다.'
+                )
                 if rclpy.ok():
                     rclpy.shutdown()
             elif state in ('failed', 'error', 'rejected'):
                 self._exit_pending = False
-                emit_structured_log(self.service_log.bind("legacy"), 'warn', "log", "status", svc='command', pipe='command', msg='종료 처리가 실패하여 command_input_node를 유지합니다.')
+                self.get_logger().warn(
+                    '종료 처리가 실패하여 command_input_node를 유지합니다.'
+                )
 
     @staticmethod
     def _tool_command_message(command):
@@ -385,7 +407,7 @@ class CommandInputNode(Node):
 
         if status == 'accepted':
             if action == 'pause':
-                return '정지 요청을 로봇에 전달했습니다. 작업을 재개할까요? 아니면 이번 작업을 취소할까요?'
+                return '정지 요청을 로봇에 전달했습니다. 작업을 재개할까요, 아니면 이번 작업을 취소할까요?'
             if action == 'resume':
                 return message or '재개 요청을 이해했습니다.'
             if action == 'cancel':
@@ -395,13 +417,13 @@ class CommandInputNode(Node):
             return message or '명령을 이해했습니다.'
 
         if status == 'pending_confirmation':
-            return message or '제가 이해한 명령이 맞나요? 예 또는 아니오로 답해주세요.'
+            return message or '제가 이해한 명령이 맞나요? 네 또는 아니오로 답해주세요.'
 
         if status == 'cancelled':
             return message or '알겠습니다. 실행하지 않겠습니다.'
 
         if status == 'assistant_response':
-            return message or '네. 필요한 공구가 있으면 말해주세요.'
+            return message or '네, 필요한 공구가 있으면 언제든 말해주세요.'
 
         if status == 'rejected':
             return self._build_rejected_message(reason, message)
@@ -436,6 +458,7 @@ class CommandInputNode(Node):
                 '공구 이름과 동작을 조금 더 명확히 말해주세요.'
             )
         return message or '명령을 이해하지 못했습니다. 다시 입력해주세요.'
+
     @staticmethod
     def _spoken_robot_statuses():
         return {
@@ -461,7 +484,7 @@ class CommandInputNode(Node):
             'done': '작업이 완료되었습니다.',
             'completed': '작업이 완료되었습니다.',
             'success': '작업이 완료되었습니다.',
-            'failed': '작업이 실패했습니다.',
+            'failed': '작업에 실패했습니다.',
             'error': '작업 중 오류가 발생했습니다.',
             'busy': '이미 다른 작업을 수행 중입니다.',
             'paused': '로봇이 일시정지되었습니다.',
@@ -526,4 +549,3 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
-

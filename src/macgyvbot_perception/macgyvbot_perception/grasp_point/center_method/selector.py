@@ -11,10 +11,9 @@ from macgyvbot_config.vlm import (
     VLM_INFERENCE_HISTORY_DIR,
     VLM_INFERENCE_HISTORY_ENABLED,
 )
-from macgyvbot_domain.logging import exception_log_fields
-from macgyvbot_perception.grasp_point.vlm.inference_history_recode import (
-    InferenceHistoryConfig,
-    InferenceHistoryRecode,
+from macgyvbot_perception.grasp_point.mask_image_for_grasp_detection import (
+    GraspDetectionRecordConfig,
+    GraspDetectionRecorder,
 )
 
 
@@ -28,8 +27,8 @@ class CenterGraspPointSelector:
         history_dir=VLM_INFERENCE_HISTORY_DIR,
     ):
         self.logger = logger
-        self.history = InferenceHistoryRecode(
-            InferenceHistoryConfig(enabled=history_enabled, root_dir=history_dir),
+        self.history = GraspDetectionRecorder(
+            GraspDetectionRecordConfig(enabled=history_enabled, root_dir=history_dir),
             logger=logger,
         )
 
@@ -86,13 +85,7 @@ class CenterGraspPointSelector:
                 success=True,
             )
         except Exception as exc:
-            self.logger.warn(
-                "history",
-                "fail",
-                pipe="grasp_point",
-                mode=GRASP_POINT_MODE_CENTER,
-                **exception_log_fields(exc),
-            )
+            self.logger.warn(f"bbox center history recording failed: {exc}")
 
     @staticmethod
     def _clamp_bbox_to_image(bbox, image):

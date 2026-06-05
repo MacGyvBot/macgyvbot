@@ -13,7 +13,6 @@ from macgyvbot_config.vlm import (
     VLM_ONLY_MODEL_BY_MODE,
     VLM_ONLY_MODES,
 )
-from macgyvbot_domain.logging import exception_log_fields
 from macgyvbot_perception.grasp_point.center_method.selector import (
     CenterGraspPointSelector,
 )
@@ -54,14 +53,6 @@ class GraspPointSelector:
 
     def preload_vlm_if_needed(self):
         if not self._uses_vlm():
-            self.logger.info(
-                "model_load",
-                "skip",
-                pipe="grasp_point",
-                mode=self.mode,
-                reason="mode_without_vlm",
-                msg="VLM preload skipped",
-            )
             return
 
         if (
@@ -79,14 +70,7 @@ class GraspPointSelector:
                 VLMGraspPointSelector,
             )
         except ImportError as exc:
-            self.logger.warn(
-                "model_load",
-                "fail",
-                pipe="grasp_point",
-                mode=self.mode,
-                msg="VLM grasp module import failed",
-                **exception_log_fields(exc),
-            )
+            self.logger.warn(f"VLM grasp module import failed: {exc}")
             return
 
         if self.vlm_grasp_point_selector is None:
@@ -100,30 +84,9 @@ class GraspPointSelector:
             )
 
         try:
-            self.logger.info(
-                "model_load",
-                "start",
-                pipe="grasp_point",
-                mode=self.mode,
-                msg="VLM preload started",
-            )
             self.vlm_grasp_point_selector.preload()
-            self.logger.info(
-                "model_load",
-                "done",
-                pipe="grasp_point",
-                mode=self.mode,
-                msg="VLM preload completed",
-            )
         except Exception as exc:
-            self.logger.warn(
-                "model_load",
-                "fail",
-                pipe="grasp_point",
-                mode=self.mode,
-                msg="VLM preload failed",
-                **exception_log_fields(exc),
-            )
+            self.logger.warn(f"VLM preload failed: {exc}")
 
     def _uses_vlm(self):
         return (
@@ -167,14 +130,7 @@ class GraspPointSelector:
                 return vlm_pixel
 
             self.logger.warn(
-                "fallback",
-                "skip",
-                pipe="grasp_point",
-                target=target_label,
-                mode=self.mode,
-                reason="vlm_grasp_failed",
-                fallback="bbox_center",
-                msg="VLM grasp point failed; falling back to bbox center",
+                "VLM grasp point failed. Falling back to bbox center."
             )
 
         if self.mode in VLM_ONLY_MODES:
@@ -190,14 +146,7 @@ class GraspPointSelector:
                 return vlm_only_pixel
 
             self.logger.warn(
-                "fallback",
-                "skip",
-                pipe="grasp_point",
-                target=target_label,
-                mode=self.mode,
-                reason="vlm_only_grasp_failed",
-                fallback="bbox_center",
-                msg="VLM-only grasp point failed; falling back to bbox center",
+                "VLM-only grasp point failed. Falling back to bbox center."
             )
 
         if self.mode == GRASP_POINT_MODE_API:
@@ -213,14 +162,8 @@ class GraspPointSelector:
                 return api_pixel
 
             self.logger.warn(
-                "fallback",
-                "skip",
-                pipe="grasp_point",
-                target=target_label,
-                mode=self.mode,
-                reason="api_grasp_failed",
-                fallback=DEFAULT_GRASP_POINT_MODE,
-                msg="API grasp point failed; falling back to default mode",
+                "API grasp point 선택 실패. "
+                f"기본 모드({DEFAULT_GRASP_POINT_MODE})로 대체합니다."
             )
             default_pixel = self._select_default_grasp_pixel(
                 bbox,
@@ -234,14 +177,7 @@ class GraspPointSelector:
                 return default_pixel
 
             self.logger.warn(
-                "fallback",
-                "skip",
-                pipe="grasp_point",
-                target=target_label,
-                mode=DEFAULT_GRASP_POINT_MODE,
-                reason="default_grasp_failed",
-                fallback="bbox_center",
-                msg="default grasp point failed; falling back to bbox center",
+                "기본 grasp point 모드도 실패했습니다. bbox center로 대체합니다."
             )
 
         return self._select_bbox_center_pixel(
@@ -323,13 +259,7 @@ class GraspPointSelector:
                 VLMGraspPointSelector,
             )
         except ImportError as exc:
-            self.logger.warn(
-                "module_import",
-                "fail",
-                pipe="grasp_point",
-                module="vlm_grasp_point_selector",
-                **exception_log_fields(exc),
-            )
+            self.logger.warn(f"VLM grasp module import failed: {exc}")
             return None
 
         if self.vlm_grasp_point_selector is None:
@@ -357,13 +287,7 @@ class GraspPointSelector:
                 VLMOnlyGraspPointSelector,
             )
         except ImportError as exc:
-            self.logger.warn(
-                "module_import",
-                "fail",
-                pipe="grasp_point",
-                module="vlm_only_grasp_point_selector",
-                **exception_log_fields(exc),
-            )
+            self.logger.warn(f"VLM-only grasp module import failed: {exc}")
             return
 
         if self.vlm_only_grasp_point_selector is None:
@@ -381,14 +305,7 @@ class GraspPointSelector:
         try:
             self.vlm_only_grasp_point_selector.preload()
         except Exception as exc:
-            self.logger.warn(
-                "model_load",
-                "fail",
-                pipe="grasp_point",
-                mode=self._vlm_only_mode(),
-                model_id=self._vlm_only_model_id(),
-                **exception_log_fields(exc),
-            )
+            self.logger.warn(f"VLM-only preload failed: {exc}")
 
     def _select_vlm_only_grasp_pixel(
         self,
@@ -404,13 +321,7 @@ class GraspPointSelector:
                 VLMOnlyGraspPointSelector,
             )
         except ImportError as exc:
-            self.logger.warn(
-                "module_import",
-                "fail",
-                pipe="grasp_point",
-                module="vlm_only_grasp_point_selector",
-                **exception_log_fields(exc),
-            )
+            self.logger.warn(f"VLM-only grasp module import failed: {exc}")
             return None
 
         if self.vlm_only_grasp_point_selector is None:
@@ -460,13 +371,7 @@ class GraspPointSelector:
                 APIGraspPointSelector,
             )
         except ImportError as exc:
-            self.logger.warn(
-                "module_import",
-                "fail",
-                pipe="grasp_point",
-                module="api_grasp_point_selector",
-                **exception_log_fields(exc),
-            )
+            self.logger.warn(f"API grasp 모듈 import 실패: {exc}")
             return None
 
         if self.api_grasp_point_selector is None:
@@ -499,11 +404,7 @@ def normalize_grasp_point_mode(mode, logger):
         return mode
 
     logger.warn(
-        "mode",
-        "fallback",
-        pipe="grasp_point",
-        mode=mode,
-        fallback=GRASP_POINT_MODE_CENTER,
-        reason="unknown_grasp_point_mode",
+        f"Unknown grasp_point_mode '{mode}'. "
+        f"Falling back to '{GRASP_POINT_MODE_CENTER}'."
     )
     return GRASP_POINT_MODE_CENTER

@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import numpy as np
 
-from macgyvbot_domain.logging import emit_structured_log
-
 
 def pixel_to_camera_point(
     u,
@@ -21,38 +19,16 @@ def pixel_to_camera_point(
 
     if not (0 <= u < width and 0 <= v < height):
         if logger is not None:
-            emit_structured_log(
-                logger,
-                "warn",
-                "projection",
-                "fail",
-                svc="perception",
-                pipe="depth",
-                source=source,
-                reason="pixel_outside_depth_image",
-                u=u,
-                v=v,
-                width=width,
-                height=height,
+            logger.warn(
+                f"{source} is outside depth image: u={u}, v={v}, "
+                f"size=({width}, {height})"
             )
         return None
 
     z_raw = float(depth_image[v, u])
     if not np.isfinite(z_raw) or z_raw <= 0.0:
         if logger is not None:
-            emit_structured_log(
-                logger,
-                "warn",
-                "projection",
-                "fail",
-                svc="perception",
-                pipe="depth",
-                source=source,
-                reason="invalid_depth",
-                u=u,
-                v=v,
-                depth=z_raw,
-            )
+            logger.warn(f"{source} depth is invalid: u={u}, v={v}, depth={z_raw}")
         return None
 
     z_m = z_raw * depth_scale
@@ -98,23 +74,11 @@ class DepthProjector:
         cam_x, cam_y, z_m = camera_point
         bx, by, bz = self.camera_to_base(camera_point)
 
-        emit_structured_log(
-            logger,
-            "info",
-            "projection",
-            "done",
-            svc="perception",
-            pipe="depth",
-            target=label,
-            source=source,
-            u=u,
-            v=v,
-            camera_x=f"{cam_x:.3f}",
-            camera_y=f"{cam_y:.3f}",
-            camera_z=f"{z_m:.3f}",
-            base_x=f"{bx:.3f}",
-            base_y=f"{by:.3f}",
-            base_z=f"{bz:.3f}",
+        logger.info(
+            f"'{label}' detected: source={source}, "
+            f"pixel=({u}, {v}), "
+            f"camera=({cam_x:.3f}, {cam_y:.3f}, {z_m:.3f}), "
+            f"base=({bx:.3f}, {by:.3f}, {bz:.3f})"
         )
 
         return bx, by, bz, z_m, vlm_rpy_deg

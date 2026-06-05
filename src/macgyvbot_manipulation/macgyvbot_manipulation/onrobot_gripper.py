@@ -1,28 +1,11 @@
 #!/usr/bin/env python3
 
-import sys
-
-from macgyvbot_domain.logging import LogEvent, format_log_event
-from pymodbus.client.sync import ModbusTcpClient as ModbusClient
-
-
-def _log(level, step, event, **fields):
-    text = format_log_event(
-        LogEvent(
-            svc="manipulation",
-            pipe="gripper",
-            step=step,
-            event=event,
-            fields=fields,
-        )
-    )
-    sys.stderr.write(f"{level.upper()} {text}\n")
-    sys.stderr.flush()
-
 
 class RG():
 
     def __init__(self, gripper, ip, port):
+        from pymodbus.client.sync import ModbusTcpClient as ModbusClient
+
         self.client = ModbusClient(
             ip,
             port=port,
@@ -32,7 +15,7 @@ class RG():
             baudrate=115200,
             timeout=1)
         if gripper not in ['rg2', 'rg6']:
-            _log("error", "config", "invalid_gripper", gripper=gripper)
+            print("Please specify either rg2 or rg6.")
             return
         self.gripper = gripper  # RG2/6
         if self.gripper == 'rg2':
@@ -42,6 +25,12 @@ class RG():
             self.max_width = 1600
             self.max_force = 1200
         self.open_connection()
+
+    @staticmethod
+    def _to_signed_int16(value):
+        if value >= 32768:
+            return value - 65536
+        return value
 
     def open_connection(self):
         """Opens the connection with a gripper."""
@@ -69,6 +58,27 @@ class RG():
             address=267, count=1, unit=65)
         width_mm = result.registers[0] / 10.0
         return width_mm
+
+    def get_depth(self):
+        """Reads current depth compensation value in millimeters.
+
+        The value is provided in 1/10 millimeters as signed two's complement
+        and is based on the completely closed gripper position.
+        """
+        result = self.client.read_holding_registers(
+            address=263, count=1, unit=65)
+        depth_mm = self._to_signed_int16(result.registers[0]) / 10.0
+        return depth_mm
+
+    def get_relative_depth(self):
+        """Reads current relative depth in millimeters.
+
+        The value is based on the recent motion start position.
+        """
+        result = self.client.read_holding_registers(
+            address=264, count=1, unit=65)
+        depth_mm = self._to_signed_int16(result.registers[0]) / 10.0
+        return depth_mm
 
     def get_status(self):
         """Reads current device status.
@@ -104,25 +114,25 @@ class RG():
         status = format(result.registers[0], '016b')
         status_list = [0] * 7
         if int(status[-1]):
-            _log("warn", "status", "busy")
+            print("A motion is ongoing so new commands are not accepted.")
             status_list[0] = 1
         if int(status[-2]):
-            _log("info", "status", "grip_detected")
+            print("An internal- or external grip is detected.")
             status_list[1] = 1
         if int(status[-3]):
-            _log("warn", "status", "safety_switch_1_pushed")
+            print("Safety switch 1 is pushed.")
             status_list[2] = 1
         if int(status[-4]):
-            _log("error", "status", "safety_circuit_1_active")
+            print("Safety circuit 1 is activated so it will not move.")
             status_list[3] = 1
         if int(status[-5]):
-            _log("warn", "status", "safety_switch_2_pushed")
+            print("Safety switch 2 is pushed.")
             status_list[4] = 1
         if int(status[-6]):
-            _log("error", "status", "safety_circuit_2_active")
+            print("Safety circuit 2 is activated so it will not move.")
             status_list[5] = 1
         if int(status[-7]):
-            _log("error", "status", "safety_error")
+            print("Any of the safety switch is pushed.")
             status_list[6] = 1
 
         return status_list
@@ -182,20 +192,29 @@ class RG():
     def close_gripper(self, force_val=400):
         """Closes gripper."""
         params = [force_val, 0, 16]
-        _log("info", "motion", "close_start", force=force_val)
+        print("Start closing gripper.")
         result = self.client.write_registers(
             address=0, values=params, unit=65)
+        try:
+            width_mm = self.get_width()
+            depth_mm = self.get_depth()
+            print(
+                "Gripper state after close command: "
+                f"width={width_mm:.1f} mm, depth={depth_mm:.1f} mm"
+            )
+        except Exception as exc:
+            print(f"Failed to read gripper state after close command: {exc}")
 
     def open_gripper(self, force_val=400):
         """Opens gripper."""
         params = [force_val, self.max_width, 16]
-        _log("info", "motion", "open_start", force=force_val, width=self.max_width)
+        print("Start opening gripper.")
         result = self.client.write_registers(
             address=0, values=params, unit=65)
 
     def move_gripper(self, width_val, force_val=400):
         """Moves gripper to the specified width."""
         params = [force_val, width_val, 16]
-        _log("info", "motion", "move_start", force=force_val, width=width_val)
+        print("Start moving gripper.")
         result = self.client.write_registers(
             address=0, values=params, unit=65)

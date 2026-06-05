@@ -11,11 +11,10 @@ from macgyvbot_config.vlm import (
     VLM_INFERENCE_HISTORY_DIR,
     VLM_INFERENCE_HISTORY_ENABLED,
 )
-from macgyvbot_domain.logging import exception_log_fields
 from macgyvbot_perception.grasp_point.api_method.client import GeminiGraspAPIClient
-from macgyvbot_perception.grasp_point.vlm.inference_history_recode import (
-    InferenceHistoryConfig,
-    InferenceHistoryRecode,
+from macgyvbot_perception.grasp_point.mask_image_for_grasp_detection import (
+    GraspDetectionRecordConfig,
+    GraspDetectionRecorder,
 )
 
 
@@ -39,8 +38,8 @@ class APIGraspPointSelector:
             base_url=base_url,
             timeout_sec=timeout_sec,
         )
-        self.history = InferenceHistoryRecode(
-            InferenceHistoryConfig(enabled=history_enabled, root_dir=history_dir),
+        self.history = GraspDetectionRecorder(
+            GraspDetectionRecordConfig(enabled=history_enabled, root_dir=history_dir),
             logger=logger,
         )
 
@@ -55,15 +54,7 @@ class APIGraspPointSelector:
     ):
         x1, y1, x2, y2 = self._clamp_bbox_to_image(bbox, color_image)
         if x2 <= x1 or y2 <= y1:
-            self.logger.warn(
-                "crop",
-                "fail",
-                pipe="api",
-                target=target_label,
-                detected_label=label,
-                reason="empty_bbox",
-                mode=GRASP_POINT_MODE_API,
-            )
+            self.logger.warn("API grasp crop bbox is empty.")
             return None
 
         import cv2
@@ -92,16 +83,7 @@ class APIGraspPointSelector:
                 success=False,
                 error=str(exc),
             )
-            self.logger.warn(
-                "inference",
-                "fail",
-                pipe="api",
-                target=target_label,
-                detected_label=label,
-                mode=GRASP_POINT_MODE_API,
-                model_id=self.client.model_id,
-                **exception_log_fields(exc),
-            )
+            self.logger.warn(f"API grasp point inference failed: {exc}")
             return None
 
         u = x1 + int(round(result.point[0]))
@@ -121,16 +103,9 @@ class APIGraspPointSelector:
             success=True,
         )
         self.logger.info(
-            "selection",
-            "done",
-            pipe="api",
-            target=target_label,
-            detected_label=label,
-            mode=GRASP_POINT_MODE_API,
-            u=u,
-            v=v,
-            rpy_deg=result.orientation_rpy_deg,
-            confidence=result.confidence,
+            f"API grasp point selected: pixel=({u}, {v}), "
+            f"rpy_deg={result.orientation_rpy_deg}, "
+            f"confidence={result.confidence}, source={GRASP_POINT_MODE_API}"
         )
         return u, v, GRASP_POINT_MODE_API, result.orientation_rpy_deg
 

@@ -1,7 +1,6 @@
 """Adapt hand-grasp result payloads for task workflow consumption."""
 
 from __future__ import annotations
-from macgyvbot_domain.logging import emit_structured_log
 
 import time
 
@@ -40,9 +39,11 @@ class HandGraspResultAdapter:
         clamped_u = min(max(u, 0), max(width - 1, 0))
         clamped_v = min(max(v, 0), max(height - 1, 0))
         if clamped_u != u or clamped_v != v:
-            emit_structured_log(self.logger, 'warn', "log", "status", svc='task', pipe='adapter', msg="handover_hand_pixel 경계 클램프 적용: "
+            self.logger.warn(
+                "handover_hand_pixel 경계 클램프 적용: "
                 f"raw=({u}, {v}), clamped=({clamped_u}, {clamped_v}), "
-                f"size=({width}, {height})")
+                f"size=({width}, {height})"
+            )
         u, v = clamped_u, clamped_v
 
         camera_point = pixel_to_camera_point(

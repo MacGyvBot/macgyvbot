@@ -1,7 +1,6 @@
 """Reusable helpers for handover target search and movement."""
 
 from __future__ import annotations
-from macgyvbot_domain.logging import emit_structured_log
 
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -74,11 +73,13 @@ def move_to_observation_pose(
     state_goal.joint_positions = OBSERVATION_JOINTS
     state_goal.update()
 
-    emit_structured_log(logger, 'info', "log", "status", svc='manipulation', pipe='handoff', msg="관찰 자세 이동(joint): "
-        "j1=0, j2=-40, j3=55, j4=0, j5=120, j6=90")
+    logger.info(
+        "관찰 자세 이동(joint): "
+        "j1=0, j2=-40, j3=55, j4=0, j5=120, j6=90"
+    )
     ok = motion.plan_and_execute(logger, state_goal=state_goal)
     if not ok:
-        emit_structured_log(logger, 'warn', "log", "status", svc='manipulation', pipe='handoff', msg="관찰 자세 이동 실패")
+        logger.warn("관찰 자세 이동 실패")
         return False, SearchStartPose(0.0, 0.0, 0.0)
 
     # Keep contract compatible for existing callers/logging.
@@ -178,8 +179,10 @@ def _observe_stable_candidate(
 
     while time.monotonic() < deadline:
         if should_interrupt is not None and should_interrupt():
-            emit_structured_log(logger, 'info', "log", "status", svc='manipulation', pipe='handoff', msg="관측 기반 목표 탐색을 "
-                "stop/pause 요청으로 중단합니다.")
+            logger.info(
+                "관측 기반 목표 탐색을 "
+                "stop/pause 요청으로 중단합니다."
+            )
             return TargetCandidate(
                 found=False,
                 x=0.0,
@@ -211,28 +214,36 @@ def _observe_stable_candidate(
         ):
             stable_anchor = candidate
             stable_since_observed_at = candidate.observed_at_sec
-            emit_structured_log(logger, 'info', "log", "status", svc='manipulation', pipe='handoff', msg="사용자 손 위치 안정화 시작: "
+            logger.info(
+                "사용자 손 위치 안정화 시작: "
                 f"xyz=({candidate.x:.3f},{candidate.y:.3f},{candidate.z:.3f}), "
-                f"tol={stable_tolerance_m:.3f}m")
+                f"tol={stable_tolerance_m:.3f}m"
+            )
             time.sleep(sleep_step)
             continue
 
         stable_elapsed = candidate.observed_at_sec - stable_since_observed_at
         if stable_elapsed >= stable_duration_sec:
-            emit_structured_log(logger, 'info', "log", "status", svc='manipulation', pipe='handoff', msg="사용자 손 위치 안정화 완료: "
+            logger.info(
+                "사용자 손 위치 안정화 완료: "
                 f"duration={stable_elapsed:.2f}s, "
-                f"xyz=({candidate.x:.3f},{candidate.y:.3f},{candidate.z:.3f})")
+                f"xyz=({candidate.x:.3f},{candidate.y:.3f},{candidate.z:.3f})"
+            )
             return candidate
 
         now = time.monotonic()
         if now - last_log_time >= HANDOVER_OBSERVATION_LOG_INTERVAL_SEC:
-            emit_structured_log(logger, 'info', "log", "status", svc='manipulation', pipe='handoff', msg="사용자 손 위치 안정화 대기: "
-                f"{stable_elapsed:.2f}/{stable_duration_sec:.2f}s")
+            logger.info(
+                "사용자 손 위치 안정화 대기: "
+                f"{stable_elapsed:.2f}/{stable_duration_sec:.2f}s"
+            )
             last_log_time = now
         time.sleep(sleep_step)
 
-    emit_structured_log(logger, 'warn', "log", "status", svc='manipulation', pipe='handoff', msg="관측 기반 목표 탐색 타임아웃: "
-        f"timeout={timeout_sec:.1f}s, stable_required={stable_duration_sec:.1f}s")
+    logger.warn(
+        "관측 기반 목표 탐색 타임아웃: "
+        f"timeout={timeout_sec:.1f}s, stable_required={stable_duration_sec:.1f}s"
+    )
     return TargetCandidate(
         found=False,
         x=0.0,
@@ -281,13 +292,17 @@ def move_to_candidate_with_offset(
         start=1,
     ):
         if should_interrupt is not None and should_interrupt():
-            emit_structured_log(logger, 'info', "log", "status", svc='manipulation', pipe='handoff', msg="stop/pause 요청으로 "
-                "사용자 손 위치 이동을 중단합니다.")
+            logger.info(
+                "stop/pause 요청으로 "
+                "사용자 손 위치 이동을 중단합니다."
+            )
             return False, last_pose, "interrupted"
 
-        emit_structured_log(logger, 'info', "log", "status", svc='manipulation', pipe='handoff', msg="사용자 손 위치 전달 플래닝 시도: "
+        logger.info(
+            "사용자 손 위치 전달 플래닝 시도: "
             f"{attempt_index}/{total_attempts}, "
-            f"target=({target_x:.3f},{target_y:.3f},{target_z:.3f})")
+            f"target=({target_x:.3f},{target_y:.3f},{target_z:.3f})"
+        )
         pose_goal = make_safe_pose(target_x, target_y, target_z, ori, logger)
         ok = motion.plan_and_execute(
             logger,
@@ -302,13 +317,17 @@ def move_to_candidate_with_offset(
             return True, last_pose, ""
 
         if should_interrupt is not None and should_interrupt():
-            emit_structured_log(logger, 'info', "log", "status", svc='manipulation', pipe='handoff', msg="사용자 손 위치 이동 중 "
-                "stop/pause 요청을 확인했습니다.")
+            logger.info(
+                "사용자 손 위치 이동 중 "
+                "stop/pause 요청을 확인했습니다."
+            )
             return False, last_pose, "interrupted"
 
         if attempt_index < total_attempts:
-            emit_structured_log(logger, 'warn', "log", "status", svc='manipulation', pipe='handoff', msg="사용자 손 위치 전달 플래닝 실패. "
-                "x를 줄이고 y를 0에 가깝게 보정해 재시도합니다.")
+            logger.warn(
+                "사용자 손 위치 전달 플래닝 실패. "
+                "x를 줄이고 y를 0에 가깝게 보정해 재시도합니다."
+            )
 
     return False, last_pose, "target_move_failed"
 

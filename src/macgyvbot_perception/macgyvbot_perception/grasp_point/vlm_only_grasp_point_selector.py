@@ -5,4 +5,3 @@ from macgyvbot_perception.grasp_point.vlm_only_method.selector import (
 )
 
 __all__ = ["VLMOnlyGraspPointSelector"]
-

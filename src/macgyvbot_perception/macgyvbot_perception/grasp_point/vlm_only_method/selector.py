@@ -12,10 +12,9 @@ from macgyvbot_config.vlm import (
     VLM_INFERENCE_HISTORY_ENABLED,
     VLM_MODEL_QWEN3B,
 )
-from macgyvbot_domain.logging import exception_log_fields
-from macgyvbot_perception.grasp_point.vlm.inference_history_recode import (
-    InferenceHistoryConfig,
-    InferenceHistoryRecode,
+from macgyvbot_perception.grasp_point.mask_image_for_grasp_detection import (
+    GraspDetectionRecordConfig,
+    GraspDetectionRecorder,
 )
 from macgyvbot_perception.grasp_point.vlm.models import VLMOnly
 from macgyvbot_perception.grasp_point.vlm.parser import Parser
@@ -43,8 +42,8 @@ class VLMOnlyGraspPointSelector:
         self.mode = mode
         self.model = None
         self.parser = Parser()
-        self.history = InferenceHistoryRecode(
-            InferenceHistoryConfig(enabled=history_enabled, root_dir=history_dir),
+        self.history = GraspDetectionRecorder(
+            GraspDetectionRecordConfig(enabled=history_enabled, root_dir=history_dir),
             logger=logger,
         )
 
@@ -62,15 +61,7 @@ class VLMOnlyGraspPointSelector:
     ):
         x1, y1, x2, y2 = self.clamp_bbox_to_image(bbox, color_image)
         if x2 <= x1 or y2 <= y1:
-            self.logger.warn(
-                "crop",
-                "fail",
-                pipe="vlm",
-                target=target_label,
-                detected_label=label,
-                reason="empty_bbox",
-                mode=self.mode,
-            )
+            self.logger.warn("VLM-only crop bbox is empty.")
             return None
 
         self._ensure_model_loaded()
@@ -108,16 +99,7 @@ class VLMOnlyGraspPointSelector:
                 success=False,
                 error=str(exc),
             )
-            self.logger.warn(
-                "inference",
-                "fail",
-                pipe="vlm",
-                target=target_label,
-                detected_label=label,
-                mode=self.mode,
-                model_id=self.model_id,
-                **exception_log_fields(exc),
-            )
+            self.logger.warn(f"VLM-only grasp point inference failed: {exc}")
             return None
 
         if parsed is None:
@@ -135,14 +117,8 @@ class VLMOnlyGraspPointSelector:
                 error="invalid VLM-only response",
             )
             self.logger.warn(
-                "parse",
-                "fail",
-                pipe="vlm",
-                target=target_label,
-                detected_label=label,
-                mode=self.mode,
-                reason="invalid_vlm_only_response",
-                raw_response=raw_text,
+                "VLM-only response did not contain valid x_px, y_px, yaw_deg: "
+                f"{raw_text}"
             )
             return None
 
@@ -166,15 +142,8 @@ class VLMOnlyGraspPointSelector:
         )
 
         self.logger.info(
-            "selection",
-            "done",
-            pipe="vlm",
-            target=target_label,
-            detected_label=label,
-            mode=self.mode,
-            u=u,
-            v=v,
-            yaw_deg=f"{yaw:.1f}",
+            f"VLM-only grasp point selected: pixel=({u}, {v}), "
+            f"yaw={yaw:.1f}deg, source={self.mode}"
         )
         return u, v, self.mode, orientation
 
@@ -187,11 +156,7 @@ class VLMOnlyGraspPointSelector:
             return
 
         self.logger.info(
-            "model_load",
-            "start",
-            pipe="vlm",
-            mode=self.mode,
-            model_id=self.model_id,
+            f"VLM-only grasp model lazy load preparing: model_id={self.model_id}"
         )
         self.model = VLMOnly(
             model_id=self.model_id,
@@ -200,23 +165,23 @@ class VLMOnlyGraspPointSelector:
         )
         runtime = self.model.get_runtime_info()
         self.logger.info(
-            "runtime",
-            "status",
-            pipe="vlm",
-            mode=self.mode,
-            model_id=self.model_id,
-            device=runtime["device"],
-            dtype=runtime["dtype"],
-            local_weights=runtime["using_local_weights"],
-            source=runtime["model_source"],
+            "VLM-only runtime: "
+            f"model_id={runtime['model_id']}, "
+            f"device={runtime['device']}, "
+            f"dtype={runtime['dtype']}, "
+            f"local_weights={runtime['using_local_weights']}, "
+            f"source={runtime['model_source']}"
+        )
+        self.logger.info(
+            "VLM-only 가중치 로드 시작: "
+            f"model_id={runtime['model_id']}, "
+            f"source={runtime['model_source']}"
         )
         self.model.load()
         self.logger.info(
-            "model_load",
-            "done",
-            pipe="vlm",
-            mode=self.mode,
-            model_id=self.model_id,
+            "VLM-only 가중치 로드 완료: "
+            f"model_id={runtime['model_id']}, "
+            f"source={runtime['model_source']}"
         )
 
     @staticmethod

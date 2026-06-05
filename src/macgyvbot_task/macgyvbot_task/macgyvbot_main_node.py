@@ -11,7 +11,6 @@ from macgyvbot_config.topics import (
     TASK_REQUEST_TOPIC,
     TOOL_COMMAND_TOPIC,
 )
-from macgyvbot_domain.logging import MacGyvbotLogger
 from macgyvbot_interfaces.msg import RobotTaskStatus, TaskRequest, ToolCommand
 from macgyvbot_task.application import RobotStatusPublisher, ToolCommandController
 
@@ -55,7 +54,6 @@ class MacGyvBotNode(Node):
 
     def __init__(self):
         super().__init__("macgyvbot_main_node")
-        self.service_log = MacGyvbotLogger(super().get_logger(), svc="task", pipe="router")
 
         self._task_active = False
         self._target_label = None
@@ -76,7 +74,7 @@ class MacGyvBotNode(Node):
             target_label_provider=lambda: self._target_label,
         )
         self.task_controller = ToolCommandController(
-            self.service_log.bind("command"),
+            self.get_logger(),
             self.status_publisher,
             is_busy=lambda: self._task_active,
             set_target=self._request_bring,
@@ -100,13 +98,10 @@ class MacGyvBotNode(Node):
             10,
         )
 
-        self.service_log.info(
-            "startup",
-            "ready",
-            tool_command_topic=TOOL_COMMAND_TOPIC,
-            task_request_topic=TASK_REQUEST_TOPIC,
-            robot_status_topic=ROBOT_STATUS_TOPIC,
-        )
+        self.get_logger().info("macgyvbot main router 초기화 완료")
+        self.get_logger().info(f"공구 명령 토픽: {TOOL_COMMAND_TOPIC}")
+        self.get_logger().info(f"task request 토픽: {TASK_REQUEST_TOPIC}")
+        self.get_logger().info(f"로봇 상태 토픽: {ROBOT_STATUS_TOPIC}")
 
     def _tool_command_cb(self, msg):
         command = self._tool_command_payload(msg)
@@ -219,12 +214,9 @@ class MacGyvBotNode(Node):
             msg.has_vlm_yaw_deg = True
             msg.vlm_yaw_deg = float(vlm_yaw_deg)
         self.task_request_pub.publish(msg)
-        self.service_log.info(
-            "task_request",
-            "published",
-            topic=TASK_REQUEST_TOPIC,
-            task=payload.get("task"),
-            target=payload.get("tool_name", "unknown"),
+        self.get_logger().info(
+            f"{TASK_REQUEST_TOPIC} 발행: task={payload.get('task')}, "
+            f"tool={payload.get('tool_name', 'unknown')}"
         )
 
     def _robot_status_cb(self, msg):

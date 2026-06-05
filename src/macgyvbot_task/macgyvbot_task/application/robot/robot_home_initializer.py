@@ -1,7 +1,6 @@
 """Home pose initialization for robot workflows."""
 
 from __future__ import annotations
-from macgyvbot_domain.logging import emit_structured_log
 
 from scipy.spatial.transform import Rotation
 
@@ -18,11 +17,11 @@ class RobotHomeInitializer:
 
     def initialize(self):
         logger = self.state.get_logger()
-        emit_structured_log(logger, 'info', "log", "status", svc='task', pipe='motion', msg="시스템 준비 중... Home으로 이동합니다.")
+        logger.info("시스템 준비 중... Home으로 이동합니다.")
 
         ok = self.motion.move_to_home_joints(logger)
         if not ok:
-            emit_structured_log(logger, 'error', "log", "status", svc='task', pipe='motion', msg="초기 Home 이동 실패")
+            logger.error("초기 Home 이동 실패")
             return False
 
         transform = get_ee_matrix(self.robot)
@@ -40,6 +39,8 @@ class RobotHomeInitializer:
             "w": float(qw),
         }
 
-        emit_structured_log(logger, 'info', "log", "status", svc='task', pipe='motion', msg=f"Home 저장 완료: x={self.state.home_xyz[0]:.3f}, "
-            f"y={self.state.home_xyz[1]:.3f}, z={self.state.home_xyz[2]:.3f}")
+        logger.info(
+            f"Home 저장 완료: x={self.state.home_xyz[0]:.3f}, "
+            f"y={self.state.home_xyz[1]:.3f}, z={self.state.home_xyz[2]:.3f}"
+        )
         return True

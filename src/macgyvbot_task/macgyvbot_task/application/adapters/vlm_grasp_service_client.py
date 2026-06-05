@@ -10,7 +10,6 @@ from macgyvbot_config.vlm import (
     VLM_SERVICE_RESPONSE_TIMEOUT_SEC,
     VLM_SERVICE_WAIT_TIMEOUT_SEC,
 )
-from macgyvbot_domain.logging import MacGyvbotLogger, exception_log_fields
 from macgyvbot_interfaces.srv import VLMGrasp
 
 
@@ -31,10 +30,6 @@ class VLMGraspServiceClient:
         self.wait_timeout_sec = float(wait_timeout_sec)
         self.response_timeout_sec = float(response_timeout_sec)
         self.client = node.create_client(VLMGrasp, service_name)
-        if hasattr(node, "service_log"):
-            self.log = node.service_log.bind("vlm_client")
-        else:
-            self.log = MacGyvbotLogger(node.get_logger(), svc="task", pipe="vlm_client")
 
     def infer_grasp(
         self,
@@ -48,23 +43,17 @@ class VLMGraspServiceClient:
         interrupted = interrupted or (lambda: False)
         request_created_mono = time.monotonic()
         request_created_wall = self._timestamp()
-        self.log.info(
-            "request",
-            "created",
-            created_at=request_created_wall,
-            service=self.service_name,
-            mode=mode,
-            target=target_label,
-            label=label,
-            bbox=list(bbox_xyxy),
+        self.node.get_logger().info(
+            "VLM service request created: "
+            f"created_at={request_created_wall}, "
+            f"service={self.service_name}, mode={mode}, "
+            f"target={target_label}, label={label}, bbox={list(bbox_xyxy)}"
         )
 
         if not self.client.wait_for_service(timeout_sec=self.wait_timeout_sec):
-            self.log.warn(
-                "service",
-                "unavailable",
-                service=self.service_name,
-                timeout_sec=self.wait_timeout_sec,
+            self.node.get_logger().warn(
+                "VLM service unavailable within timeout: "
+                f"service={self.service_name}, timeout_sec={self.wait_timeout_sec}"
             )
             return None
 
@@ -77,11 +66,9 @@ class VLMGraspServiceClient:
 
         send_wall = self._timestamp()
         send_mono = time.monotonic()
-        self.log.info(
-            "request",
-            "sent",
-            sent_at=send_wall,
-            queue_wait_sec=f"{send_mono - request_created_mono:.3f}",
+        self.node.get_logger().info(
+            "VLM service request sent: "
+            f"sent_at={send_wall}, queue_wait_sec={send_mono - request_created_mono:.3f}"
         )
         future = self.client.call_async(request)
 
@@ -89,15 +76,15 @@ class VLMGraspServiceClient:
         while not future.done():
             if interrupted():
                 future.cancel()
-                self.log.warn("request", "interrupted")
+                self.node.get_logger().warn(
+                    "VLM service request interrupted while waiting for response."
+                )
                 return None
             if time.monotonic() >= deadline:
                 future.cancel()
-                self.log.warn(
-                    "response",
-                    "timeout",
-                    service=self.service_name,
-                    timeout_sec=self.response_timeout_sec,
+                self.node.get_logger().warn(
+                    "VLM service response timeout: "
+                    f"service={self.service_name}, timeout_sec={self.response_timeout_sec}"
                 )
                 return None
             time.sleep(0.02)
@@ -106,28 +93,26 @@ class VLMGraspServiceClient:
         response_mono = time.monotonic()
         service_latency = response_mono - send_mono
         total_latency = response_mono - request_created_mono
-        self.log.info(
-            "response",
-            "received",
-            received_at=response_wall,
-            service_latency_sec=f"{service_latency:.3f}",
-            total_latency_sec=f"{total_latency:.3f}",
+        self.node.get_logger().info(
+            "VLM service response received: "
+            f"received_at={response_wall}, "
+            f"service_latency_sec={service_latency:.3f}, "
+            f"total_latency_sec={total_latency:.3f}"
         )
 
         try:
             response = future.result()
         except Exception as exc:
-            self.log.warn("response", "future_failed", **exception_log_fields(exc))
+            self.node.get_logger().warn(f"VLM service future failed: {exc}")
             return None
 
         if response is None:
-            self.log.warn("response", "empty")
+            self.node.get_logger().warn("VLM service returned no response object.")
             return None
         if not response.success:
-            self.log.warn(
-                "response",
-                "failed",
-                reason=response.error_message or response.result_text,
+            self.node.get_logger().warn(
+                "VLM service reported failure: "
+                f"message={response.error_message or response.result_text}"
             )
             return None
 

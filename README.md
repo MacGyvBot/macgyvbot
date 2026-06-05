@@ -19,7 +19,7 @@ src/
 ├── macgyvbot_perception/     # YOLO, VLM, depth, hand grasp perception
 ├── macgyvbot_manipulation/   # MoveIt, gripper, force, pose, safe workspace
 ├── macgyvbot_config/         # shared Python runtime constants
-├── macgyvbot_domain/         # shared dataclasses and service log helpers
+├── macgyvbot_domain/         # shared dataclasses
 ├── macgyvbot_resources/      # calibration and model assets
 └── macgyvbot_interfaces/     # typed msg/srv/action contracts
 ```
@@ -55,6 +55,38 @@ Python/runtime 의존성 설치:
 ```bash
 sudo apt update
 sudo apt install -y portaudio19-dev ffmpeg && python3 -m pip install -r requirements.txt
+```
+
+TTS 음성 출력은 기본적으로 `edge-tts`를 우선 사용하고, 실패 시
+`espeak-ng`로 fallback할 수 있습니다. `edge-tts`는 `requirements.txt`에
+포함되어 있으며, 생성된 오디오 재생에는 `ffmpeg`의 `ffplay`가 필요합니다.
+fallback까지 준비하려면 아래처럼 설치합니다.
+
+```bash
+sudo apt update
+sudo apt install -y ffmpeg espeak-ng
+python3 -m pip install -r requirements.txt
+```
+
+TTS를 명시적으로 켜거나 엔진/음성을 지정하려면 launch argument를 사용합니다.
+
+```bash
+ros2 launch macgyvbot_bringup macgyvbot.launch.py \
+  use_tts:=true \
+  tts_engine:=edge \
+  tts_voice:=ko-KR-SunHiNeural
+```
+
+STT는 짧은 한국어 제어 명령이 늦게 확정되지 않도록 기본 silence/phrase
+threshold를 짧게 둡니다. 실행 환경의 마이크가 너무 민감하거나 문장을 끊어
+듣는 경우 launch argument로 조정할 수 있습니다.
+
+```bash
+ros2 launch macgyvbot_bringup macgyvbot.launch.py \
+  stt_pause_threshold:=0.45 \
+  stt_phrase_threshold:=0.15 \
+  stt_non_speaking_duration:=0.25 \
+  stt_phrase_time_limit:=3.0
 ```
 
 LLM 기반 명령 해석을 사용하려면 Ollama와 기본 모델을 준비합니다.
@@ -202,6 +234,11 @@ GUI의 `복귀` 버튼과 Home 복귀 표현은 `/tool_command`의 `action=home`
 `action=exit`으로 전달되며, `task_coordinator_node`가 실행 중 작업을
 종료하고 Home 복귀가 완료된 뒤
 GUI와 command node를 종료합니다.
+
+operator GUI의 Gripper Control 패널은 task coordinator가 제공하는 typed
+`/manual_gripper_control` service를 통해 RG2 width 명령을 요청합니다. GUI는
+slider release 또는 `적용` 버튼에서만 요청을 보내며, task coordinator는 작업
+실행 중이거나 그리퍼 상태가 안전하지 않으면 요청을 거부합니다.
 
 ## Task Coordinator
 

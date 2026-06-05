@@ -1,20 +1,24 @@
 """Pick sequence step construction."""
-from macgyvbot_domain.logging import emit_structured_log
 
 import time
 
 import rclpy
 
 from macgyvbot_config.pick import OBSERVE_X_OFFSET_M
-from macgyvbot_domain.logging import exception_log_fields
 
 from macgyvbot_manipulation.robot_pose import (
     current_ee_orientation,
     make_safe_pose,
 )
-from macgyvbot_manipulation.robot_safezone import safe_z_min_for_drawer
+from macgyvbot_manipulation.robot_safezone import (
+    SAFE_Z_MIN,
+    safe_z_min_for_drawer,
+)
 from macgyvbot_manipulation.timing import cooperative_wait
-from macgyvbot_task.application.pick_flow.pick_grasp_flow import PickGraspFlow
+from macgyvbot_task.application.pick_flow.pick_grasp_flow import (
+    PickGraspFlow,
+    calculate_pregrasp_extra_descent,
+)
 from macgyvbot_task.application.pick_flow.pick_handoff_flow import PickHandoffFlow
 from macgyvbot_task.application.pick_flow.pick_target_planner import PickTargetPlanner
 from macgyvbot_task.application.task_control.task_step import TaskStep
@@ -31,6 +35,7 @@ class PickSequenceRunner:
         state,
         tool_hold_monitor=None,
         refine_pick_target=None,
+        generate_grasp_detection_mask_images=None,
         control_events=None,
         drawer_flow=None,
     ):
@@ -40,6 +45,7 @@ class PickSequenceRunner:
         self.state = state
         self.tool_hold_monitor = tool_hold_monitor
         self.refine_pick_target = refine_pick_target
+        self.generate_grasp_detection_mask_images = generate_grasp_detection_mask_images
         self.control_events = control_events or {}
         self.drawer_flow = drawer_flow
         self.target_planner = PickTargetPlanner(robot)
@@ -64,6 +70,8 @@ class PickSequenceRunner:
         self.state.last_grasp_result = None
         self.state.tool_mask_locked = False
         self.state.last_tool_mask_lock_result = None
+        self.state.grasp_detection_mask_images = None
+        self.state.grasp_detection_mask_target = None
 
         log = self.state.logger()
         drawer_id = self._drawer_id_for_current_target()
@@ -84,17 +92,12 @@ class PickSequenceRunner:
         }
 
         log.info(
-            "plan",
-            "done",
-            target=self.state.target_label,
-            target_x=f"{plan.target_x:.3f}",
-            target_y=f"{plan.target_y:.3f}",
-            safe_z_min=f"{safe_z_min:.3f}",
-            raw_bz=f"{bz:.3f}",
-            corrected_bz=f"{plan.corrected_bz:.3f}",
-            travel_z=f"{plan.travel_z:.3f}",
-            approach_z=f"{plan.approach_z:.3f}",
-            grasp_z=f"{plan.grasp_z:.3f}",
+            f"시퀀스 시작: Target({plan.target_x:.3f}, {plan.target_y:.3f}), "
+            f"safe_z_min={safe_z_min:.3f}, raw_bz={bz:.3f}, "
+            f"corrected_bz={plan.corrected_bz:.3f}, "
+            f"travel_z={plan.travel_z:.3f}, "
+            f"approach_z={plan.approach_z:.3f}, "
+            f"grasp_z={plan.grasp_z:.3f}"
         )
 
         steps = [
@@ -114,16 +117,7 @@ class PickSequenceRunner:
             ),
             TaskStep(
                 "pick/xy_move",
-                lambda: self._move_to_pose(
-                    "2단계: 안전 높이에서 XY 수평 이동",
-                    context["plan"].target_x-OBSERVE_X_OFFSET_M,
-                    context["plan"].target_y,
-                    context["plan"].travel_z,
-                    context["ori"],
-                    "XY 이동 실패. Pick 시퀀스 중단",
-                    "XY 이동 실패",
-                    "xy_move_failed",
-                ),
+                lambda: self._move_to_vlm_observe_pose(context),
             ),
             TaskStep(
                 "pick/refine_target_and_apply_vlm_yaw",
@@ -149,8 +143,11 @@ class PickSequenceRunner:
                     context["ori"],
                 ),
             ),
+            TaskStep(
+                "pick/pregrasp_depth_adjust",
+                lambda: self._pregrasp_depth_adjust(context),
+            ),
             TaskStep("pick/grasp_tool", self._grasp_tool),
-            TaskStep("pick/wait_tool_mask_lock", self._wait_tool_mask_lock),
             TaskStep(
                 "pick/lift",
                 lambda: self._move_to_pose(
@@ -168,6 +165,7 @@ class PickSequenceRunner:
                 "pick/move_to_handoff",
                 lambda: self._move_to_handoff(context["plan"], context),
             ),
+            TaskStep("pick/wait_tool_mask_lock", self._wait_tool_mask_lock),
             TaskStep(
                 "pick/wait_human_grasp",
                 lambda: self._wait_human_grasp(context["plan"], context),
@@ -197,21 +195,14 @@ class PickSequenceRunner:
         error_log,
         failure_message,
         failure_reason,
+        min_z=None,
     ):
         log = self.state.logger()
-        motion_step = failure_reason.removesuffix("_failed")
-        log.info(
-            "motion",
-            "start",
-            target=self.state.target_label,
-            step_name=motion_step,
-            x=f"{x:.3f}",
-            y=f"{y:.3f}",
-            z=f"{z:.3f}",
-        )
+        log.info(log_message)
         ok = self.motion.plan_and_execute(
             log,
             pose_goal=make_safe_pose(x, y, z, ori, log),
+            min_z=min_z,
         )
         if ok:
             return True
@@ -219,14 +210,7 @@ class PickSequenceRunner:
         if self._interrupted():
             return False
 
-        log.error(
-            "motion",
-            "fail",
-            target=self.state.target_label,
-            step_name=motion_step,
-            reason=failure_reason,
-            msg=error_log,
-        )
+        log.error(error_log)
         self.state._publish_robot_status(
             "failed",
             message=failure_message,
@@ -244,16 +228,17 @@ class PickSequenceRunner:
         if self.refine_pick_target is not None and target_label:
             cooperative_wait(0.2)
             try:
-                log.info("refine_target", "start", target=target_label)
+                log.info(
+                    "pick/refine_target_and_apply_vlm_yaw started: "
+                    f"target={target_label}"
+                )
                 refined_target = self.refine_pick_target(target_label)
             except Exception as exc:
-                emit_structured_log(log, 'warn', "log", "status", svc='task', pipe='pick', msg=f"상단 view VLM target 갱신 실패: {exc}")
+                log.warn(f"상단 view VLM target 갱신 실패: {exc}")
             finally:
                 log.info(
-                    "refine_target",
-                    "done",
-                    target=target_label,
-                    dur_ms=int((time.monotonic() - refine_started) * 1000),
+                    "pick/refine_target_and_apply_vlm_yaw completed: "
+                    f"elapsed_sec={time.monotonic() - refine_started:.3f}"
                 )
 
         if refined_target is not None and refined_target.found:
@@ -267,23 +252,66 @@ class PickSequenceRunner:
                 safe_z_min=context["safe_z_min"],
             )
             plan = context["plan"]
-            emit_structured_log(log, 'info', "log", "status", svc='task', pipe='pick', msg="상단 view VLM 결과로 pick target 갱신: "
+            log.info(
+                "상단 view VLM 결과로 pick target 갱신: "
                 f"pixel={refined_target.pixel}, "
                 f"base=({plan.target_x:.3f}, {plan.target_y:.3f}, "
                 f"{bz:.3f}), "
                 f"depth={getattr(refined_target, 'depth_m', None)}, "
                 f"yaw={context['vlm_yaw_deg']}, "
-                f"safe_z_min={context['safe_z_min']:.3f}")
+                f"safe_z_min={context['safe_z_min']:.3f}"
+            )
         elif refined_target is not None:
             reason = getattr(refined_target, "reason", "unknown")
-            emit_structured_log(log, 'warn', "log", "status", svc='task', pipe='pick', msg="상단 view VLM target을 얻지 못해 bbox center plan을 유지합니다. "
-                f"reason={reason}")
+            log.warn(
+                "상단 view VLM target을 얻지 못해 bbox center plan을 유지합니다. "
+                f"reason={reason}"
+            )
 
         vlm_yaw_deg = context.get("vlm_yaw_deg")
         if vlm_yaw_deg is None:
             return True
 
         return self._rotate_wrist(vlm_yaw_deg, context)
+
+    def _move_to_vlm_observe_pose(self, context):
+        ok = self._move_to_pose(
+            "2단계: 안전 높이에서 XY 수평 이동",
+            context["plan"].target_x - OBSERVE_X_OFFSET_M,
+            context["plan"].target_y,
+            context["plan"].travel_z,
+            context["ori"],
+            "XY 이동 실패. Pick 시퀀스 중단",
+            "XY 이동 실패",
+            "xy_move_failed",
+        )
+        if not ok:
+            return False
+
+        self.state._publish_robot_status(
+            "observing_pick_target",
+            tool_name=self.state.target_label,
+            action="bring",
+            message=f"{self.state.target_label} VLM 관찰 위치에서 SAM 추적을 시작합니다.",
+            command=self.state.current_command,
+        )
+        self._generate_grasp_detection_mask_images()
+        return True
+
+    def _generate_grasp_detection_mask_images(self):
+        if self.generate_grasp_detection_mask_images is None:
+            return
+
+        target_label = self.state.target_label
+        if not target_label:
+            return
+
+        try:
+            self.generate_grasp_detection_mask_images(target_label)
+        except Exception as exc:
+            self.state.logger().warn(
+                f"grasp detection mask image 생성 실패: {exc}"
+            )
 
     def _rotate_wrist(self, vlm_yaw_deg, context):
         log = self.state.logger()
@@ -295,7 +323,7 @@ class PickSequenceRunner:
         if self._interrupted():
             return False
 
-        emit_structured_log(log, 'error', "log", "status", svc='task', pipe='pick', msg="J6 회전 실패. Pick 시퀀스 중단")
+        log.error("J6 회전 실패. Pick 시퀀스 중단")
         self.state._publish_robot_status(
             "failed",
             message="J6 회전 실패",
@@ -305,8 +333,15 @@ class PickSequenceRunner:
         return False
 
     def _descend_to_grasp(self, plan, ori):
+        self.state._publish_robot_status(
+            "grasping",
+            tool_name=self.state.target_label,
+            action="bring",
+            message=f"{self.state.target_label} 파지를 위해 Z 하강합니다.",
+            command=self.state.current_command,
+        )
         if not plan.should_descend_to_grasp:
-            emit_structured_log(self.state.logger(), 'info', "log", "status", svc='task', pipe='pick', msg="4단계: approach_z와 grasp_z가 같아 추가 하강 생략")
+            self.state.logger().info("4단계: approach_z와 grasp_z가 같아 추가 하강 생략")
             return True
 
         return self._move_to_pose(
@@ -322,7 +357,7 @@ class PickSequenceRunner:
 
     def _grasp_tool(self):
         log = self.state.logger()
-        emit_structured_log(log, 'info', "log", "status", svc='task', pipe='pick', msg="5단계: 공구 grasp 시도")
+        log.info("5단계: 공구 grasp 시도")
         if self.grasp.try_robot_grasp(log):
             self.state._publish_robot_status(
                 "grasp_success",
@@ -340,7 +375,7 @@ class PickSequenceRunner:
         if self._interrupted():
             return False
 
-        emit_structured_log(log, 'error', "log", "status", svc='task', pipe='pick', msg="공구 grasp 실패. Pick 시퀀스 중단")
+        log.error("공구 grasp 실패. Pick 시퀀스 중단")
         self.state._publish_robot_status(
             "failed",
             message="공구 grasp에 실패했습니다.",
@@ -349,16 +384,69 @@ class PickSequenceRunner:
         )
         return False
 
+    def _pregrasp_depth_adjust(self, context):
+        log = self.state.logger()
+        plan = context["plan"]
+        ori = context["ori"]
+        drawer_safe_z_min = context.get("safe_z_min", SAFE_Z_MIN)
+
+        log.info("4.5단계: pre-grasp depth 측정")
+        measurement = self.grasp.measure_pregrasp_depth(log)
+        if measurement is None:
+            log.error("pre-grasp depth 측정 실패. Pick 시퀀스 중단")
+            self.state._publish_robot_status(
+                "failed",
+                message="pre-grasp depth 측정에 실패했습니다.",
+                reason="pregrasp_depth_unavailable",
+                command=self.state.current_command,
+            )
+            return False
+
+        width_mm = measurement.get("width_mm")
+        depth_mm = measurement.get("depth_mm")
+        extra_descent_m = calculate_pregrasp_extra_descent(depth_mm)
+        redescend_min_z = drawer_safe_z_min - extra_descent_m
+        target_z = max(plan.grasp_z - extra_descent_m, redescend_min_z)
+        actual_descent_m = plan.grasp_z - target_z
+        log.info(
+            "pre-grasp actual depth 기반 추가 하강 계산: "
+            f"width={width_mm:.1f}mm, "
+            f"depth={depth_mm:.1f}mm, "
+            f"extra_descent={extra_descent_m:.3f}m, "
+            f"target_z={target_z:.3f}m, "
+            f"drawer_safe_z_min={drawer_safe_z_min:.3f}m, "
+            f"redescend_min_z={redescend_min_z:.3f}m"
+        )
+
+        self.gripper.open_gripper()
+        cooperative_wait(0.3)
+
+        if actual_descent_m <= 0.0:
+            log.info("닫힌 그리퍼 기준 z 제한으로 pre-grasp 추가 하강을 생략합니다.")
+            return True
+
+        return self._move_to_pose(
+            "4.5단계: pre-grasp actual depth 기반 추가 하강",
+            plan.target_x,
+            plan.target_y,
+            target_z,
+            ori,
+            "pre-grasp 추가 하강 실패. Pick 시퀀스 중단",
+            "pre-grasp 추가 하강 실패",
+            "pregrasp_descent_failed",
+            min_z=redescend_min_z,
+        )
+
     def _wait_tool_mask_lock(self):
         log = self.state.logger()
-        emit_structured_log(log, 'info', "log", "status", svc='task', pipe='pick', msg="6단계: 공구 mask lock 완료 대기")
+        log.info("handoff 위치 이동 후 depth locked tool mask 완료 대기")
         if self.handoff.wait_for_tool_mask_lock(log):
             return True
 
         if self._interrupted():
             return False
 
-        emit_structured_log(log, 'error', "log", "status", svc='task', pipe='pick', msg="공구 mask lock 실패. Lift 전에 pick 시퀀스를 중단합니다.")
+        log.error("공구 mask lock 실패. 사용자 잡기 대기 전에 pick 시퀀스를 중단합니다.")
         self.state._publish_robot_status(
             "failed",
             message="공구 mask lock에 실패했습니다.",
@@ -376,32 +464,41 @@ class PickSequenceRunner:
         if self._interrupted():
             return False
 
-        emit_structured_log(log, 'error', "log", "status", svc='task', pipe='pick', msg="사용자 손 위치 확인 실패. 원래 공구 위치로 반환합니다.")
-        returned = self.handoff.return_tool_to_original_position(
-            plan.target_x,
-            plan.target_y,
-            plan.travel_z,
-            plan.grasp_z,
-            context["ori"],
+        log.error("사용자 손 위치 확인 실패. 원래 공구 위치로 반환합니다.")
+        returned, drawer_closed, home_ok = self._return_tool_close_drawer_home(
+            plan,
+            context,
             log,
-            safe_z_min=context["safe_z_min"],
+            lift_from_current=False,
         )
-        status = "returned" if returned else "failed"
+        status = "returned" if returned and drawer_closed and home_ok else "failed"
         self.state._publish_robot_status(
             status,
             message=(
-                "사용자 손 위치 확인 실패로 공구를 원래 위치에 반환했습니다."
+                "사용자 손 위치 확인 실패로 공구를 원래 위치에 반환하고 서랍을 닫았습니다."
+                if returned and drawer_closed and home_ok
+                else "사용자 손 위치 확인 실패 후 서랍을 닫았지만 Home 복귀에 실패했습니다."
+                if returned and drawer_closed
+                else "사용자 손 위치 확인 실패 후 공구를 반환했지만 서랍 닫기에 실패했습니다."
                 if returned
                 else "사용자 손 위치 확인 실패 후 원위치 반환에도 실패했습니다."
             ),
-            reason="handoff_pose_unavailable",
+            reason=(
+                "handoff_pose_unavailable"
+                if returned and drawer_closed and home_ok
+                else "handoff_pose_unavailable_home_after_recovery_failed"
+                if returned and drawer_closed
+                else "handoff_pose_unavailable_drawer_close_failed"
+                if returned
+                else "handoff_pose_unavailable"
+            ),
             command=self.state.current_command,
         )
         return False
 
     def _wait_human_grasp(self, plan, context):
         log = self.state.logger()
-        emit_structured_log(log, 'info', "log", "status", svc='task', pipe='pick', msg="9단계: 사용자 잡기 인식 대기")
+        log.info("9단계: 사용자 잡기 인식 대기")
         self.state._publish_robot_status(
             "waiting_handoff",
             message="사용자 잡기 인식을 기다립니다.",
@@ -413,7 +510,45 @@ class PickSequenceRunner:
         if self._interrupted():
             return False
 
-        emit_structured_log(log, 'error', "log", "status", svc='task', pipe='pick', msg="사용자 잡기 인식 실패. 원래 공구 위치로 반환합니다.")
+        log.error("사용자 잡기 인식 실패. 원래 공구 위치로 반환합니다.")
+        returned, drawer_closed, home_ok = self._return_tool_close_drawer_home(
+            plan,
+            context,
+            log,
+        )
+        status = "returned" if returned and drawer_closed and home_ok else "failed"
+        self.state._publish_robot_status(
+            status,
+            message=(
+                "사용자 잡기 인식 실패로 공구를 원래 위치에 반환하고 서랍을 닫았습니다."
+                if returned and drawer_closed and home_ok
+                else "사용자 잡기 인식 실패 후 서랍을 닫았지만 Home 복귀에 실패했습니다."
+                if returned and drawer_closed
+                else "사용자 잡기 인식 실패 후 공구를 반환했지만 서랍 닫기에 실패했습니다."
+                if returned
+                else "사용자 잡기 인식 실패 후 원위치 반환에도 실패했습니다."
+            ),
+            reason=(
+                "handoff_timeout"
+                if returned and drawer_closed and home_ok
+                else "handoff_timeout_home_after_recovery_failed"
+                if returned and drawer_closed
+                else "handoff_timeout_drawer_close_failed"
+                if returned
+                else "handoff_timeout"
+            ),
+            command=self.state.current_command,
+        )
+        return False
+
+    def _return_tool_close_drawer_home(
+        self,
+        plan,
+        context,
+        log,
+        lift_from_current=True,
+    ):
+        drawer_id = context.get("drawer_id")
         returned = self.handoff.return_tool_to_original_position(
             plan.target_x,
             plan.target_y,
@@ -422,22 +557,40 @@ class PickSequenceRunner:
             context["ori"],
             log,
             safe_z_min=context["safe_z_min"],
+            drawer_id=drawer_id,
+            move_home=False,
+            lift_from_current=lift_from_current,
         )
-        status = "returned" if returned else "failed"
+        if not returned:
+            return False, False, False
+
+        if self.drawer_flow is None or drawer_id is None:
+            home_ok = self.handoff.move_home_after_handoff(
+                log,
+                publish_on_failure=False,
+            )
+            return True, True, home_ok
+
+        log.info(f"복구 반환 후 drawer {drawer_id}를 닫습니다.")
         self.state._publish_robot_status(
-            status,
-            message=(
-                "사용자 잡기 인식 실패로 공구를 원래 위치에 반환했습니다."
-                if returned
-                else "사용자 잡기 인식 실패 후 원위치 반환에도 실패했습니다."
-            ),
-            reason="handoff_timeout",
+            "closing_drawer",
+            tool_name=self.state.target_label,
+            action="bring",
+            message=f"{self.state.target_label}가 있던 서랍을 닫습니다.",
             command=self.state.current_command,
         )
-        return False
+        drawer_closed = self.drawer_flow.close_drawer(drawer_id, log)
+        if not drawer_closed:
+            return True, False, False
+
+        home_ok = self.handoff.move_home_after_handoff(
+            log,
+            publish_on_failure=False,
+        )
+        return True, True, home_ok
 
     def _release_to_human(self):
-        emit_structured_log(self.state.logger(), 'info', "log", "status", svc='task', pipe='pick', msg="10단계: 사용자 잡기 확인 후 그리퍼 오픈(놓기)")
+        self.state.logger().info("10단계: 사용자 잡기 확인 후 그리퍼 오픈(놓기)")
         if self.tool_hold_monitor is not None:
             self.tool_hold_monitor.stop("handoff_release")
         self.gripper.open_gripper()
@@ -445,7 +598,7 @@ class PickSequenceRunner:
         return True
 
     def _home_after_handoff(self):
-        emit_structured_log(self.state.logger(), 'info', "log", "status", svc='task', pipe='pick', msg="11단계: 전달 후 Home 위치로 복귀")
+        self.state.logger().info("11단계: 전달 후 Home 위치로 복귀")
         return self.handoff.move_home_after_handoff(self.state.logger())
 
     def _close_drawer_after_handoff(self, context):
@@ -454,7 +607,7 @@ class PickSequenceRunner:
             return True
 
         log = self.state.logger()
-        emit_structured_log(log, 'info', "log", "status", svc='task', pipe='pick', msg=f"사용자 전달 후 drawer {drawer_id}를 닫습니다.")
+        log.info(f"사용자 전달 후 drawer {drawer_id}를 닫습니다.")
         self.state._publish_robot_status(
             "closing_drawer",
             tool_name=self.state.target_label,
@@ -465,7 +618,7 @@ class PickSequenceRunner:
         return self.drawer_flow.close_drawer(drawer_id, log)
 
     def _publish_done(self):
-        emit_structured_log(self.state.logger(), 'info', "log", "status", svc='task', pipe='pick', msg="Pick 시퀀스 완료")
+        self.state.logger().info("Pick 시퀀스 완료")
         self.state._publish_robot_status(
             "done",
             message="공구 전달 후 Home 복귀까지 완료되었습니다.",

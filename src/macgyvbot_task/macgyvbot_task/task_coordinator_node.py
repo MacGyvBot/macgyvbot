@@ -2,11 +2,12 @@
 """ROS node that owns task queue execution and task-control handling."""
 
 from __future__ import annotations
-from macgyvbot_domain.logging import emit_structured_log
 
 from collections import deque
+from dataclasses import replace
 import math
 from pathlib import Path
+import re
 import threading
 import time
 import traceback
@@ -29,9 +30,10 @@ from macgyvbot_interfaces.msg import (
     ToolDropEvent,
     ToolMaskLock,
 )
+from macgyvbot_interfaces.srv import SetGripper
 
 from macgyvbot_config.drawer import DRAWER_OBSERVATION_J6_DEG
-from macgyvbot_config.models import YOLO_MODEL_NAME
+from macgyvbot_config.models import HAND_GRASP_SAM_CHECKPOINT_NAME, YOLO_MODEL_NAME
 from macgyvbot_config.robot import GROUP_NAME, HOME_JOINTS, WRIST_JOINT_NAME
 from macgyvbot_config.timing import (
     CAMERA_LOOP_IDLE_SLEEP_SEC,
@@ -45,6 +47,7 @@ from macgyvbot_config.topics import (
     HAND_GRASP_IMAGE_TOPIC,
     HAND_GRASP_MASK_LOCK_TOPIC,
     HAND_GRASP_TOPIC,
+    MANUAL_GRIPPER_SERVICE,
     ROBOT_STATUS_TOPIC,
     TASK_CONTROL_TOPIC,
     TASK_REQUEST_TOPIC,
@@ -52,11 +55,11 @@ from macgyvbot_config.topics import (
 )
 from macgyvbot_config.vlm import (
     DEFAULT_GRASP_POINT_MODE,
+    GRASP_POINT_MODE_CENTER,
     GRASP_POINT_MODE_VLM,
     VLM_GRASP_SERVICE_NAME,
     VLM_ONLY_MODES,
 )
-from macgyvbot_domain.logging import MacGyvbotLogger, exception_log_fields
 from macgyvbot_domain.target_models import PickTarget
 from macgyvbot_manipulation.drawer_motion import DrawerMotionFlow
 from macgyvbot_manipulation.moveit_controller import MoveItController
@@ -70,6 +73,18 @@ from macgyvbot_perception.depth_projection import DepthProjector
 from macgyvbot_perception.grasp_point.grasp_point_selector import (
     GraspPointSelector,
     normalize_grasp_point_mode,
+)
+from macgyvbot_perception.grasp_point.grasp_method import (
+    estimate_yaw_from_binary_crop,
+)
+from macgyvbot_perception.grasp_point.mask_image_for_grasp_detection import (
+    generate_sam_depth_mask_image_for_grasp_detection,
+)
+from macgyvbot_perception.hand_tool_grasp.calculations import (
+    depth_to_mm,
+)
+from macgyvbot_perception.hand_tool_grasp.sam_tool_mask import (
+    BBoxPromptSegmenter,
 )
 from macgyvbot_perception.pick_target_resolver import PickTargetResolver
 from macgyvbot_perception.yolo_detector import YoloDetector
@@ -103,72 +118,108 @@ from macgyvbot_task.application.task_control.task_step import TaskStep
 class VLMStatusLogger:
     """Forward VLM logs to ROS logger and robot status topic."""
 
+    _MODEL_ID_RE = re.compile(r"\bmodel_id=([^,\s)]+)")
+    _SOURCE_RE = re.compile(r"\bsource=([^,\s)]+)")
+
     def __init__(self, logger, publish_status_payload):
         self._logger = logger
         self._publish_status_payload = publish_status_payload
 
-    def info(self, *args, **fields):
-        if self._publish_if_vlm_status("info", *args, **fields):
-            self._logger.info(*args, **fields)
+    def info(self, message):
+        if self._publish_if_vlm_status("info", message):
+            self._logger.info(message)
             return
-        self._logger.debug(*args, **fields)
+        self._logger.debug(message)
 
-    def warn(self, *args, **fields):
-        self._logger.warn(*args, **fields)
-        self._publish_if_vlm_status("warn", *args, **fields)
+    def warn(self, message):
+        self._logger.warn(message)
+        self._publish_if_vlm_status("warn", message)
 
-    def error(self, *args, **fields):
-        self._logger.error(*args, **fields)
-        self._publish_if_vlm_status("error", *args, **fields)
+    def error(self, message):
+        self._logger.error(message)
+        self._publish_if_vlm_status("error", message)
 
-    def _publish_if_vlm_status(self, level, *args, **fields):
-        step = str(args[0] if args else fields.get("step", "")).strip()
-        event = str(args[1] if len(args) > 1 else fields.get("event", "")).strip()
-        text = str(fields.get("msg") or (args[0] if args else ""))
-        if step == "model_load" and event == "start":
+    def _publish_if_vlm_status(self, level, message):
+        text = str(message or "")
+        if "VLM" not in text:
+            return
+
+        if "로드 시작" in text or "weights loading" in text:
             status = "vlm_loading"
-        elif step == "model_load" and event == "done":
+        elif "로드 완료" in text or "weights loaded" in text:
             status = "vlm_ready"
-        elif level == "error" or event == "fail":
+        elif level == "error" or "실패" in text:
             status = "vlm_error"
-        elif level == "warn":
+        elif level == "warn" or "CPU 실행" in text or "not using CUDA" in text:
             status = "vlm_warning"
         else:
             return False
+
         self._publish_status_payload(
             {
                 "status": status,
                 "tool_name": "unknown",
                 "action": "system",
-                "message": text,
+                "message": self._chat_message(status, text),
             }
         )
         return True
 
+    @classmethod
+    def _chat_message(cls, status, text):
+        model_label = cls._extract_model_label(text)
+        model_prefix = f"({model_label}) " if model_label else ""
+
+        if status == "vlm_loading":
+            return f"{model_prefix}VLM 모델을 로드하는 중입니다."
+        if status == "vlm_ready":
+            return f"{model_prefix}VLM 모델 로드가 완료되었습니다."
+        if status == "vlm_warning":
+            return f"{model_prefix}VLM 모델 상태를 확인해야 합니다."
+        if status == "vlm_error":
+            return f"{model_prefix}VLM 모델 처리 중 오류가 발생했습니다."
+        return text
+
+    @classmethod
+    def _extract_model_label(cls, text):
+        match = cls._MODEL_ID_RE.search(text)
+        if match is None:
+            match = cls._SOURCE_RE.search(text)
+        if match is None:
+            return ""
+
+        model = match.group(1).strip()
+        if not model:
+            return ""
+
+        model = model.rstrip(".,)")
+        if "/" in model:
+            model = model.rsplit("/", 1)[-1]
+        if "__" in model:
+            model = model.rsplit("__", 1)[-1]
+        return model
+
 
 class CompactPipelineLogger:
-    """Keep pipeline internals available at debug level without flooding info logs."""
+    """Demote routine pipeline details while keeping warnings and errors visible."""
 
     def __init__(self, logger):
         self._logger = logger
 
-    def bind(self, pipe=None):
-        return CompactPipelineLogger(self._logger.bind(pipe))
+    def debug(self, message):
+        self._logger.debug(message)
 
-    def debug(self, *args, **fields):
-        self._logger.debug(*args, **fields)
+    def info(self, message):
+        self._logger.debug(message)
 
-    def info(self, *args, **fields):
-        self._logger.debug(*args, **fields)
+    def warn(self, message):
+        self._logger.warn(message)
 
-    def warn(self, *args, **fields):
-        self._logger.warn(*args, **fields)
+    def warning(self, message):
+        self._logger.warn(message)
 
-    def warning(self, *args, **fields):
-        self._logger.warn(*args, **fields)
-
-    def error(self, *args, **fields):
-        self._logger.error(*args, **fields)
+    def error(self, message):
+        self._logger.error(message)
 
 
 class TaskCoordinatorNode(Node):
@@ -176,9 +227,9 @@ class TaskCoordinatorNode(Node):
 
     def __init__(self):
         super().__init__("task_coordinator_node")
-        self.service_log = MacGyvbotLogger(super().get_logger(), svc="task")
 
         self.declare_parameter("display_debug_windows", False)
+        self.declare_parameter("manual_gripper_service", MANUAL_GRIPPER_SERVICE)
         self.bridge = CvBridge()
         self.display_debug_windows = self._read_bool_parameter(
             "display_debug_windows",
@@ -197,6 +248,8 @@ class TaskCoordinatorNode(Node):
         self._suspended_step = None
         self._suspended_task_name = None
         self._exit_home_thread = None
+        self._vlm_preload_timer = None
+        self._manual_gripper_lock = threading.Lock()
 
         self.grasp_point_mode = self._read_grasp_point_mode()
         self.yolo_model = self._read_yolo_model()
@@ -213,15 +266,13 @@ class TaskCoordinatorNode(Node):
         )
 
         self.state = TaskRuntimeState(
-            logger_provider=lambda: CompactPipelineLogger(
-                self.service_log.bind("task")
-            ),
+            logger_provider=lambda: CompactPipelineLogger(self.get_logger()),
             publish_robot_status=self._publish_robot_status,
             publish_status_payload=self._publish_status_payload,
         )
-        self.detector = YoloDetector(self.yolo_model, self.service_log.bind("yolo"))
+        self.detector = YoloDetector(self.yolo_model)
         self.grasp_point_logger = VLMStatusLogger(
-            self.service_log.bind("vlm"),
+            self.get_logger(),
             self._publish_status_payload,
         )
         self.grasp_point_selector = GraspPointSelector(
@@ -230,6 +281,9 @@ class TaskCoordinatorNode(Node):
             **self._read_grasp_point_api_config(),
             **self._read_vlm_sam_config(),
         )
+        self.grasp_detection_sam_config = self._read_grasp_detection_sam_config()
+        self.grasp_detection_sam_segmenter = None
+        self.grasp_detection_sam_init_attempted = False
         self.vlm_service_client = VLMGraspServiceClient(
             self,
             self.bridge,
@@ -249,13 +303,13 @@ class TaskCoordinatorNode(Node):
         self.hand_grasp_adapter = HandGraspResultAdapter(
             self.state,
             self.depth_projector,
-            self.service_log.bind("perception"),
+            CompactPipelineLogger(self.get_logger()),
         )
         self.pick_target_resolver = PickTargetResolver(
             self.detector,
             self.grasp_point_selector,
             self.depth_projector,
-            self.service_log.bind("perception"),
+            CompactPipelineLogger(self.get_logger()),
         )
 
         self.pilz_params = PlanRequestParameters(self.robot)
@@ -303,7 +357,7 @@ class TaskCoordinatorNode(Node):
             self.pick_target_resolver,
             self.start_pick_sequence,
             self._publish_robot_status,
-            CompactPipelineLogger(self.service_log.bind("legacy")),
+            CompactPipelineLogger(self.get_logger()),
             drawer_ready_for_target=self._drawer_ready_for_target,
             prepare_drawer_for_target=self._prepare_drawer_for_target,
         )
@@ -314,7 +368,7 @@ class TaskCoordinatorNode(Node):
             self.frame_processor,
             self.pick_target_resolver,
             self.depth_projector,
-            CompactPipelineLogger(self.service_log.bind("legacy")),
+            CompactPipelineLogger(self.get_logger()),
         )
         self.pick_runner = PickSequenceRunner(
             self.robot,
@@ -323,6 +377,9 @@ class TaskCoordinatorNode(Node):
             self.state,
             self.tool_hold_monitor,
             refine_pick_target=self._refine_pick_target_after_centering,
+            generate_grasp_detection_mask_images=(
+                self._generate_grasp_detection_mask_images_after_vlm_observe
+            ),
             control_events=control_events,
             drawer_flow=self.drawer_flow,
         )
@@ -346,10 +403,21 @@ class TaskCoordinatorNode(Node):
         )
 
         self._create_subscriptions()
+        self._create_services()
         self._log_startup()
+        self._vlm_preload_timer = self.create_timer(
+            3.0,
+            self._preload_vlm_after_startup,
+        )
 
     def _base_to_camera_matrix(self):
         return get_ee_matrix(self.robot) @ self.gripper2cam
+
+    def _preload_vlm_after_startup(self):
+        if self._vlm_preload_timer is not None:
+            self._vlm_preload_timer.cancel()
+
+        self.grasp_point_selector.preload_vlm_if_needed()
 
     def _drawer_observation_orientation(self):
         joint_positions = dict(HOME_JOINTS)
@@ -367,7 +435,7 @@ class TaskCoordinatorNode(Node):
             .strip()
             .lower()
         )
-        return normalize_grasp_point_mode(grasp_point_mode, self.service_log.bind("legacy"))
+        return normalize_grasp_point_mode(grasp_point_mode, self.get_logger())
 
     def _read_yolo_model(self):
         self.declare_parameter("yolo_model", YOLO_MODEL_NAME)
@@ -400,7 +468,10 @@ class TaskCoordinatorNode(Node):
 
     def _read_vlm_sam_config(self):
         self.declare_parameter("sam_enabled", True)
-        self.declare_parameter("sam_checkpoint", str(Path("weights") / "mobile_sam.pt"))
+        self.declare_parameter(
+            "sam_checkpoint",
+            str(Path("weights") / HAND_GRASP_SAM_CHECKPOINT_NAME),
+        )
         self.declare_parameter("sam_backend", "mobile_sam")
         self.declare_parameter("sam_model_type", "vit_t")
         self.declare_parameter("sam_device", "cuda")
@@ -411,6 +482,61 @@ class TaskCoordinatorNode(Node):
             "sam_model_type": str(self.get_parameter("sam_model_type").value).strip(),
             "sam_device": str(self.get_parameter("sam_device").value).strip(),
         }
+
+    def _read_grasp_detection_sam_config(self):
+        self.declare_parameter("sam_depth_tolerance_mm", 30.0)
+        self.declare_parameter("sam_depth_min_valid_ratio", 0.03)
+        self.declare_parameter("sam_depth_expand_iterations", 1)
+        return {
+            "sam_enabled": self._read_bool_parameter("sam_enabled", True),
+            "sam_checkpoint": str(self.get_parameter("sam_checkpoint").value).strip(),
+            "sam_backend": str(self.get_parameter("sam_backend").value).strip(),
+            "sam_model_type": str(self.get_parameter("sam_model_type").value).strip(),
+            "sam_device": str(self.get_parameter("sam_device").value).strip(),
+            "sam_depth_tolerance_mm": float(
+                self.get_parameter("sam_depth_tolerance_mm").value
+            ),
+            "sam_depth_min_valid_ratio": float(
+                self.get_parameter("sam_depth_min_valid_ratio").value
+            ),
+            "sam_depth_expand_iterations": int(
+                self.get_parameter("sam_depth_expand_iterations").value
+            ),
+        }
+
+    def _create_grasp_detection_sam_segmenter(self, config):
+        if not bool(config["sam_enabled"]):
+            self.get_logger().info(
+                "VLM 관찰 위치 grasp detection SAM mask 저장 비활성화"
+            )
+            return None
+
+        try:
+            return BBoxPromptSegmenter(
+                backend=config["sam_backend"],
+                checkpoint_path=config["sam_checkpoint"],
+                model_type=config["sam_model_type"],
+                device=config["sam_device"],
+            )
+        except Exception as exc:
+            self.get_logger().warn(
+                f"VLM 관찰 위치 grasp detection SAM 초기화 실패: {exc}"
+            )
+            return None
+
+    def _grasp_detection_sam(self):
+        if self.grasp_detection_sam_segmenter is not None:
+            return self.grasp_detection_sam_segmenter
+        if self.grasp_detection_sam_init_attempted:
+            return None
+
+        self.grasp_detection_sam_init_attempted = True
+        self.grasp_detection_sam_segmenter = (
+            self._create_grasp_detection_sam_segmenter(
+                self.grasp_detection_sam_config,
+            )
+        )
+        return self.grasp_detection_sam_segmenter
 
     def _read_vlm_service_config(self):
         self.declare_parameter("vlm_service_name", VLM_GRASP_SERVICE_NAME)
@@ -485,14 +611,158 @@ class TaskCoordinatorNode(Node):
         )
         self.create_subscription(ToolDropEvent, TOOL_DROP_TOPIC, self._tool_drop_cb, 10)
 
+    def _create_services(self):
+        self.manual_gripper_service_name = (
+            str(self.get_parameter("manual_gripper_service").value).strip()
+            or MANUAL_GRIPPER_SERVICE
+        )
+        self.create_service(
+            SetGripper,
+            self.manual_gripper_service_name,
+            self._manual_gripper_cb,
+        )
+
     def _log_startup(self):
-        log = self.service_log.bind("startup")
-        log.info("node", "done", msg="task coordinator initialized")
-        log.info("topic", "status", name="task_request", topic=TASK_REQUEST_TOPIC)
-        log.info("topic", "status", name="task_control", topic=TASK_CONTROL_TOPIC)
-        log.info("topic", "status", name="robot_status", topic=ROBOT_STATUS_TOPIC)
-        log.info("model", "status", name="yolo", model=self.yolo_model)
-        log.info("grasp_point", "status", mode=self.grasp_point_mode)
+        self.get_logger().info("task coordinator node 초기화 완료")
+        self.get_logger().info(f"task request 토픽: {TASK_REQUEST_TOPIC}")
+        self.get_logger().info(f"task control 토픽: {TASK_CONTROL_TOPIC}")
+        self.get_logger().info(f"robot status 토픽: {ROBOT_STATUS_TOPIC}")
+        self.get_logger().info(
+            f"manual gripper service: {self.manual_gripper_service_name}"
+        )
+        self.get_logger().info(f"YOLO model: {self.yolo_model}")
+        self.get_logger().info(f"grasp point mode: {self.grasp_point_mode}")
+
+    def _manual_gripper_cb(self, request, response):
+        requested_width_mm = float(getattr(request, "width_mm", 0.0))
+        source = str(getattr(request, "source", "") or "unknown").strip()
+        response.requested_width_mm = requested_width_mm
+        response.applied_width_mm = 0.0
+
+        allowed, reason = self._manual_gripper_is_allowed()
+        if not allowed:
+            return self._reject_manual_gripper(
+                response,
+                reason,
+                "작업 실행 중에는 수동 그리퍼 조작을 사용할 수 없습니다.",
+                requested_width_mm,
+                source,
+            )
+
+        max_width_mm = self._manual_gripper_max_width_mm()
+        if requested_width_mm < 0.0 or requested_width_mm > max_width_mm:
+            return self._reject_manual_gripper(
+                response,
+                "width_out_of_range",
+                f"그리퍼 폭은 0-{max_width_mm:.0f} mm 범위에서 요청해야 합니다.",
+                requested_width_mm,
+                source,
+            )
+
+        status = self._safe_gripper_status()
+        if status is None:
+            return self._reject_manual_gripper(
+                response,
+                "gripper_status_unavailable",
+                "그리퍼 상태를 읽지 못해 수동 조작을 중단합니다.",
+                requested_width_mm,
+                source,
+            )
+        if status[0]:
+            return self._reject_manual_gripper(
+                response,
+                "gripper_busy",
+                "그리퍼가 이미 움직이는 중이라 새 명령을 보낼 수 없습니다.",
+                requested_width_mm,
+                source,
+            )
+        if any(status[2:]):
+            return self._reject_manual_gripper(
+                response,
+                "gripper_safety_error",
+                "그리퍼 안전 상태가 정상적이지 않아 수동 조작을 중단합니다.",
+                requested_width_mm,
+                source,
+            )
+
+        width_raw = int(round(requested_width_mm * 10.0))
+        with self._manual_gripper_lock:
+            try:
+                self.gripper.move_gripper(width_raw)
+            except Exception as exc:
+                self.get_logger().error(
+                    "manual gripper command failed: "
+                    f"source={source}, width_mm={requested_width_mm:.1f}, "
+                    f"error={type(exc).__name__}: {exc}"
+                )
+                return self._reject_manual_gripper(
+                    response,
+                    "gripper_command_failed",
+                    "그리퍼 명령 전송에 실패했습니다.",
+                    requested_width_mm,
+                    source,
+                )
+
+        response.success = True
+        response.status = "accepted"
+        response.message = f"그리퍼를 {requested_width_mm:.0f} mm로 적용합니다."
+        response.applied_width_mm = requested_width_mm
+        self.get_logger().info(
+            "manual gripper command accepted: "
+            f"source={source}, width_mm={requested_width_mm:.1f}, raw={width_raw}"
+        )
+        return response
+
+    def _manual_gripper_is_allowed(self):
+        with self._queue_lock:
+            active_step = self._current_step is not None or self._step_thread_alive()
+            queued = bool(self._queue)
+            paused = self.pause_req.is_set()
+
+        exit_home_running = (
+            self._exit_home_thread is not None
+            and self._exit_home_thread.is_alive()
+        )
+        if exit_home_running:
+            return False, "exit_home_running"
+        if active_step:
+            return False, "task_step_active"
+        if queued and not paused:
+            return False, "task_queue_active"
+        if self.state.picking and not paused:
+            return False, "task_active"
+        return True, "safe"
+
+    def _manual_gripper_max_width_mm(self):
+        return float(getattr(self.gripper, "max_width", 0) or 0) / 10.0
+
+    def _safe_gripper_status(self):
+        try:
+            return self.gripper.get_status()
+        except Exception as exc:
+            self.get_logger().warn(
+                f"manual gripper status read failed: {type(exc).__name__}: {exc}"
+            )
+            return None
+
+    def _reject_manual_gripper(
+        self,
+        response,
+        status,
+        message,
+        requested_width_mm,
+        source,
+    ):
+        response.success = False
+        response.status = status
+        response.message = message
+        response.applied_width_mm = 0.0
+        self.get_logger().warn(
+            "manual gripper command rejected: "
+            f"status={status}, source={source}, width_mm={requested_width_mm:.1f}, "
+            f"message={message}"
+        )
+        return response
 
     def _task_request_cb(self, msg):
         task = str(msg.task or "").strip().lower()
@@ -509,14 +779,7 @@ class TaskCoordinatorNode(Node):
             self._handle_home_request(msg)
             return
 
-        self.service_log.warn(
-            "request",
-            "fail",
-            pipe="task",
-            target=task or "unknown",
-            reason="unsupported_task_request",
-            msg="unsupported task request",
-        )
+        self.get_logger().warn(f"지원하지 않는 task request: {task}")
         self._publish_robot_status(
             "rejected",
             message="지원하지 않는 task request입니다.",
@@ -572,7 +835,7 @@ class TaskCoordinatorNode(Node):
             "accepted",
             tool_name=tool_name,
             action="bring",
-            message=f"{tool_name} 검색 요청을 task coordinator가 수신했습니다.",
+            message=f"{tool_name} 탐색 요청을 task coordinator가 수신했습니다.",
             command=command,
         )
         if not self._prepare_drawer_for_target(tool_name):
@@ -581,7 +844,7 @@ class TaskCoordinatorNode(Node):
                 "searching",
                 tool_name=tool_name,
                 action="bring",
-                message=f"{tool_name} 검색을 시작합니다.",
+                message=f"{tool_name} 탐색을 시작합니다.",
                 command=command,
             )
 
@@ -593,13 +856,13 @@ class TaskCoordinatorNode(Node):
                 "busy",
                 tool_name=tool_name,
                 action="release",
-                message="로봇이 작업 중이면 release 요청은 즉시 실행하지 않습니다.",
+                message="로봇이 작업 중이라 release 요청은 즉시 실행하지 않습니다.",
                 reason="already_picking",
                 command=command,
             )
             return
 
-        emit_structured_log(self.service_log.bind("legacy"), 'debug', "log", "status", svc='task', pipe='system', msg="release task request 수신: 그리퍼를 엽니다.")
+        self.get_logger().debug("release task request 수신: 그리퍼를 엽니다.")
         self.tool_hold_monitor.release_gripper()
         self._publish_robot_status(
             "done",
@@ -667,35 +930,19 @@ class TaskCoordinatorNode(Node):
         if action == "exit":
             self._handle_exit(reason)
             return
-        self.service_log.warn(
-            "control",
-            "fail",
-            pipe="task",
-            target=action or "unknown",
-            reason="unsupported_task_control",
-            msg="unsupported task control action",
-        )
+        self.get_logger().warn(f"지원하지 않는 task control action: {action}")
 
     def _handle_pause(self, reason):
         if self.exit_req.is_set():
             return False
-        self.service_log.warn(
-            "queue",
-            "pause",
-            pipe="task",
-            reason=reason or "pause_requested",
-            msg="task queue pause requested",
-        )
+        self.get_logger().warn(f"task queue pause 요청: reason={reason}")
         self.pause_req.set()
         self.resume_req.clear()
         with self._queue_lock:
             if self._current_step is not None:
                 self._suspended_step = self._current_step
                 self._suspended_task_name = self._current_task_name
-        self.motion.cancel_current_goal(
-            self.service_log.bind("moveit"),
-            reason=reason or "pause",
-        )
+        self.motion.cancel_current_goal(self.get_logger(), reason=reason or "pause")
         self._publish_robot_status(
             "paused",
             message="사용자 요청으로 작업을 일시정지합니다.",
@@ -705,13 +952,7 @@ class TaskCoordinatorNode(Node):
         return True
 
     def _handle_resume(self, reason):
-        self.service_log.info(
-            "queue",
-            "resume",
-            pipe="task",
-            reason=reason or "resume_requested",
-            msg="task queue resume requested",
-        )
+        self.get_logger().info(f"task queue resume 요청: reason={reason}")
         with self._queue_lock:
             if self._suspended_step is not None:
                 self._queue.appendleft(
@@ -732,21 +973,12 @@ class TaskCoordinatorNode(Node):
         return True
 
     def _handle_cancel(self, reason, publish_status=True):
-        self.service_log.warn(
-            "queue",
-            "cancel",
-            pipe="task",
-            reason=reason or "cancel_requested",
-            msg="task queue cancel requested",
-        )
+        self.get_logger().warn(f"task queue cancel 요청: reason={reason}")
         task_running = self.is_running() or self.state.picking
         self.exit_req.set()
         self.pause_req.clear()
         self.resume_req.clear()
-        self.motion.cancel_current_goal(
-            self.service_log.bind("moveit"),
-            reason=reason or "cancel",
-        )
+        self.motion.cancel_current_goal(self.get_logger(), reason=reason or "cancel")
         with self._queue_lock:
             self._queue.clear()
             self._suspended_step = None
@@ -767,21 +999,11 @@ class TaskCoordinatorNode(Node):
         return True
 
     def _handle_exit(self, reason, publish_status=True):
-        self.service_log.warn(
-            "queue",
-            "cancel",
-            pipe="task",
-            reason=reason or "exit_requested",
-            action="exit",
-            msg="task queue exit requested",
-        )
+        self.get_logger().warn(f"task queue exit 요청: reason={reason}")
         self.exit_req.set()
         self.pause_req.clear()
         self.resume_req.clear()
-        self.motion.cancel_current_goal(
-            self.service_log.bind("moveit"),
-            reason=reason or "exit",
-        )
+        self.motion.cancel_current_goal(self.get_logger(), reason=reason or "exit")
         with self._queue_lock:
             self._queue.clear()
             self._suspended_step = None
@@ -811,7 +1033,7 @@ class TaskCoordinatorNode(Node):
         self._exit_home_thread.start()
 
     def _move_home_after_exit(self, reason):
-        log = self.service_log.bind("task")
+        log = self.get_logger()
         command = self.state.current_command
         if not self._wait_for_task_queue_to_stop(log):
             self._publish_robot_status(
@@ -824,12 +1046,7 @@ class TaskCoordinatorNode(Node):
             return
 
         self.exit_req.clear()
-        log.info(
-            "exit_home",
-            "start",
-            action="exit",
-            reason=reason or "exit_requested",
-        )
+        log.info("종료 요청 후 Home 위치로 복귀합니다.")
         self._publish_robot_status(
             "returning_home",
             action="exit",
@@ -852,13 +1069,7 @@ class TaskCoordinatorNode(Node):
         try:
             self.tool_hold_monitor.release_gripper("exit_home_completed")
         except Exception as exc:
-            log.warn(
-                "exit_home",
-                "fail",
-                action="exit",
-                reason="exit_gripper_release_failed",
-                **exception_log_fields(exc),
-            )
+            log.warn(f"exit Home 복귀 후 그리퍼 열기 실패: {exc}")
             self._publish_robot_status(
                 "failed",
                 action="exit",
@@ -881,13 +1092,7 @@ class TaskCoordinatorNode(Node):
         while self.is_running() and time.monotonic() < deadline:
             time.sleep(TASK_QUEUE_STOP_POLL_SEC)
         if self.is_running():
-            logger.warn(
-                "queue",
-                "timeout",
-                action="exit",
-                reason="exit_queue_shutdown_timeout",
-                timeout_sec=timeout_sec,
-            )
+            logger.warn("exit 요청 후 task queue 종료 대기 시간이 초과되었습니다.")
             return False
         return True
 
@@ -896,13 +1101,15 @@ class TaskCoordinatorNode(Node):
         if payload.get("event") != "tool_dropped":
             return
         reason = payload.get("reason") or "tool_dropped"
-        emit_structured_log(self.service_log.bind("legacy"), 'warn', "log", "status", svc='task', pipe='system', msg="공구 drop 감지를 task exit으로 처리합니다. "
-            f"reason={reason}, tool={payload.get('tool_name', 'unknown')}")
+        self.get_logger().warn(
+            "공구 drop 감지를 task exit으로 처리합니다: "
+            f"reason={reason}, tool={payload.get('tool_name', 'unknown')}"
+        )
         self._handle_exit(reason, publish_status=False)
 
     def start_pick_sequence(self, bx, by, bz, vlm_yaw_deg=None):
         if self.is_running() or self.state.picking:
-            emit_structured_log(self.service_log.bind("legacy"), 'warn', "log", "status", svc='task', pipe='system', msg="이미 pick 동작 중이라 pick 요청을 무시합니다.")
+            self.get_logger().warn("이미 pick 동작 중이라 새 pick 요청을 무시합니다.")
             self._publish_robot_status(
                 "busy",
                 tool_name=self.state.target_label,
@@ -946,24 +1153,16 @@ class TaskCoordinatorNode(Node):
     def _load_queue(self, task_name, steps):
         with self._queue_lock:
             if self._current_step is not None or self._step_thread_alive():
-                self.service_log.warn(
-                    "queue",
-                    "skip",
-                    pipe=task_name,
-                    reason="task_queue_busy",
-                    msg="task request ignored while queue is running",
+                self.get_logger().warn(
+                    f"이미 task coordinator가 실행 중이라 {task_name} 요청을 무시합니다."
                 )
                 return False
             self.exit_req.clear()
             self.resume_req.clear()
             self._queue.clear()
             self._queue.extend((task_name, step) for step in steps)
-            self.service_log.info(
-                "queue",
-                "done",
-                pipe=task_name,
-                step_count=len(steps),
-                msg="task queue loaded",
+            self.get_logger().debug(
+                f"{task_name} task queue 로딩 완료: {len(steps)} steps"
             )
         self._dispatch_next()
         return True
@@ -987,37 +1186,21 @@ class TaskCoordinatorNode(Node):
                 name=f"task_step:{step.name}",
                 daemon=True,
             )
-            self.service_log.info(
-                "step",
-                "start",
-                pipe=task_name,
-                target=self.state.target_label or "unknown",
-                step_name=step.name,
-                msg="task step started",
-            )
+            self.get_logger().info(f"task step 시작: {step.name}")
             self._step_thread.start()
 
     def _execute_step(self, task_name, step):
         ok = False
         exc = None
-        start = time.monotonic()
         try:
             ok = bool(step.execute())
         except Exception as error:
             exc = error
-        dur_ms = int((time.monotonic() - start) * 1000)
-        self._finish_step(task_name, step, ok, exc, dur_ms)
+        self._finish_step(task_name, step, ok, exc)
 
-    def _finish_step(self, task_name, step: TaskStep, ok, exc, dur_ms=None):
+    def _finish_step(self, task_name, step: TaskStep, ok, exc):
         if exc is not None:
-            self._log_step_exception(
-                self.service_log,
-                task_name,
-                step.name,
-                exc,
-                dur_ms=dur_ms,
-                target=self.state.target_label or "unknown",
-            )
+            self._log_step_exception(self.get_logger(), task_name, step.name, exc)
             self._publish_task_exception_status(
                 task_name,
                 step.name,
@@ -1033,51 +1216,20 @@ class TaskCoordinatorNode(Node):
             self._step_thread = None
 
             if ok and not self.pause_req.is_set():
-                self.service_log.info(
-                    "step",
-                    "done",
-                    pipe=task_name,
-                    target=self.state.target_label or "unknown",
-                    step_name=step.name,
-                    dur_ms=dur_ms,
-                    msg="task step completed",
-                )
+                self.get_logger().debug(f"task step 완료: {step.name}")
             elif self.pause_req.is_set() and step.retry_on_pause:
-                self.service_log.info(
-                    "step",
-                    "pause",
-                    pipe=task_name,
-                    target=self.state.target_label or "unknown",
-                    step_name=step.name,
-                    dur_ms=dur_ms,
-                    msg="task step suspended",
-                )
+                self.get_logger().debug(f"task step 일시정지 보관: {step.name}")
                 if self._suspended_step is None:
                     self._suspended_step = step
                     self._suspended_task_name = task_name
                 return
             elif self.exit_req.is_set():
-                self.service_log.info(
-                    "queue",
-                    "cancel",
-                    pipe=task_name,
-                    reason="exit_requested",
-                    msg="task queue stopped by exit request",
-                )
+                self.get_logger().debug(f"{task_name} task queue 종료 요청으로 중단")
                 self._run_cleanup_callbacks()
                 self._clear_task_state()
                 return
             elif not ok:
-                self.service_log.error(
-                    "step",
-                    "fail",
-                    pipe=task_name,
-                    target=self.state.target_label or "unknown",
-                    step_name=step.name,
-                    reason="task_step_failed",
-                    dur_ms=dur_ms,
-                    msg="task step failed",
-                )
+                self.get_logger().error(f"task step 실패: {step.name}")
                 self._run_cleanup_callbacks()
                 self._clear_task_state()
                 return
@@ -1090,23 +1242,12 @@ class TaskCoordinatorNode(Node):
             self._current_step = None
             self._current_task_name = None
             self._step_thread = None
-        self.service_log.warn(
-            "queue",
-            "fail",
-            pipe=task_name,
-            reason="task_step_exception",
-            msg="task queue failed",
-        )
+        self.get_logger().debug(f"{task_name} task queue 실패로 종료")
         self._run_cleanup_callbacks()
         self._clear_task_state()
 
     def _complete_queue_locked(self):
-        self.service_log.info(
-            "queue",
-            "done",
-            pipe=self._current_task_name or "task",
-            msg="task queue completed",
-        )
+        self.get_logger().debug("task queue 완료")
         self._step_thread = None
         self._run_cleanup_callbacks()
         self._clear_task_state()
@@ -1131,19 +1272,14 @@ class TaskCoordinatorNode(Node):
         self.state.current_command = None
         self.state.drawer_prepared_tool = None
         self.state.drawer_preparing_tool = None
+        self.state.grasp_detection_mask_images = None
+        self.state.grasp_detection_mask_target = None
 
     def _run_cleanup_callbacks(self):
         try:
             self.tool_hold_monitor.stop("task_queue_finished")
         except Exception as exc:
-            fields = exception_log_fields(exc)
-            self.service_log.warn(
-                "cleanup",
-                "fail",
-                pipe="task",
-                msg="task cleanup callback failed",
-                **fields,
-            )
+            self.get_logger().warn(f"task cleanup callback 실패: {exc}")
 
     def _publish_task_exception_status(self, task_name, step_name, exc, reason):
         action = "bring" if task_name == "pick" else task_name
@@ -1153,7 +1289,7 @@ class TaskCoordinatorNode(Node):
             tool_name=self.state.target_label,
             action=action,
             message=(
-                f"{task_name} task step 예외로 작업을 중단합니다. "
+                f"{task_name} task step 예외로 작업을 중단합니다: "
                 f"{step_name} ({exc_type})"
             ),
             reason=reason,
@@ -1161,26 +1297,12 @@ class TaskCoordinatorNode(Node):
         )
 
     @staticmethod
-    def _log_step_exception(log, task_name, step_name, exc, dur_ms=None, target=None):
-        fields = exception_log_fields(exc)
+    def _log_step_exception(log, task_name, step_name, exc):
         log.error(
-            "step",
-            "fail",
-            pipe=task_name,
-            target=target or "unknown",
-            step_name=step_name,
-            dur_ms=dur_ms,
-            msg="task step raised exception",
-            **fields,
+            f"{task_name} task step 예외 발생: "
+            f"step={step_name}, error={type(exc).__name__}: {exc}"
         )
-        log.error(
-            "step_traceback",
-            "fail",
-            pipe=task_name,
-            target=target or "unknown",
-            step_name=step_name,
-            msg=traceback.format_exc(),
-        )
+        log.error(traceback.format_exc())
 
     def _drawer_ready_for_target(self, target_label):
         drawer_id = self.drawer_flow.drawer_id_for_tool(target_label)
@@ -1216,15 +1338,17 @@ class TaskCoordinatorNode(Node):
 
     def _prepare_drawer_worker(self, target_label, drawer_id):
         try:
-            log = CompactPipelineLogger(self.service_log.bind("legacy"))
-            emit_structured_log(log, 'info', "log", "status", svc='task', pipe='system', msg=f"{target_label} 검색 중 drawer {drawer_id}를 열고 관찰 위치로 이동합니다.")
+            log = CompactPipelineLogger(self.get_logger())
+            log.info(
+                f"{target_label} 탐색 전 drawer {drawer_id}를 열고 관찰 위치로 이동합니다."
+            )
             ok = self.drawer_flow.open_drawer(drawer_id, log)
             if ok:
                 self._publish_robot_status(
                     "observing_drawer",
                     tool_name=target_label,
                     action="bring",
-                    message=f"{target_label} 검색을 위해 서랍 내부를 관찰합니다.",
+                    message=f"{target_label} 탐색을 위해 서랍 내부를 관찰합니다.",
                     command=self.state.current_command,
                 )
                 ok = self.drawer_flow.observe_drawer(drawer_id, log)
@@ -1236,7 +1360,7 @@ class TaskCoordinatorNode(Node):
                     "searching",
                     tool_name=target_label,
                     action="bring",
-                    message=f"{target_label} 검색을 시작합니다.",
+                    message=f"{target_label} 탐색을 시작합니다.",
                     command=self.state.current_command,
                 )
             else:
@@ -1244,7 +1368,7 @@ class TaskCoordinatorNode(Node):
                     "failed",
                     tool_name=target_label,
                     action="bring",
-                    message=f"{target_label} 검색 중 서랍 준비에 실패했습니다.",
+                    message=f"{target_label} 탐색 전 서랍 준비에 실패했습니다.",
                     reason="drawer_prepare_failed",
                     command=self.state.current_command,
                 )
@@ -1258,7 +1382,7 @@ class TaskCoordinatorNode(Node):
         if not self.pick_target_resolver.should_defer_vlm_until_top_view():
             return None
         if not self.frame_processor.has_camera_state():
-            emit_structured_log(self.service_log.bind("legacy"), 'warn', "log", "status", svc='task', pipe='system', msg="상단 view VLM 갱신을 위한 camera state가 없습니다.")
+            self.get_logger().warn("상단 view VLM 갱신을 위한 camera state가 없습니다.")
             return None
 
         color_image = self.state.color_image.copy()
@@ -1266,13 +1390,16 @@ class TaskCoordinatorNode(Node):
         intrinsics = dict(self.state.intrinsics)
         results = self.detector.detect(color_image)
         if self.grasp_point_mode not in (GRASP_POINT_MODE_VLM, *VLM_ONLY_MODES):
-            return self.pick_target_resolver.target_from_boxes(
+            target = self.pick_target_resolver.target_from_boxes(
                 results[0].boxes,
                 target_label,
                 color_image,
                 depth_image,
                 intrinsics,
             )
+            if self.grasp_point_mode != GRASP_POINT_MODE_CENTER:
+                return target
+            return self._target_with_mask_pca_yaw(target, target_label)
 
         matched_box = self.pick_target_resolver.matching_box(
             results[0].boxes,
@@ -1300,7 +1427,9 @@ class TaskCoordinatorNode(Node):
             interrupted=self._motion_interrupted,
         )
         if response is None:
-            emit_structured_log(self.service_log.bind("legacy"), 'warn', "log", "status", svc='task', pipe='system', msg="Top-view VLM service refine failed. Keeping existing pick plan.")
+            self.get_logger().warn(
+                "Top-view VLM service refine failed. Keeping existing pick plan."
+            )
             return PickTarget(
                 found=False,
                 label=target_label,
@@ -1311,6 +1440,11 @@ class TaskCoordinatorNode(Node):
                 reason="vlm_service_failed",
             )
 
+        orientation_rpy_deg = list(response.orientation_rpy_deg) or None
+        pca_yaw_deg = self._mask_pca_yaw_for_target(target_label)
+        if pca_yaw_deg is not None:
+            orientation_rpy_deg = [0.0, 0.0, float(pca_yaw_deg)]
+
         return self.pick_target_resolver.target_from_selected_grasp(
             label,
             target_label,
@@ -1318,11 +1452,96 @@ class TaskCoordinatorNode(Node):
                 int(response.pixel_u),
                 int(response.pixel_v),
                 str(response.source or self.grasp_point_mode),
-                list(response.orientation_rpy_deg) or None,
+                orientation_rpy_deg,
             ),
             depth_image,
             intrinsics,
         )
+
+    def _target_with_mask_pca_yaw(self, target, target_label):
+        if target is None or not target.found:
+            return target
+        pca_yaw_deg = self._mask_pca_yaw_for_target(target_label)
+        if pca_yaw_deg is None:
+            return target
+        return replace(target, yaw_deg=float(pca_yaw_deg))
+
+    def _mask_pca_yaw_for_target(self, target_label):
+        if self.state.grasp_detection_mask_target != target_label:
+            return None
+        images = self.state.grasp_detection_mask_images or []
+        if not images:
+            return None
+
+        yaw_deg, debug = estimate_yaw_from_binary_crop(images[0])
+        if yaw_deg is None:
+            self.get_logger().warn(
+                "grasp detection binary crop PCA yaw failed: "
+                f"reason={debug.get('reason')}, pixels={debug.get('num_pixels')}"
+            )
+            return None
+
+        self.get_logger().info(
+            "grasp detection binary crop PCA yaw applied: "
+            f"target={target_label}, yaw={yaw_deg:.1f}deg, "
+            f"pixels={debug.get('num_pixels')}"
+        )
+        return yaw_deg
+
+    def _generate_grasp_detection_mask_images_after_vlm_observe(self, target_label):
+        if not self.frame_processor.has_camera_state():
+            self.get_logger().warn(
+                "grasp detection mask image 생성을 위한 camera state가 없습니다."
+            )
+            return None
+
+        color_image = self.state.color_image.copy()
+        results = self.detector.detect(color_image)
+        matched_box = self.pick_target_resolver.matching_box(
+            results[0].boxes,
+            target_label,
+        )
+        if matched_box is None:
+            self.get_logger().warn(
+                f"{target_label} grasp detection mask image 생성을 위한 YOLO bbox가 없습니다."
+            )
+            return None
+
+        box, _label = matched_box
+        bbox_xyxy = box.xyxy[0].cpu().numpy().tolist()
+        depth_mm = depth_to_mm(self.state.depth_image.copy(), "passthrough")
+        images = generate_sam_depth_mask_image_for_grasp_detection(
+            color_image=color_image,
+            depth_mm=depth_mm,
+            bbox_xyxy=bbox_xyxy,
+            sam_segmenter=self._grasp_detection_sam(),
+            data_root=Path("src/macgyvbot_perception/data"),
+            filename_prefix=f"pick_vlm_observe_{target_label}",
+            sam_depth_tolerance_mm=(
+                self.grasp_detection_sam_config["sam_depth_tolerance_mm"]
+            ),
+            sam_depth_min_valid_ratio=(
+                self.grasp_detection_sam_config["sam_depth_min_valid_ratio"]
+            ),
+            sam_depth_expand_iterations=(
+                self.grasp_detection_sam_config["sam_depth_expand_iterations"]
+            ),
+        )
+        if images is None:
+            self.get_logger().warn(
+                f"{target_label} VLM 관찰 위치 SAM+Depth mask 생성 실패"
+            )
+            self.state.grasp_detection_mask_images = None
+            self.state.grasp_detection_mask_target = None
+            return None
+
+        self.state.grasp_detection_mask_images = images
+        self.state.grasp_detection_mask_target = target_label
+        self.get_logger().info(
+            f"{target_label} VLM 관찰 위치 SAM+Depth grasp detection mask image 저장 완료: "
+            "src/macgyvbot_perception/data/yaw_pca"
+        )
+        return images
 
     def _motion_interrupted(self):
         return self.exit_req.is_set() or self.pause_req.is_set()
@@ -1343,7 +1562,7 @@ class TaskCoordinatorNode(Node):
         try:
             self.state.hand_grasp_image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
         except Exception as exc:
-            emit_structured_log(self.service_log.bind("legacy"), 'warn', "log", "status", svc='task', pipe='system', msg=f"손 인식 화면 변환 실패: {exc}")
+            self.get_logger().warn(f"잡기 인식 화면 변환 실패: {exc}")
 
     def _cam_info_cb(self, msg):
         self.state.intrinsics = {
@@ -1369,7 +1588,7 @@ class TaskCoordinatorNode(Node):
     def _process_frames(self):
         if self.state.home_xyz is None or self.state.home_ori is None:
             return
-        emit_structured_log(self.service_log.bind("legacy"), 'debug', "log", "status", svc='task', pipe='system', msg="task coordinator camera loop 대기 중...")
+        self.get_logger().debug("task coordinator camera loop 대기 중...")
 
         while rclpy.ok():
             if not self.frame_processor.has_camera_state():

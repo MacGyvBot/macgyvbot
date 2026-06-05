@@ -1,7 +1,6 @@
 """Robot camera frame processing for the main pick node."""
 
 from __future__ import annotations
-from macgyvbot_domain.logging import emit_structured_log
 
 import cv2
 
@@ -81,7 +80,9 @@ class PickFrameProcessor:
             return
 
         if target.reason == "target_not_found":
-            emit_structured_log(self.logger, 'info', "log", "status", svc='task', pipe='pick', msg=f"'{self.state.target_label}' 탐색 중... 현재 프레임에서는 미검출")
+            self.logger.info(
+                f"'{self.state.target_label}' 탐색 중... 현재 프레임에서는 미검출"
+            )
             if self.state._last_search_status_target != self.state.target_label:
                 self.state._last_search_status_target = self.state.target_label
                 self.status_publisher(
