@@ -135,7 +135,6 @@ class FakeHandoff:
     def __init__(self):
         self.returned_drawer_id = None
         self.events = []
-        self.last_failure_reason = "handoff_search_failed"
 
     def wait_for_human_grasp(self, logger):
         return False
@@ -159,7 +158,7 @@ class FakeHandoff:
         assert not move_home
         return True
 
-    def move_to_handoff_pose(self, logger):
+    def move_to_handoff_pose(self, ori, logger):
         return None, None, None
 
     def move_home_after_handoff(self, logger, publish_on_failure=True):
@@ -297,28 +296,12 @@ def test_handoff_timeout_reports_drawer_close_failure():
     )
 
 
-def test_handoff_search_failure_waits_for_fallback_choice():
+def test_handoff_search_failure_returns_directly_to_target_clearance():
     runner = PickSequenceRunner.__new__(PickSequenceRunner)
     runner.handoff = FakeHandoff()
     runner.drawer_flow = FakeDrawerFlow(events=runner.handoff.events)
     runner.state = FakeState()
-    fallback_event = types.SimpleNamespace(
-        _calls=0,
-        is_set=lambda: False,
-        clear=lambda: None,
-        set=lambda: None,
-    )
-
-    def fallback_is_set():
-        fallback_event._calls += 1
-        return fallback_event._calls >= 2
-
-    fallback_event.is_set = fallback_is_set
-    runner.control_events = {
-        "handoff_pending": types.SimpleNamespace(set=lambda: None, clear=lambda: None),
-        "handoff_retry": types.SimpleNamespace(is_set=lambda: False, clear=lambda: None),
-        "handoff_fallback": fallback_event,
-    }
+    runner.control_events = {}
     plan = types.SimpleNamespace(
         target_x=0.30,
         target_y=0.10,

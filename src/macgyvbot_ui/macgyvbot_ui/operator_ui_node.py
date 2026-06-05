@@ -523,27 +523,8 @@ class OperatorUiNode(Node):
 
         if view['show_chat']:
             self._append_event_chat(view['state'], view['chat_message'])
-            if view['state'] == 'handoff_inspection_pending':
-                self._append_handoff_inspection_actions()
 
         self._handle_exit_status(status, view['state'])
-
-    def _append_handoff_inspection_actions(self):
-        if self.window is None or not hasattr(self.window, 'append_control_actions'):
-            return
-        self.window.append_control_actions(
-            (
-                ('재시도', '재시도'),
-                ('복귀', '복귀'),
-            )
-        )
-        self._append_log(
-            'info',
-            'handoff inspection 선택 버튼 표시',
-            source='ui.chat',
-            event='QUICK_ACTIONS',
-            detail='actions=handoff_retry,handoff_fallback',
-        )
 
     def _hand_grasp_cb(self, msg):
         hand_present = bool(msg.hand_present)
@@ -854,11 +835,7 @@ class OperatorUiNode(Node):
         raw_message = str(status.get('message') or '').strip()
         reason = str(status.get('reason') or '').strip()
 
-        abnormal_message = (
-            ''
-            if state == 'handoff_inspection_pending'
-            else robot_status_chat(state, reason, raw_message)
-        )
+        abnormal_message = robot_status_chat(state, reason, raw_message)
         message = (
             abnormal_message
             or self._robot_status_message(state, target_label, raw_message, reason)
@@ -1101,7 +1078,6 @@ class OperatorUiNode(Node):
             'resumed',
             'cancelled',
             'rejected',
-            'handoff_inspection_pending',
             'handoff_complete',
             'tool_dropped',
             'vlm_loading',

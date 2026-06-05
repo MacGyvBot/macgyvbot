@@ -5,7 +5,6 @@ import time
 import rclpy
 
 from macgyvbot_config.pick import OBSERVE_X_OFFSET_M
-from macgyvbot_config.handoff import HANDOFF_WAIT_POLL_SEC
 
 from macgyvbot_manipulation.robot_pose import (
     current_ee_orientation,
@@ -459,36 +458,13 @@ class PickSequenceRunner:
 
     def _move_to_handoff(self, plan, context):
         log = self.state.logger()
-        while True:
-            handoff_pose = self.handoff.move_to_handoff_pose(log)
-            if handoff_pose[0] is not None:
-                self._clear_handoff_inspection_choice()
-                return True
+        handoff_pose = self.handoff.move_to_handoff_pose(log)
+        if handoff_pose[0] is not None:
+            return True
 
-            if self._interrupted():
-                self._clear_handoff_inspection_choice()
-                return False
-
-            failure_reason = getattr(self.handoff, "last_failure_reason", "")
-            if failure_reason != "handoff_search_failed":
-                return self._fallback_after_handoff_failure(plan, context, log)
-
-            choice = self._wait_for_handoff_inspection_choice(log)
-            if choice == "retry":
-                log.info("사용자 요청으로 handoff 손 인식을 재시도합니다.")
-                self.state._publish_robot_status(
-                    "searching_hand",
-                    action="bring",
-                    message="사용자 손 인식을 다시 시도합니다.",
-                    reason="handoff_retry_requested",
-                    command=self.state.current_command,
-                )
-                continue
-            if choice == "fallback":
-                return self._fallback_after_handoff_failure(plan, context, log)
+        if self._interrupted():
             return False
 
-    def _fallback_after_handoff_failure(self, plan, context, log):
         log.error("사용자 손 위치 확인 실패. 원래 공구 위치로 반환합니다.")
         returned, drawer_closed, home_ok = self._return_tool_close_drawer_home(
             plan,
@@ -520,40 +496,6 @@ class PickSequenceRunner:
             command=self.state.current_command,
         )
         return False
-
-    def _wait_for_handoff_inspection_choice(self, log):
-        pending_event = self.control_events.get("handoff_pending")
-        retry_event = self.control_events.get("handoff_retry")
-        fallback_event = self.control_events.get("handoff_fallback")
-        if pending_event is None or retry_event is None or fallback_event is None:
-            log.warn(
-                "handoff inspection 선택 이벤트가 없어 기존 fallback을 수행합니다."
-            )
-            return "fallback"
-
-        retry_event.clear()
-        fallback_event.clear()
-        pending_event.set()
-        try:
-            while not self._interrupted():
-                if retry_event.is_set():
-                    retry_event.clear()
-                    return "retry"
-                if fallback_event.is_set():
-                    fallback_event.clear()
-                    return "fallback"
-                cooperative_wait(HANDOFF_WAIT_POLL_SEC)
-        finally:
-            pending_event.clear()
-            retry_event.clear()
-            fallback_event.clear()
-        return "interrupted"
-
-    def _clear_handoff_inspection_choice(self):
-        for key in ("handoff_pending", "handoff_retry", "handoff_fallback"):
-            event = self.control_events.get(key)
-            if event is not None:
-                event.clear()
 
     def _wait_human_grasp(self, plan, context):
         log = self.state.logger()
