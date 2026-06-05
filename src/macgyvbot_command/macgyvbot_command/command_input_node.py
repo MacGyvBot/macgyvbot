@@ -26,6 +26,9 @@ from macgyvbot_interfaces.msg import (
     RobotTaskStatus,
     ToolCommand,
 )
+from macgyvbot_command.input_mapping.command_hard_parser import (
+    find_short_control_action,
+)
 from macgyvbot_command.input_mapping.command_llm_parser import CommandLlmParser
 from macgyvbot_command.stt.speech_to_text import SpeechToTextService
 from macgyvbot_command.tts import TtsService
@@ -39,10 +42,12 @@ class CommandInputNode(Node):
         self.declare_parameter('language', 'ko-KR')
         self.declare_parameter('device_index', -1)
         self.declare_parameter('energy_threshold', 300.0)
-        self.declare_parameter('pause_threshold', 0.8)
-        self.declare_parameter('phrase_time_limit', 5.0)
+        self.declare_parameter('pause_threshold', 0.45)
+        self.declare_parameter('phrase_threshold', 0.15)
+        self.declare_parameter('non_speaking_duration', 0.25)
+        self.declare_parameter('phrase_time_limit', 3.0)
         self.declare_parameter('dynamic_energy', True)
-        self.declare_parameter('ambient_duration', 1.0)
+        self.declare_parameter('ambient_duration', 0.5)
         self.declare_parameter('stt_text_topic', STT_TEXT_TOPIC)
 
         self.declare_parameter('tool_command_topic', TOOL_COMMAND_TOPIC)
@@ -133,6 +138,10 @@ class CommandInputNode(Node):
                 device_index=self._device_index,
                 energy_threshold=float(self.get_parameter('energy_threshold').value),
                 pause_threshold=float(self.get_parameter('pause_threshold').value),
+                phrase_threshold=float(self.get_parameter('phrase_threshold').value),
+                non_speaking_duration=float(
+                    self.get_parameter('non_speaking_duration').value
+                ),
                 dynamic_energy=bool(self.get_parameter('dynamic_energy').value),
                 ambient_duration=float(self.get_parameter('ambient_duration').value),
                 phrase_time_limit=self._phrase_time_limit,
@@ -196,6 +205,9 @@ class CommandInputNode(Node):
         self._handle_text(text)
 
     def _handle_text(self, text):
+        if self._handle_fast_control_text(text):
+            return
+
         result = self._parser.interpret(text)
 
         command = result.get('command')
@@ -226,6 +238,52 @@ class CommandInputNode(Node):
 
         for payload in result.get('feedbacks', []):
             self._publish_feedback_payload(payload)
+
+    def _handle_fast_control_text(self, text):
+        action = find_short_control_action(text)
+        if not action:
+            return False
+
+        command = {
+            'tool_name': 'unknown',
+            'action': action,
+            'target_mode': 'unknown',
+            'raw_text': text,
+            'match_method': f'{action}_fast_keyword',
+            'match_score': 1.0,
+            'confidence': 1.0,
+        }
+        feedback = {
+            'status': 'accepted',
+            'reason': 'fast_control_keyword',
+            'message': self._fast_control_feedback_message(action),
+            'raw_text': text,
+            'command': command,
+        }
+
+        self.get_logger().info(
+            f'짧은 작업 제어 명령 즉시 처리: action={action}, raw_text="{text}"'
+        )
+        self._publish_feedback_payload(feedback)
+
+        if action in ('pause', 'resume', 'cancel'):
+            self._send_task_control_request(action=action, reason=text)
+            return True
+
+        if action == 'home':
+            self._publish_command(command)
+            return True
+
+        return False
+
+    @staticmethod
+    def _fast_control_feedback_message(action):
+        return {
+            'pause': '정지 명령으로 이해했습니다.',
+            'resume': '재개 명령으로 이해했습니다. 작업 재개 요청으로 전달합니다.',
+            'cancel': '현재 작업을 취소합니다. 다음 명령을 기다리겠습니다.',
+            'home': 'Home 위치로 복귀하라는 뜻으로 이해했습니다.',
+        }.get(action, '명령을 올바른 입력으로 판단했습니다.')
 
     def _publish_command(self, command):
         command_msg = self._tool_command_message(command)

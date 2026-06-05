@@ -52,4 +52,3 @@ def build_prompt(label, target_label, image_size):
         "- No code fence.\n"
         "- No explanation outside JSON.\n"
     )
-

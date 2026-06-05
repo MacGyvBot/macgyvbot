@@ -28,6 +28,8 @@ POSE_GOAL_IK_TIMEOUT_SEC = 0.1
 POSE_GOAL_IK_MAX_SEEDS = 10
 POSE_GOAL_IK_SEED_PERTURB_RAD = math.radians(10.0)
 POSE_GOAL_MAX_JOINT_DELTA_RAD = math.radians(120.0)
+HOME_JOINT_GOAL_TOLERANCE_RAD = math.radians(2.0)
+HOME_JOINT_SETTLE_TIMEOUT_SEC = 1.5
 _TWO_PI = 2.0 * math.pi
 
 
@@ -564,7 +566,11 @@ class MoveItController:
 
     def move_to_home_joints(self, logger):
         """Move to the configured Home joint pose."""
-        if self._is_at_joint_goal(HOME_JOINTS, logger):
+        if self._is_at_joint_goal(
+            HOME_JOINTS,
+            logger,
+            tolerance_rad=HOME_JOINT_GOAL_TOLERANCE_RAD,
+        ):
             logger.info("현재 joint pose가 이미 Home 허용 오차 안에 있어 이동을 생략합니다.")
             return True
 
@@ -577,7 +583,12 @@ class MoveItController:
         if ok:
             return True
 
-        if self._wait_until_at_joint_goal(HOME_JOINTS, logger):
+        if self._wait_until_at_joint_goal(
+            HOME_JOINTS,
+            logger,
+            timeout_sec=HOME_JOINT_SETTLE_TIMEOUT_SEC,
+            tolerance_rad=HOME_JOINT_GOAL_TOLERANCE_RAD,
+        ):
             logger.warn(
                 "Home trajectory 결과는 실패로 보고되었지만 현재 joint pose가 "
                 "Home 허용 오차 안에 있어 Home 복귀 성공으로 처리합니다."

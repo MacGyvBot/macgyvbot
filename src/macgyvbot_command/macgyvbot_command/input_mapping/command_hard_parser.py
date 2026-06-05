@@ -24,6 +24,52 @@ from macgyvbot_command.input_mapping.command_vocabulary import (
 
 FUZZY_MATCH_THRESHOLD = 0.50
 MIN_FUZZY_KEYWORD_LENGTH = 3
+SHORT_CONTROL_MAX_LENGTH = 14
+
+_SHORT_CONTROL_KEYWORDS = (
+    ('pause', STOP_KEYWORDS),
+    ('resume', RESUME_KEYWORDS),
+    ('cancel', CANCEL_KEYWORDS),
+    ('home', HOME_KEYWORDS),
+)
+_SAFE_CONTROL_SUFFIXES = (
+    '',
+    '요',
+    '해',
+    '해요',
+    '해줘',
+    '해주세요',
+    '하자',
+    '하라',
+    '줘',
+    '주세요',
+    '가',
+    '가요',
+    '가줘',
+    '가주세요',
+    '로가',
+    '로가요',
+    '로가줘',
+    '로가주세요',
+    '이동',
+    '이동해',
+    '이동해줘',
+    '돌아가',
+    '돌아가줘',
+)
+_NEGATED_CONTROL_TOKENS = (
+    '하지마',
+    '하지말',
+    '멈추지마',
+    '멈추지말',
+    '정지하지마',
+    '정지하지말',
+    '중지하지마',
+    '중지하지말',
+    '복귀하지마',
+    '복귀하지말',
+)
+
 
 def normalize_text(text):
     return (text or '').lower().replace(' ', '')
@@ -129,3 +175,39 @@ def find_action(text):
             return 'bring'
 
     return 'unknown'
+
+
+def find_short_control_action(text):
+    """Return a safe immediate control action for short utterances.
+
+    This intentionally matches only compact, explicit control phrases so
+    emergency-style commands such as "멈춰" do not wait for the LLM path, while
+    longer or negated sentences still go through the full parser guards.
+    """
+    normalized = normalize_text(text)
+    if not normalized or len(normalized) > SHORT_CONTROL_MAX_LENGTH:
+        return ''
+
+    if any(token in normalized for token in _NEGATED_CONTROL_TOKENS):
+        return ''
+
+    for action, keywords in _SHORT_CONTROL_KEYWORDS:
+        if _matches_control_keyword(normalized, keywords):
+            return action
+
+    return ''
+
+
+def _matches_control_keyword(normalized_text, keywords):
+    for keyword in keywords:
+        normalized_keyword = normalize_text(keyword)
+        if not normalized_keyword:
+            continue
+        if normalized_text == normalized_keyword:
+            return True
+        if not normalized_text.startswith(normalized_keyword):
+            continue
+        suffix = normalized_text[len(normalized_keyword):]
+        if suffix in _SAFE_CONTROL_SUFFIXES:
+            return True
+    return False
