@@ -40,8 +40,6 @@ PIPE_LABELS = {
 }
 
 MESSAGE_TRANSLATIONS = {
-    "legacy command log": "기존 명령 로그",
-    "legacy flow message": "기존 흐름 로그",
     "main router ready": "메인 라우터 준비 완료",
     "task request published": "작업 요청 발행",
     "release request forwarded to task coordinator.": "release 요청을 task coordinator로 전달했습니다.",

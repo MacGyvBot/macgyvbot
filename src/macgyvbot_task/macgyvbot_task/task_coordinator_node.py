@@ -35,7 +35,6 @@ from macgyvbot_interfaces.srv import SetGripper
 from macgyvbot_config.drawer import DRAWER_OBSERVATION_J6_DEG
 from macgyvbot_config.structured_logging import (
     format_structured_log,
-    translate_log_message,
 )
 from macgyvbot_config.models import HAND_GRASP_SAM_CHECKPOINT_NAME, YOLO_MODEL_NAME
 from macgyvbot_config.pick import PICK_GRASP_YAW_OFFSET_DEG
@@ -258,7 +257,6 @@ class PipelineLogger:
 
 
 def _format_pipeline_log(*, svc, pipe, step, event, msg="", **fields):
-    msg = _compact_legacy_message(msg, has_fields=bool(fields))
     return format_structured_log(
         svc=svc,
         pipe=pipe,
@@ -267,13 +265,6 @@ def _format_pipeline_log(*, svc, pipe, step, event, msg="", **fields):
         msg=msg,
         **fields,
     )
-
-
-def _compact_legacy_message(message, *, has_fields):
-    text = str(message or "")
-    if has_fields or text.isascii():
-        return translate_log_message(text)
-    return "legacy flow message"
 
 
 class TaskCoordinatorNode(Node):
