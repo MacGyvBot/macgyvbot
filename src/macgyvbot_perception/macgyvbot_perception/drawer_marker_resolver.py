@@ -19,7 +19,7 @@ class DrawerMarkerResolver:
         self,
         depth_projector,
         logger,
-        dictionary_name="DICT_4X4_50",
+        dictionary_name="DICT_5X5_50",
     ):
         self.depth_projector = depth_projector
         self.logger = logger
