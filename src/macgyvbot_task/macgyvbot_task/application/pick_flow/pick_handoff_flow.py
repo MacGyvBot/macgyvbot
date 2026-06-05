@@ -51,6 +51,7 @@ class PickHandoffFlow:
         self.wait_fn = wait_fn
         self.tool_hold_monitor = tool_hold_monitor
         self.interrupted = interrupted or (lambda: False)
+        self.last_failure_reason = ""
 
     def return_tool_to_original_position(
         self,
@@ -180,7 +181,9 @@ class PickHandoffFlow:
         return True
 
     def move_to_handoff_pose(self, logger):
+        self.last_failure_reason = ""
         if self.interrupted():
+            self.last_failure_reason = "interrupted"
             logger.info(
                 "사용자 전달 이동 시작 전 "
                 "stop/pause 요청으로 handoff를 중단합니다."
@@ -188,9 +191,12 @@ class PickHandoffFlow:
             return None, None, None
 
         if not self._move_to_observation_pose(logger):
+            if not self.last_failure_reason:
+                self.last_failure_reason = "handoff_observation_pose_failed"
             return None, None, None
         handoff_ori = self.state.home_ori
         if handoff_ori is None:
+            self.last_failure_reason = "handoff_home_orientation_unavailable"
             logger.error("Home orientation이 없어 사용자 손 위치로 이동할 수 없습니다.")
             self.state._publish_robot_status(
                 "failed",
@@ -202,6 +208,8 @@ class PickHandoffFlow:
 
         candidate = self._observe_handoff_candidate(logger)
         if candidate is None:
+            if not self.last_failure_reason:
+                self.last_failure_reason = "handoff_observation_cancelled"
             return None, None, None
 
         if not self._validate_candidate(candidate, logger):
@@ -216,6 +224,7 @@ class PickHandoffFlow:
             f"pose=({start_pose.x:.3f},{start_pose.y:.3f},{start_pose.z:.3f})"
         )
         if self.interrupted():
+            self.last_failure_reason = "interrupted"
             logger.info(
                 "관찰 자세 이동 후 "
                 "stop/pause 요청으로 handoff를 중단합니다."
@@ -225,6 +234,7 @@ class PickHandoffFlow:
         if ok:
             return True
 
+        self.last_failure_reason = "handoff_observation_pose_failed"
         logger.error("사용자 전달 위치 이동 실패. Pick 시퀀스 중단")
         self.state._publish_robot_status(
             "failed",
@@ -264,10 +274,15 @@ class PickHandoffFlow:
 
     def _validate_candidate(self, candidate, logger):
         if not candidate.found:
+            self.last_failure_reason = "handoff_search_failed"
             logger.error("사용자 손 위치를 찾지 못했습니다.")
             self.state._publish_robot_status(
-                "failed",
-                message="사용자 손 위치를 찾지 못했습니다.",
+                "handoff_inspection_pending",
+                action="bring",
+                message=(
+                    "사용자의 손을 인식하지 못했습니다. "
+                    "다시 인식할까요, 복귀할까요?"
+                ),
                 reason="handoff_search_failed",
                 command=self.state.current_command,
             )
@@ -276,6 +291,7 @@ class PickHandoffFlow:
         if candidate.frame_id in (WORLD_FRAME, BASE_FRAME):
             return True
 
+        self.last_failure_reason = "handoff_unsupported_frame"
         logger.error(
             "사용자 손 위치 frame을 planning에 사용할 수 없습니다: "
             f"frame={candidate.frame_id}, source={candidate.source}"
@@ -299,6 +315,7 @@ class PickHandoffFlow:
             should_interrupt=self.interrupted,
         )
         if self.interrupted():
+            self.last_failure_reason = "interrupted"
             logger.info(
                 "사용자 손 위치 이동 후 "
                 "stop/pause 요청으로 handoff를 중단합니다."
@@ -314,6 +331,11 @@ class PickHandoffFlow:
             f"safe=({final_pose.x:.3f},{final_pose.y:.3f},{final_pose.z:.3f})"
         )
         if not ok:
+            self.last_failure_reason = (
+                "handoff_hand_pose_move_failed"
+                if reason == "target_move_failed"
+                else reason
+            )
             logger.error("사용자 손 위치로 전달 이동 실패")
             self.state._publish_robot_status(
                 "failed",

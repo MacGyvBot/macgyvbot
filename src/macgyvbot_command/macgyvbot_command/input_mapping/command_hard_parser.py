@@ -32,6 +32,18 @@ _SHORT_CONTROL_KEYWORDS = (
     ('cancel', CANCEL_KEYWORDS),
     ('home', HOME_KEYWORDS),
 )
+_HANDOFF_RETRY_KEYWORDS = (
+    '재시도',
+    '다시시도',
+    '다시 시도',
+    '다시인식',
+    '다시 인식',
+    '다시찾아',
+    '다시 찾아',
+    '한번더',
+    '한 번 더',
+    'retry',
+)
 _SAFE_CONTROL_SUFFIXES = (
     '',
     '요',
@@ -190,6 +202,9 @@ def find_short_control_action(text):
 
     if any(token in normalized for token in _NEGATED_CONTROL_TOKENS):
         return ''
+
+    if _matches_control_keyword(normalized, _HANDOFF_RETRY_KEYWORDS):
+        return 'handoff_retry'
 
     for action, keywords in _SHORT_CONTROL_KEYWORDS:
         if _matches_control_keyword(normalized, keywords):
