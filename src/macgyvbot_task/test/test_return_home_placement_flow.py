@@ -1,3 +1,4 @@
+import math
 import sys
 import types
 
@@ -17,6 +18,14 @@ class DummyRobotState:
 
     def update(self):
         pass
+
+    def get_global_link_transform(self, _link):
+        return [
+            [1.0, 0.0, 0.0, 0.50],
+            [0.0, 1.0, 0.0, 0.10],
+            [0.0, 0.0, 1.0, 0.45],
+            [0.0, 0.0, 0.0, 1.0],
+        ]
 
 
 rclpy_module = types.ModuleType("rclpy")
@@ -78,8 +87,9 @@ class FakeRobot:
 
 class FakeMotion:
     def __init__(self, plan_results=None):
-        self.plan_results = list(plan_results or [True, True, True, True])
+        self.plan_results = list(plan_results or [True, True, True])
         self.plan_calls = 0
+        self.pose_goals = []
 
     def plan_and_execute(
         self,
@@ -89,6 +99,8 @@ class FakeMotion:
         collision_scene_key=None,
     ):
         self.plan_calls += 1
+        if pose_goal is not None:
+            self.pose_goals.append(pose_goal)
         return self.plan_results.pop(0)
 
 
@@ -132,6 +144,11 @@ class FakeMatrix:
 
 
 def patch_pose_helpers(monkeypatch):
+    monkeypatch.setattr(
+        return_staging_placement_flow,
+        "RobotState",
+        DummyRobotState,
+    )
     monkeypatch.setattr(
         return_staging_placement_flow,
         "get_ee_matrix",
@@ -182,20 +199,12 @@ def test_force_descent_failure_reports_reason(monkeypatch):
     assert flow.reporter.failed[-1][2] == "return_store_observe_descent_failed"
 
 
-def test_retreat_failure_reports_reason(monkeypatch):
+def test_store_observe_viewpoint_failure_reports_reason(monkeypatch):
     patch_pose_helpers(monkeypatch)
     flow = make_flow(plan_results=[True, True, False])
 
     assert not run_place(flow)
-    assert flow.reporter.failed[-1][2] == "return_store_observe_retreat_failed"
-
-
-def test_final_store_observe_failure_reports_reason(monkeypatch):
-    patch_pose_helpers(monkeypatch)
-    flow = make_flow(plan_results=[True, True, True, False])
-
-    assert not run_place(flow)
-    assert flow.reporter.failed[-1][2] == "return_store_observe_after_release_failed"
+    assert flow.reporter.failed[-1][2] == "return_store_observe_viewpoint_failed"
 
 
 def test_success_opens_gripper_and_returns_to_store_observe(monkeypatch):
@@ -204,4 +213,7 @@ def test_success_opens_gripper_and_returns_to_store_observe(monkeypatch):
 
     assert run_place(flow)
     assert flow.gripper.open_calls == 1
-    assert flow.motion.plan_calls == 4
+    assert flow.motion.plan_calls == 3
+    assert math.isclose(flow.motion.pose_goals[-1].pose.position.x, 0.42)
+    assert math.isclose(flow.motion.pose_goals[-1].pose.position.y, 0.10)
+    assert math.isclose(flow.motion.pose_goals[-1].pose.position.z, 0.45)

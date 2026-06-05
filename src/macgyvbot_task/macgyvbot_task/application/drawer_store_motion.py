@@ -1,24 +1,25 @@
-"""Shared drawer-store placement motion helpers."""
+﻿"""Shared drawer-store placement motion helpers."""
 
 from __future__ import annotations
 
 from macgyvbot_config.drawer import (
-    DRAWER_STORE_MARKER_CLEARANCE_Z_OFFSET_M,
     DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M,
+    DRAWER_WALL_CLEARANCE_Z_OFFSET_M,
 )
 from macgyvbot_manipulation.robot_pose import make_safe_pose
 from macgyvbot_manipulation.robot_safezone import safe_z_min_for_drawer
+from macgyvbot_task.application.logging_utils import log_error, log_info
 
 
-def drawer_store_clearance_z(drawer_id):
-    return safe_z_min_for_drawer(drawer_id) + DRAWER_STORE_MARKER_CLEARANCE_Z_OFFSET_M
+def drawer_wall_clearance_z_for_drawer(drawer_id):
+    return safe_z_min_for_drawer(drawer_id) + DRAWER_WALL_CLEARANCE_Z_OFFSET_M
 
 
-def drawer_store_exit_target(target_x, target_y, clearance_z):
+def drawer_store_exit_target(target_x, target_y, drawer_wall_clearance_z):
     return (
         target_x + DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M[0],
         target_y + DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M[1],
-        clearance_z + DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M[2],
+        drawer_wall_clearance_z + DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M[2],
     )
 
 
@@ -27,7 +28,7 @@ def move_to_drawer_store_exit(
     logger,
     target_x,
     target_y,
-    clearance_z,
+    drawer_wall_clearance_z,
     ori,
     label,
     error_message,
@@ -35,13 +36,20 @@ def move_to_drawer_store_exit(
     exit_x, exit_y, exit_z = drawer_store_exit_target(
         target_x,
         target_y,
-        clearance_z,
+        drawer_wall_clearance_z,
     )
-    logger.info(
-        f"{label}: offset=({DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M[0]:.3f}, "
-        f"{DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M[1]:.3f}, "
-        f"{DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M[2]:.3f}), "
-        f"target=({exit_x:.3f}, {exit_y:.3f}, {exit_z:.3f})"
+    log_info(
+        logger,
+        "move to drawer store exit",
+        step="drawer_exit",
+        event="start",
+        offset_x=DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M[0],
+        offset_y=DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M[1],
+        offset_z=DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M[2],
+        target_x=exit_x,
+        target_y=exit_y,
+        target_z=exit_z,
+        label=label,
     )
     ok = motion.plan_and_execute(
         logger,
@@ -55,5 +63,11 @@ def move_to_drawer_store_exit(
         collision_scene_key="drawer/store_exit",
     )
     if not ok:
-        logger.error(error_message)
+        log_error(
+            logger,
+            "drawer store exit move failed",
+            step="drawer_exit",
+            event="fail",
+            reason=error_message,
+        )
     return ok

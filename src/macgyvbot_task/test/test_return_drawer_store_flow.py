@@ -65,15 +65,19 @@ sys.modules.setdefault("scipy.spatial.transform", scipy_transform_module)
 
 from macgyvbot_config.drawer import (
     DRAWER_1_SAFE_Z_OFFSET_M,
-    DRAWER_STORE_MARKER_CLEARANCE_Z_OFFSET_M,
+    DRAWER_2_SAFE_Z_OFFSET_M,
     DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M,
     DRAWER_STORE_FORCE_DESCENT_START_Z_OFFSET_M,
     DRAWER_STORE_TOOL_OBSERVE_POINT,
+    DRAWER_WALL_CLEARANCE_Z_OFFSET_M,
 )
 from macgyvbot_manipulation.robot_safezone import SAFE_Z_MIN
 from macgyvbot_manipulation.robot_safezone import safe_z_min_for_drawer
 from macgyvbot_task.application.return_flow.return_drawer_placement_flow import (
     ReturnDrawerPlacementFlow,
+)
+from macgyvbot_task.application.drawer_store_motion import (
+    drawer_wall_clearance_z_for_drawer,
 )
 from macgyvbot_task.application.return_flow.return_sequence import (
     ReturnSequenceRunner,
@@ -171,10 +175,7 @@ class FakeReturnTargetPlanner:
         return types.SimpleNamespace(
             target_x=0.30,
             target_y=0.10,
-            travel_z=0.40,
-            approach_z=0.32,
             grasp_z=0.27,
-            should_descend_to_grasp=True,
         )
 
 
@@ -201,17 +202,25 @@ def test_return_drawer_placement_uses_same_drawer_safe_z_min_as_pick():
     assert safe_z_min_for_drawer(1) == (
         SAFE_Z_MIN + DRAWER_1_SAFE_Z_OFFSET_M
     )
+    assert safe_z_min_for_drawer(2) == (
+        SAFE_Z_MIN + DRAWER_2_SAFE_Z_OFFSET_M
+    )
     assert safe_z_min_for_drawer(0) == SAFE_Z_MIN
     assert safe_z_min_for_drawer(None) == SAFE_Z_MIN
-    assert ReturnDrawerPlacementFlow._clearance_z_for_drawer(1) == (
+    assert drawer_wall_clearance_z_for_drawer(1) == (
         SAFE_Z_MIN
         + DRAWER_1_SAFE_Z_OFFSET_M
-        + DRAWER_STORE_MARKER_CLEARANCE_Z_OFFSET_M
+        + DRAWER_WALL_CLEARANCE_Z_OFFSET_M
     )
-    assert ReturnDrawerPlacementFlow._clearance_z_for_drawer(0) == (
-        SAFE_Z_MIN + DRAWER_STORE_MARKER_CLEARANCE_Z_OFFSET_M
+    assert drawer_wall_clearance_z_for_drawer(0) == (
+        SAFE_Z_MIN + DRAWER_WALL_CLEARANCE_Z_OFFSET_M
     )
-    assert DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M == [0.0, -0.15, 0.0]
+    assert drawer_wall_clearance_z_for_drawer(2) == (
+        SAFE_Z_MIN
+        + DRAWER_2_SAFE_Z_OFFSET_M
+        + DRAWER_WALL_CLEARANCE_Z_OFFSET_M
+    )
+    assert DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M == [-0.15, 0.0, 0.0]
 
 
 def test_return_sequence_builds_drawer_store_step_order():
@@ -275,10 +284,9 @@ def test_return_staged_tool_grasp_pregrasp_depth_adjusts_before_final_grasp(
     z_targets = [pose.pose.position.z for pose in motion.targets]
     assert all(
         math.isclose(actual, expected)
-        for actual, expected in zip(z_targets[:4], [0.40, 0.32, 0.27, 0.252])
+        for actual, expected in zip(z_targets[:2], [0.27, 0.252])
     )
-    assert math.isclose(motion.min_z_values[3], 0.252)
-    assert math.isclose(z_targets[-1], 0.40)
+    assert math.isclose(motion.min_z_values[1], 0.252)
     assert gripper.close_calls == 2
     assert gripper.open_calls == 1
     assert reporter.failures == []

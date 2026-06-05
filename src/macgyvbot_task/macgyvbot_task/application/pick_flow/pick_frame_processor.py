@@ -1,8 +1,10 @@
-"""Robot camera frame processing for the main pick node."""
+﻿"""Robot camera frame processing for the main pick node."""
 
 from __future__ import annotations
 
 import cv2
+
+from macgyvbot_task.application.logging_utils import log_info
 
 
 class PickFrameProcessor:
@@ -41,6 +43,9 @@ class PickFrameProcessor:
 
     def process_current_frame(self):
         """Detect objects, optionally handle target pick, and return a display frame."""
+        if not self.state.target_label:
+            return self.state.color_image.copy()
+
         if self.state.target_label and not self.drawer_ready_for_target(
             self.state.target_label
         ):
@@ -77,16 +82,21 @@ class PickFrameProcessor:
             return
 
         if target.reason == "target_not_found":
-            self.logger.info(
-                f"'{self.state.target_label}' 탐색 중... 현재 프레임에서는 미검출"
-            )
             if self.state._last_search_status_target != self.state.target_label:
                 self.state._last_search_status_target = self.state.target_label
+                log_info(
+                    self.logger,
+                    "target search started",
+                    step="search",
+                    event="start",
+                    target=self.state.target_label,
+                    reason=target.reason,
+                )
                 self.status_publisher(
                     "searching",
                     tool_name=self.state.target_label,
                     action="bring",
-                    message=f"{self.state.target_label} 탐색 중입니다.",
+                    message=f"{self.state.target_label} search started.",
                     command=self.state.current_command,
                 )
 

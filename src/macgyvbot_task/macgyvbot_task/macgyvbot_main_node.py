@@ -11,8 +11,46 @@ from macgyvbot_config.topics import (
     TASK_REQUEST_TOPIC,
     TOOL_COMMAND_TOPIC,
 )
+from macgyvbot_config.structured_logging import format_structured_log
 from macgyvbot_interfaces.msg import RobotTaskStatus, TaskRequest, ToolCommand
 from macgyvbot_task.application import RobotStatusPublisher, ToolCommandController
+
+def _format_router_log(message, *, step="log", event="status", **fields):
+    return format_structured_log(
+        svc="task",
+        pipe="router",
+        step=step,
+        event=event,
+        msg=message,
+        **fields,
+    )
+
+
+class _StructuredLoggerAdapter:
+    def __init__(self, logger):
+        self._logger = logger
+
+    def debug(self, message):
+        self._logger.debug(self._format(message))
+
+    def info(self, message):
+        self._logger.info(self._format(message))
+
+    def warn(self, message):
+        self._logger.warn(self._format(message))
+
+    def warning(self, message):
+        self.warn(message)
+
+    def error(self, message):
+        self._logger.error(self._format(message))
+
+    @staticmethod
+    def _format(message):
+        text = str(message or "")
+        if text.startswith("[pkg] ") or text.startswith("pkg="):
+            return text
+        return _format_router_log(text)
 
 
 class MacGyvBotNode(Node):
@@ -59,11 +97,7 @@ class MacGyvBotNode(Node):
         self._target_label = None
         self._current_command = None
 
-        self.task_request_pub = self.create_publisher(
-            TaskRequest,
-            TASK_REQUEST_TOPIC,
-            10,
-        )
+        self.task_request_pub = self.create_publisher(TaskRequest, TASK_REQUEST_TOPIC, 10)
         self.robot_status_pub = self.create_publisher(
             RobotTaskStatus,
             ROBOT_STATUS_TOPIC,
@@ -98,10 +132,19 @@ class MacGyvBotNode(Node):
             10,
         )
 
-        self.get_logger().info("macgyvbot main router 초기화 완료")
-        self.get_logger().info(f"공구 명령 토픽: {TOOL_COMMAND_TOPIC}")
-        self.get_logger().info(f"task request 토픽: {TASK_REQUEST_TOPIC}")
-        self.get_logger().info(f"로봇 상태 토픽: {ROBOT_STATUS_TOPIC}")
+        self.get_logger().info(
+            _format_router_log(
+                "main router ready",
+                step="startup",
+                event="ready",
+                tool_command_topic=TOOL_COMMAND_TOPIC,
+                task_request_topic=TASK_REQUEST_TOPIC,
+                robot_status_topic=ROBOT_STATUS_TOPIC,
+            )
+        )
+
+    def get_logger(self):
+        return _StructuredLoggerAdapter(super().get_logger())
 
     def _tool_command_cb(self, msg):
         command = self._tool_command_payload(msg)
@@ -215,8 +258,14 @@ class MacGyvBotNode(Node):
             msg.vlm_yaw_deg = float(vlm_yaw_deg)
         self.task_request_pub.publish(msg)
         self.get_logger().info(
-            f"{TASK_REQUEST_TOPIC} 발행: task={payload.get('task')}, "
-            f"tool={payload.get('tool_name', 'unknown')}"
+            _format_router_log(
+                "task request published",
+                step="task_request",
+                event="publish",
+                topic=TASK_REQUEST_TOPIC,
+                task=payload.get("task"),
+                tool=payload.get("tool_name", "unknown"),
+            )
         )
 
     def _robot_status_cb(self, msg):

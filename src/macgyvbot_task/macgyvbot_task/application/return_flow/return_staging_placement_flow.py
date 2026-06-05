@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
+import numpy as np
 from moveit.core.robot_state import RobotState
 
 from macgyvbot_config.drawer import (
     DRAWER_STORE_FORCE_DESCENT_START_Z_OFFSET_M,
     DRAWER_STORE_TOOL_OBSERVE_POINT,
+    TOOL_OBSERVE_X_BACKOFF_M,
 )
 from macgyvbot_config.return_flow import RETURN_TOOL_RELEASE_WAIT_SEC
+from macgyvbot_config.robot import EE_LINK
 from macgyvbot_manipulation.force_detection import ForceReactionDetector
 from macgyvbot_manipulation.robot_pose import (
     current_ee_orientation,
     get_ee_matrix,
     make_safe_pose,
+    orientation_from_transform,
 )
 from macgyvbot_manipulation.robot_safezone import SAFE_Z_MIN
 
@@ -78,7 +82,6 @@ class ReturnStagingPlacementFlow:
         current_pose = get_ee_matrix(self.robot)
         target_x = float(current_pose[0, 3])
         target_y = float(current_pose[1, 3])
-        approach_z = float(current_pose[2, 3])
         ori = current_ee_orientation(self.robot)
         descent_start_z = (
             SAFE_Z_MIN + DRAWER_STORE_FORCE_DESCENT_START_Z_OFFSET_M
@@ -135,15 +138,7 @@ class ReturnStagingPlacementFlow:
             logger.info("반납 공구 놓기 후 stop/pause 요청으로 중단합니다.")
             return False
 
-        return self.retreat_after_staging_release(
-            target_x,
-            target_y,
-            approach_z,
-            ori,
-            tool_name,
-            command,
-            logger,
-        )
+        return self.move_to_store_observe_viewpoint(tool_name, command, logger)
 
     def move_to_store_observe_point(self, logger):
         if self.interrupted():
@@ -204,54 +199,47 @@ class ReturnStagingPlacementFlow:
         )
         return False
 
-    def retreat_after_staging_release(
-        self,
-        target_x,
-        target_y,
-        approach_z,
-        ori,
-        tool_name,
-        command,
-        logger,
-    ):
+    def move_to_store_observe_viewpoint(self, tool_name, command, logger):
         if self.interrupted():
-            logger.info("반납 후 복귀 시작 전 stop/pause 요청으로 중단합니다.")
+            logger.info("반납 후 임시 관찰 viewpoint 이동 전 stop/pause 요청으로 중단합니다.")
             return False
 
-        logger.info("반납 5단계: 공구를 놓은 뒤 임시 관찰 안전 높이로 복귀")
+        target_x, target_y, target_z, ori = self._store_observe_view_pose()
+        logger.info(
+            "반납 5단계: 공구를 놓은 뒤 임시 관찰 viewpoint로 이동 "
+            f"(observe_x_backoff={TOOL_OBSERVE_X_BACKOFF_M:.3f}, "
+            f"target=({target_x:.3f}, {target_y:.3f}, {target_z:.3f}))"
+        )
         ok = self.motion.plan_and_execute(
             logger,
-            pose_goal=make_safe_pose(target_x, target_y, approach_z, ori, logger),
-            collision_scene_key="return/staging_retreat_after_release",
+            pose_goal=make_safe_pose(target_x, target_y, target_z, ori, logger),
+            collision_scene_key="return/staging_observe_viewpoint_after_release",
         )
-        if not ok:
-            if self.interrupted():
-                logger.info("반납 후 안전 높이 복귀 중 stop/pause 요청으로 중단합니다.")
-                return False
+        if ok:
+            return True
 
-            self.reporter.fail(
-                tool_name,
-                "반납 공구를 놓은 뒤 임시 관찰 안전 높이 복귀에 실패했습니다.",
-                "return_store_observe_retreat_failed",
-                command,
-                logger,
-            )
+        if self.interrupted():
             return False
 
-        logger.info("반납 6단계: 임시 관찰 joint pose로 복귀")
-        ok = self.move_to_store_observe_point(logger)
-        if not ok:
-            if self.interrupted():
-                logger.info("반납 후 임시 관찰 위치 복귀 중 stop/pause 요청으로 중단합니다.")
-                return False
+        self.reporter.fail(
+            tool_name,
+            "반납 공구를 놓은 뒤 임시 관찰 viewpoint 이동에 실패했습니다.",
+            "return_store_observe_viewpoint_failed",
+            command,
+            logger,
+        )
+        return False
 
-            self.reporter.fail(
-                tool_name,
-                "반납 공구를 놓은 뒤 임시 관찰 위치 복귀에 실패했습니다.",
-                "return_store_observe_after_release_failed",
-                command,
-                logger,
-            )
-            return False
+    def _store_observe_view_pose(self):
+        state = RobotState(self.robot.get_robot_model())
+        state.joint_positions = dict(DRAWER_STORE_TOOL_OBSERVE_POINT)
+        state.update()
+        transform = np.asarray(state.get_global_link_transform(EE_LINK), dtype=float)
+        ori = orientation_from_transform(transform)
 
-        return True
+        return (
+            float(transform[0, 3]) - TOOL_OBSERVE_X_BACKOFF_M,
+            float(transform[1, 3]),
+            float(transform[2, 3]),
+            ori,
+        )

@@ -1,4 +1,4 @@
-"""Initial gripper grasp verification workflow."""
+﻿"""Initial gripper grasp verification workflow."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from macgyvbot_config.grasp import (
     PREGRASP_MEASUREMENT_SETTLE_TIMEOUT_SEC,
 )
 from macgyvbot_manipulation.grasp_verifier import GraspVerifier
+from macgyvbot_task.application.logging_utils import log_info, log_warn
 
 
 class PickGraspFlow:
@@ -33,14 +34,14 @@ class PickGraspFlow:
         def publish_attempt(attempt, retry_limit):
             self.state._publish_robot_status(
                 "grasping",
-                message=f"공구 grasp 시도 {attempt}/{retry_limit}",
+                message=f"robot grasp attempt {attempt}/{retry_limit}",
                 command=self.state.current_command,
             )
 
         return self.grasp_verifier.try_grasp(
             logger,
             publish_attempt=publish_attempt,
-            failure_prefix="그리퍼 grasp",
+            failure_prefix="robot grasp",
         )
 
     def measure_pregrasp_depth(self, logger):
@@ -53,7 +54,12 @@ class PickGraspFlow:
         last_depth_mm = None
         while time.monotonic() - start_time < PREGRASP_MEASUREMENT_SETTLE_TIMEOUT_SEC:
             if self.grasp_verifier.interrupted():
-                logger.info("pre-grasp depth 측정을 stop/pause 요청으로 중단합니다.")
+                log_info(
+                    logger,
+                    "pregrasp measurement interrupted",
+                    step="pregrasp",
+                    event="interrupt",
+                )
                 return None
 
             try:
@@ -62,14 +68,23 @@ class PickGraspFlow:
                 last_width_mm = float(gripper.get_width())
                 last_depth_mm = float(gripper.get_depth())
             except Exception as exc:
-                logger.warn(f"pre-grasp 그리퍼 depth 읽기 실패: {exc}")
+                log_warn(
+                    logger,
+                    "pregrasp gripper depth read failed",
+                    step="pregrasp",
+                    event="fail",
+                    reason=str(exc) or type(exc).__name__,
+                )
                 return None
 
             if not busy:
-                logger.info(
-                    "pre-grasp gripper measurement: "
-                    f"width={last_width_mm:.1f}mm, "
-                    f"depth={last_depth_mm:.1f}mm"
+                log_info(
+                    logger,
+                    "pregrasp gripper measurement",
+                    step="pregrasp",
+                    event="measured",
+                    width_mm=last_width_mm,
+                    depth_mm=last_depth_mm,
                 )
                 return {
                     "width_mm": last_width_mm,
@@ -78,10 +93,13 @@ class PickGraspFlow:
 
             self.grasp_verifier.wait_fn(GRASP_VERIFY_POLL_SEC)
 
-        logger.warn(
-            "pre-grasp depth 측정 timeout: "
-            f"last_width={last_width_mm}mm, "
-            f"last_depth={last_depth_mm}mm"
+        log_warn(
+            logger,
+            "pregrasp measurement timed out",
+            step="pregrasp",
+            event="timeout",
+            last_width_mm=last_width_mm,
+            last_depth_mm=last_depth_mm,
         )
         if last_depth_mm is None:
             return None
