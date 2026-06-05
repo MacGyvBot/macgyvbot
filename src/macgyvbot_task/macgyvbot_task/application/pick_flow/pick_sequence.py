@@ -308,9 +308,21 @@ class PickSequenceRunner:
             "grasping",
             tool_name=self.state.target_label,
             action="bring",
-            message=f"{self.state.target_label} 파지를 위해 Z 하강합니다.",
+            message=f"{self.state.target_label} 파지를 위해 XY 정렬 후 Z 하강합니다.",
             command=self.state.current_command,
         )
+        if not self._move_to_pose(
+            "4단계: 파지 XY 위치 정렬",
+            plan.target_x,
+            plan.target_y,
+            plan.drawer_wall_clearance_z,
+            ori,
+            "파지 XY 위치 정렬 실패. Pick 시퀀스 중단",
+            "파지 XY 위치 정렬 실패",
+            "grasp_xy_move_failed",
+        ):
+            return False
+
         if not plan.should_descend_to_grasp:
             self.state.logger().info(
                 "4단계: drawer_wall_clearance_z와 grasp_z가 같아 추가 하강 생략"
@@ -318,7 +330,7 @@ class PickSequenceRunner:
             return True
 
         return self._move_to_pose(
-            "4단계: 파지 높이 하강",
+            "4단계: 파지 Z 높이 하강",
             plan.target_x,
             plan.target_y,
             plan.grasp_z,
