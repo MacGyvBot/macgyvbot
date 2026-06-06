@@ -23,7 +23,7 @@ from macgyvbot_config.topics import (
     HAND_GRASP_TOPIC,
     ROBOT_STATUS_TOPIC,
 )
-from macgyvbot_config.vlm import VLM_GRASP_SERVICE_NAME
+from macgyvbot_config.vlm import SAM_YAW_SERVICE_NAME, VLM_GRASP_SERVICE_NAME
 from moveit_configs_utils import MoveItConfigsBuilder
 
 SCREEN_OUTPUT_FORMAT = "{line}"
@@ -74,6 +74,13 @@ def generate_launch_description():
     )
     vlm_service_response_timeout_sec = LaunchConfiguration(
         "vlm_service_response_timeout_sec"
+    )
+    sam_yaw_service_name = LaunchConfiguration("sam_yaw_service_name")
+    sam_yaw_service_wait_timeout_sec = LaunchConfiguration(
+        "sam_yaw_service_wait_timeout_sec"
+    )
+    sam_yaw_service_response_timeout_sec = LaunchConfiguration(
+        "sam_yaw_service_response_timeout_sec"
     )
 
     moveit_config = (
@@ -243,6 +250,18 @@ def generate_launch_description():
                 default_value="30.0",
             ),
             DeclareLaunchArgument(
+                "sam_yaw_service_name",
+                default_value=SAM_YAW_SERVICE_NAME,
+            ),
+            DeclareLaunchArgument(
+                "sam_yaw_service_wait_timeout_sec",
+                default_value="2.0",
+            ),
+            DeclareLaunchArgument(
+                "sam_yaw_service_response_timeout_sec",
+                default_value="5.0",
+            ),
+            DeclareLaunchArgument(
                 "force_torque_topic",
                 default_value=FORCE_TORQUE_TOPIC,
             ),
@@ -337,6 +356,13 @@ def generate_launch_description():
                         "vlm_service_response_timeout_sec": (
                             vlm_service_response_timeout_sec
                         ),
+                        "sam_yaw_service_name": sam_yaw_service_name,
+                        "sam_yaw_service_wait_timeout_sec": (
+                            sam_yaw_service_wait_timeout_sec
+                        ),
+                        "sam_yaw_service_response_timeout_sec": (
+                            sam_yaw_service_response_timeout_sec
+                        ),
                         "force_torque_topic": LaunchConfiguration(
                             "force_torque_topic"
                         ),
@@ -364,6 +390,26 @@ def generate_launch_description():
                         "sam_backend": "mobile_sam",
                         "sam_model_type": "vit_t",
                         "sam_device": "cuda",
+                    },
+                ],
+            ),
+            Node(
+                package="macgyvbot_perception",
+                executable="sam_yaw_service_node",
+                name="sam_yaw_service_node",
+                output="screen",
+                output_format=SCREEN_OUTPUT_FORMAT,
+                parameters=[
+                    {
+                        "sam_yaw_service_name": sam_yaw_service_name,
+                        "sam_enabled": sam_enabled,
+                        "sam_checkpoint": sam_checkpoint,
+                        "sam_backend": "mobile_sam",
+                        "sam_model_type": "vit_t",
+                        "sam_device": "cuda",
+                        "sam_depth_tolerance_mm": 30.0,
+                        "sam_depth_min_valid_ratio": 0.03,
+                        "sam_depth_expand_iterations": 1,
                     },
                 ],
             ),
