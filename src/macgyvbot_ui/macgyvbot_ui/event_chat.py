@@ -57,6 +57,8 @@ def robot_status_chat(status, reason="", message=""):
 
     if normalized_status == "tool_dropped":
         return TOOL_DROPPED_MESSAGE
+    if normalized_status == "waiting_handoff":
+        return HAND_DETECTED_MESSAGE
     if normalized_reason in _HAND_NOT_FOUND_REASONS:
         return HAND_NOT_FOUND_MESSAGE
     if normalized_reason in _GRASP_FAILURE_REASONS:
@@ -67,12 +69,12 @@ def robot_status_chat(status, reason="", message=""):
 
 
 def hand_detection_chat(previous_hand_present, hand_present):
-    """Return chat text for hand-present transitions."""
-    current = bool(hand_present)
-    if current and previous_hand_present is not True:
-        return HAND_DETECTED_MESSAGE
-    if previous_hand_present is True and not current:
-        return HAND_NOT_FOUND_MESSAGE
+    """Do not chat for raw hand topic transitions.
+
+    HumanGraspResult is a perception stream and may toggle outside handoff
+    inspection. User-facing hand messages are emitted from task status instead.
+    """
+    _ = previous_hand_present, hand_present
     return ""
 
 

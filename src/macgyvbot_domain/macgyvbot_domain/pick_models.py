@@ -11,10 +11,6 @@ class PickMotionPlan:
 
     target_x: float
     target_y: float
-    travel_z: float
-    approach_z: float
+    drawer_wall_clearance_z: float
     grasp_z: float
-    current_x: float
-    current_y: float
-    corrected_bz: float
     should_descend_to_grasp: bool
