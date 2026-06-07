@@ -37,8 +37,7 @@ else:
             self._on_user_text = on_user_text
             self._on_gripper_width = on_gripper_width
             self.setWindowTitle('MacGyvBot Assistant')
-            self.resize(1420, 900)
-            self.setMinimumSize(1280, 800)
+            self.setFixedSize(1420, 900)
             self._detector_pixmap = None
 
             self._chat_scroll = QScrollArea()
@@ -441,13 +440,21 @@ else:
             if self._on_gripper_width is not None:
                 self._on_gripper_width(width_mm)
 
-        def append_task_log(self, level, message):
+        def append_task_log(self, level, message, source='ui', event='EVENT', detail=''):
             level = str(level or 'INFO').upper()
             message = str(message or '').strip()
             if not message:
                 return
 
-            entry = f'{datetime.now().strftime("%H:%M:%S")} [{level}] {message}'
+            source = str(source or 'ui').strip() or 'ui'
+            event = str(event or 'EVENT').strip().upper() or 'EVENT'
+            detail = str(detail or '').strip()
+            entry = (
+                f'[{datetime.now().strftime("%H:%M:%S")}] '
+                f'[{source}] [{level}] {event} - {message}'
+            )
+            if detail:
+                entry = f'{entry} | {detail}'
             self._task_log_entries.append(entry)
             self._task_log_entries = self._task_log_entries[-80:]
             self._task_log.setText('\n'.join(self._task_log_entries))
@@ -820,7 +827,7 @@ else:
 
         @staticmethod
         def _timestamp():
-            return datetime.now().strftime('%H:%M')
+            return datetime.now().strftime('%H:%M:%S')
 
         @staticmethod
         def _action_label(action):

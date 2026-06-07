@@ -74,6 +74,7 @@ def hand_detection_chat(previous_hand_present, hand_present):
     HumanGraspResult is a perception stream and may toggle outside handoff
     inspection. User-facing hand messages are emitted from task status instead.
     """
+    _ = previous_hand_present, hand_present
     return ""
 
 

@@ -36,7 +36,6 @@ from macgyvbot_interfaces.msg import (
 )
 from macgyvbot_ui.event_chat import (
     command_feedback_chat,
-    hand_detection_chat,
     robot_status_chat,
     tool_drop_chat,
 )
@@ -163,11 +162,14 @@ class OperatorUiNode(Node):
         self._last_target_label = ''
         self._last_camera_stamp_ns = None
         self._last_detector_stamp_ns = None
+        self._last_camera_image_key = None
+        self._last_detector_image_key = None
         self._last_connection_text = ''
         self._last_robot_status_key = None
         self._last_robot_log_key = None
-        self._last_abnormal_chat_key = None
+        self._last_event_chat_key = None
         self._last_hand_present = None
+        self._last_hand_log_key = None
         self._last_tool_drop_key = None
         self._last_robot_state = 'unknown'
         self._manual_gripper_backend_available = False
@@ -241,7 +243,12 @@ class OperatorUiNode(Node):
         self._update_manual_gripper_backend_availability()
         self._refresh_gripper_control_state()
         self._refresh_chat_input_state()
-        self._append_log('info', 'GUI 연결 완료')
+        self._append_log(
+            'info',
+            'GUI 연결 완료',
+            source='ui.operator',
+            event='GUI_ATTACHED',
+        )
 
     def set_shutdown_callback(self, callback):
         self._shutdown_callback = callback
@@ -293,6 +300,13 @@ class OperatorUiNode(Node):
 
         self.get_logger().info(f'외부 입력 수신: "{text}"')
         self._append_user(text, source='voice')
+        self._append_log(
+            'info',
+            '외부 STT 입력을 수신했습니다.',
+            source='command.stt',
+            event='STT_TEXT_RECEIVED',
+            detail=f'topic={STT_TEXT_TOPIC}, source={msg.source}, text="{text}"',
+        )
         self._set_status('입력 수신')
 
     def _tool_command_cb(self, msg):
@@ -301,13 +315,25 @@ class OperatorUiNode(Node):
         action = command.get('action', 'unknown')
         tool_name = command.get('tool_name', 'unknown')
         if action == 'pause':
-            self._append_log('warn', '정지 명령을 로봇 노드로 전달했습니다.')
+            self._append_log(
+                'warn',
+                '정지 명령을 로봇 노드로 전달했습니다.',
+                source='command.parser',
+                event='TOOL_COMMAND',
+                detail=self._command_detail(command),
+            )
             return
 
         if self.window is not None and hasattr(self.window, 'append_command_result'):
             self.window.append_command_result(command)
 
-        self._append_log('info', f'/tool_command 수신: action={action}, tool={tool_name}')
+        self._append_log(
+            'info',
+            f'/tool_command 수신: action={action}, tool={tool_name}',
+            source='command.parser',
+            event='TOOL_COMMAND',
+            detail=self._command_detail(command),
+        )
 
     def _feedback_cb(self, msg):
         feedback = self._feedback_payload(msg)
@@ -318,6 +344,7 @@ class OperatorUiNode(Node):
         status = feedback.get('status', 'unknown')
         message = feedback.get('message', '')
         reason = feedback.get('reason', 'unknown')
+        feedback_detail = self._feedback_detail(feedback)
 
         if status == 'accepted':
             command = feedback.get('command') or {}
@@ -329,7 +356,13 @@ class OperatorUiNode(Node):
             if action == 'pause':
                 stop_message = '정지 요청을 로봇에 전달했습니다.'
                 self._append_bot(stop_message)
-                self._append_log('warn', stop_message)
+                self._append_log(
+                    'warn',
+                    stop_message,
+                    source='command.parser',
+                    event='CONTROL_PAUSE',
+                    detail=feedback_detail,
+                )
                 followup_message = '작업을 재개할까요, 아니면 이번 작업을 취소할까요?'
                 self._append_bot(followup_message)
                 if self.window is not None and hasattr(self.window, 'append_control_actions'):
@@ -339,7 +372,13 @@ class OperatorUiNode(Node):
                             ('취소', '취소'),
                         )
                     )
-                self._append_log('info', followup_message)
+                self._append_log(
+                    'info',
+                    followup_message,
+                    source='ui.chat',
+                    event='QUICK_ACTIONS',
+                    detail='actions=resume,cancel',
+                )
                 self._set_status('정지 요청 전달')
                 return
 
@@ -349,7 +388,13 @@ class OperatorUiNode(Node):
                     or '재개 요청을 이해했습니다. 제어 인터페이스 연결 후 사용할 수 있습니다.'
                 )
                 self._append_bot(resume_message)
-                self._append_log('info', '재개 명령 해석 완료')
+                self._append_log(
+                    'info',
+                    '재개 명령 해석 완료',
+                    source='command.parser',
+                    event='CONTROL_RESUME',
+                    detail=feedback_detail,
+                )
                 self._set_status('재개 대기')
                 return
 
@@ -365,7 +410,13 @@ class OperatorUiNode(Node):
                     message or '현재 작업을 취소합니다. 다음 명령을 기다리겠습니다.'
                 )
                 self._append_bot(cancel_message)
-                self._append_log('warn', '현재 작업 취소 요청 발행: queue와 진행 motion 정리')
+                self._append_log(
+                    'warn',
+                    '현재 작업 취소 요청 발행: queue와 진행 motion 정리',
+                    source='command.parser',
+                    event='CONTROL_CANCEL',
+                    detail=feedback_detail,
+                )
                 self._set_status('작업 취소 처리 중')
                 return
 
@@ -376,13 +427,25 @@ class OperatorUiNode(Node):
                     or '종료 요청을 전달했습니다. 작업을 정리하고 Home 위치로 복귀한 뒤 종료합니다.'
                 )
                 self._append_bot(exit_message)
-                self._append_log('info', '종료 명령 해석 완료: 로봇 작업 중단 요청 발행')
+                self._append_log(
+                    'info',
+                    '종료 명령 해석 완료: 로봇 작업 중단 요청 발행',
+                    source='command.parser',
+                    event='CONTROL_EXIT',
+                    detail=feedback_detail,
+                )
                 self._set_status('종료 처리 중')
                 return
 
             accepted_message = message or '명령을 이해했습니다.'
             self._append_bot(accepted_message)
-            self._append_log('info', accepted_message)
+            self._append_log(
+                'info',
+                accepted_message,
+                source='command.parser',
+                event='COMMAND_ACCEPTED',
+                detail=feedback_detail,
+            )
             self._set_status('명령 해석 완료')
             return
 
@@ -394,21 +457,39 @@ class OperatorUiNode(Node):
                 self.window.append_confirmation(confirmation_message)
             else:
                 self._append_bot(confirmation_message)
-            self._append_log('info', confirmation_message)
+            self._append_log(
+                'info',
+                confirmation_message,
+                source='command.parser',
+                event='PENDING_CONFIRMATION',
+                detail=feedback_detail,
+            )
             self._set_status('확인 응답 대기')
             return
 
         if status == 'cancelled':
             cancel_message = message or '알겠습니다. 실행하지 않겠습니다.'
             self._append_bot(cancel_message)
-            self._append_log('warn', cancel_message)
+            self._append_log(
+                'warn',
+                cancel_message,
+                source='command.parser',
+                event='COMMAND_CANCELLED',
+                detail=feedback_detail,
+            )
             self._set_status('명령 취소')
             return
 
         if status == 'assistant_response':
             response_message = message or '네, 필요한 공구가 있으면 말해주세요.'
             self._append_bot(response_message)
-            self._append_log('info', response_message)
+            self._append_log(
+                'info',
+                response_message,
+                source='command.parser',
+                event='ASSISTANT_RESPONSE',
+                detail=feedback_detail,
+            )
             self._set_status('대화 응답')
             return
 
@@ -418,12 +499,24 @@ class OperatorUiNode(Node):
                 or self._build_rejected_message(reason, message)
             )
             self._append_bot(rejected_message)
-            self._append_log('warn', rejected_message)
+            self._append_log(
+                'warn',
+                rejected_message,
+                source='command.stt',
+                event='PARSE_FAILED',
+                detail=feedback_detail,
+            )
             self._set_status('재입력 필요')
             return
 
         self._append_bot(message or '상태를 확인했습니다.')
-        self._append_system(f'status={status}, reason={reason}')
+        self._append_log(
+            'info',
+            message or '상태를 확인했습니다.',
+            source='command.parser',
+            event='COMMAND_FEEDBACK',
+            detail=feedback_detail,
+        )
 
     def _is_duplicate_feedback(self, feedback):
         status = feedback.get('status', 'unknown')
@@ -468,12 +561,20 @@ class OperatorUiNode(Node):
         self._refresh_chat_input_state()
 
         if view['show_log']:
-            self._append_log(view['severity'], view['log_message'], ros=False)
+            self._append_log(
+                view['severity'],
+                view['message'],
+                ros=False,
+                source='task.status',
+                event=self._event_name_for_state(view['state']),
+                detail=view['log_message'],
+            )
 
         if view['show_chat']:
-            self._append_bot(view['chat_message'])
+            appended = self._append_event_chat(view['state'], view['chat_message'])
             if (
-                view['state'] == 'handoff_inspection_pending'
+                appended
+                and view['state'] == 'handoff_inspection_pending'
                 and self.window is not None
                 and hasattr(self.window, 'append_control_actions')
             ):
@@ -487,48 +588,54 @@ class OperatorUiNode(Node):
         self._handle_exit_status(status, view['state'])
 
     def _hand_grasp_cb(self, msg):
-        message = hand_detection_chat(self._last_hand_present, msg.hand_present)
-        self._last_hand_present = bool(msg.hand_present)
-        if not message:
-            return
+        hand_present = bool(msg.hand_present)
+        payload = self._hand_grasp_payload(msg)
+        detail = self._format_detail(payload)
+        log_key = (
+            hand_present,
+            payload.get('state'),
+            payload.get('human_grasped_tool'),
+            payload.get('hand_pixel'),
+        )
+        if log_key != self._last_hand_log_key:
+            self._last_hand_log_key = log_key
+            self._append_log(
+                'info' if hand_present else 'warn',
+                '손이 인식되었습니다.' if hand_present else '손이 인식되지 않았습니다.',
+                source='perception.hand',
+                event='HAND_DETECTED' if hand_present else 'HAND_NOT_FOUND',
+                detail=detail,
+            )
 
-        self._append_abnormal_chat(
-            'hand_detected' if msg.hand_present else 'hand_not_found',
-            message,
-        )
-        self._append_log(
-            'info' if msg.hand_present else 'warn',
-            (
-                f'{HAND_GRASP_TOPIC}: hand_present={msg.hand_present}, '
-                f'human_grasped_tool={msg.human_grasped_tool}, '
-                f'state={msg.state}'
-            ),
-            ros=False,
-        )
+        self._last_hand_present = hand_present
 
     def _tool_drop_cb(self, msg):
-        message = tool_drop_chat(msg.event)
-        if not message:
-            return
-
+        payload = self._tool_drop_payload(msg)
         key = (
-            str(msg.event or ''),
-            str(msg.tool_name or ''),
-            str(msg.reason or ''),
-            float(msg.width_mm) if msg.has_width_mm else None,
+            payload.get('event'),
+            payload.get('tool_name'),
+            payload.get('reason'),
+            payload.get('width_mm'),
         )
         if key == self._last_tool_drop_key:
             return
         self._last_tool_drop_key = key
 
-        self._append_abnormal_chat('tool_dropped', message, force=True)
-        self._append_log(
-            'error',
-            (
-                f'{TOOL_DROP_TOPIC}: event={msg.event}, tool={msg.tool_name}, '
-                f'action={msg.action}, reason={msg.reason}'
-            ),
+        event = str(payload.get('event') or 'unknown').strip()
+        severity = 'error' if event == 'tool_dropped' else 'warn'
+        message = (
+            tool_drop_chat(event)
+            or f'공구 drop monitor 이벤트를 수신했습니다: {event}'
         )
+        self._append_log(
+            severity,
+            message,
+            source='manipulation.gripper',
+            event='TOOL_DROPPED' if event == 'tool_dropped' else 'DROP_EVENT',
+            detail=self._format_detail(payload),
+        )
+        if event == 'tool_dropped':
+            self._append_event_chat('tool_dropped', message, force=True)
 
     @staticmethod
     def _tool_command_payload(msg):
@@ -563,6 +670,48 @@ class OperatorUiNode(Node):
             'command': OperatorUiNode._tool_command_payload(msg.command),
         }
 
+    @staticmethod
+    def _hand_grasp_payload(msg):
+        hand_pixel = ''
+        if msg.has_hand_pixel:
+            hand_pixel = f'({msg.hand_u},{msg.hand_v})'
+        return {
+            'topic': HAND_GRASP_TOPIC,
+            'state': msg.state,
+            'hand_present': msg.hand_present,
+            'human_grasped_tool': msg.human_grasped_tool,
+            'grasp_counter': msg.grasp_counter,
+            'grasp_score': f'{float(msg.grasp_score):.3f}',
+            'ml_state': msg.ml_stable_state or msg.ml_raw_state,
+            'depth_available': msg.depth_available,
+            'mask_locked': msg.mask_locked,
+            'tool_label': msg.tool_label if msg.has_tool_label else '',
+            'tool_confidence': (
+                f'{float(msg.tool_confidence):.3f}'
+                if msg.has_tool_confidence
+                else ''
+            ),
+            'hand_pixel': hand_pixel,
+            'handedness': msg.active_handedness if msg.has_active_handedness else '',
+        }
+
+    @staticmethod
+    def _tool_drop_payload(msg):
+        return {
+            'topic': TOOL_DROP_TOPIC,
+            'event': msg.event,
+            'tool_name': msg.tool_name,
+            'action': msg.action,
+            'reason': msg.reason,
+            'width_mm': (
+                f'{float(msg.width_mm):.1f}'
+                if msg.has_width_mm
+                else ''
+            ),
+            'error': msg.error,
+            'command': OperatorUiNode._tool_command_payload(msg.command),
+        }
+
     def _handle_exit_status(self, status, state):
         if not self._exit_pending:
             return
@@ -584,11 +733,45 @@ class OperatorUiNode(Node):
             self._set_status('종료 실패')
             self._exit_pending = False
 
-    def _camera_status_cb(self, _msg):
+    def _camera_status_cb(self, msg):
         self._last_camera_stamp_ns = self.get_clock().now().nanoseconds
+        key = (
+            int(getattr(msg, 'width', 0)),
+            int(getattr(msg, 'height', 0)),
+            str(getattr(msg, 'encoding', '')),
+        )
+        if key != self._last_camera_image_key:
+            self._last_camera_image_key = key
+            self._append_log(
+                'info',
+                '카메라 이미지 topic을 수신했습니다.',
+                source='camera.rgb',
+                event='IMAGE_RECEIVED',
+                detail=(
+                    f'topic={CAMERA_COLOR_TOPIC}, width={key[0]}, '
+                    f'height={key[1]}, encoding={key[2]}'
+                ),
+            )
 
     def _detector_image_cb(self, msg):
         self._last_detector_stamp_ns = self.get_clock().now().nanoseconds
+        key = (
+            int(getattr(msg, 'width', 0)),
+            int(getattr(msg, 'height', 0)),
+            str(getattr(msg, 'encoding', '')),
+        )
+        if key != self._last_detector_image_key:
+            self._last_detector_image_key = key
+            self._append_log(
+                'info',
+                'Detector annotated image topic을 수신했습니다.',
+                source='perception.detector',
+                event='IMAGE_RECEIVED',
+                detail=(
+                    f'topic={HAND_GRASP_IMAGE_TOPIC}, width={key[0]}, '
+                    f'height={key[1]}, encoding={key[2]}'
+                ),
+            )
         if self.window is not None and hasattr(self.window, 'set_detector_image'):
             try:
                 self.window.set_detector_image(msg)
@@ -617,6 +800,17 @@ class OperatorUiNode(Node):
                 gui_text='연결됨',
                 detector_text=detector_text,
             )
+        self._append_log(
+            'info',
+            'GUI topic 연결 상태가 갱신되었습니다.',
+            source='ui.connection',
+            event='CONNECTION_STATUS',
+            detail=(
+                f'robot={robot_text}, camera={camera_text}, '
+                f'detector={detector_text}, gui=연결됨'
+            ),
+            ros=False,
+        )
 
     def _update_manual_gripper_backend_availability(self):
         try:
@@ -668,11 +862,7 @@ class OperatorUiNode(Node):
 
     def _build_rejected_message(self, reason, message):
         if reason == 'llm_failed':
-            return (
-                '문장을 끝까지 이해하지 못했습니다. '
-                '드라이버, 플라이어, 망치, 줄자 중 어떤 공구인지 '
-                '조금 더 구체적으로 말해주세요.'
-            )
+            return '다시 말씀해주세요.'
         if reason == 'unknown_tool':
             return (
                 '어떤 공구인지 확실하지 않습니다. '
@@ -693,7 +883,7 @@ class OperatorUiNode(Node):
                 '제가 이해한 내용이 확실하지 않습니다. '
                 '공구 이름과 동작을 조금 더 명확히 말해주세요.'
             )
-        return message or '명령을 이해하지 못했습니다. 다시 입력해주세요.'
+        return message or '다시 말씀해주세요.'
 
     def _build_robot_status_view(self, status):
         state = str(status.get('status', status.get('state', 'unknown'))).strip()
@@ -746,6 +936,11 @@ class OperatorUiNode(Node):
         }
 
     def _robot_status_message(self, state, target_label, raw_message, reason):
+        if reason in {'handoff_search_failed', 'hand_target_not_found'}:
+            return '손이 인식되지 않았습니다. 움직여서 카메라에 나오게 하세요!'
+        if state == 'tool_dropped':
+            return '공구를 떨어트렸습니다. inspection하여 다시 찾습니다.'
+
         if raw_message:
             if state in ('failed', 'error') and reason and reason not in raw_message:
                 return f'{raw_message} 원인: {reason}'
@@ -766,9 +961,10 @@ class OperatorUiNode(Node):
             'lifting_tool': '공구를 안전 높이로 들어 올리는 중입니다.',
             'moving_to_handoff': '사용자 전달 위치로 이동 중입니다.',
             'searching_hand': '사용자 손을 찾는 중입니다.',
-            'waiting_handoff': '손으로 공구를 잡아주세요.',
+            'waiting_handoff': '손이 인식되었습니다. 손으로 공구를 잡아주세요.',
             'handoff_inspection_pending': (
-                '사용자의 손을 인식하지 못했습니다. 다시 인식할까요, 복귀할까요?'
+                '사용자의 손을 인식하지 못했습니다. '
+                '다시 인식할까요, 복귀할까요?'
             ),
             'handoff_complete': '공구 전달을 완료했습니다.',
             'waiting_return_handoff': '반납할 공구를 받을 준비를 하고 있습니다.',
@@ -790,6 +986,7 @@ class OperatorUiNode(Node):
             'rejected': '요청을 수행할 수 없습니다.',
             'tool_dropped': '공구 drop이 감지되었습니다.',
             'vlm_loading': 'VLM grasp 모델을 로드하는 중입니다. 잠시만 기다려주세요.',
+            'vlm_inferencing': 'VLM으로 공구 파지점을 탐색하는 중입니다.',
             'vlm_ready': 'VLM grasp 모델 준비가 완료되었습니다.',
             'vlm_warning': 'VLM grasp 모델 상태를 확인해야 합니다.',
             'vlm_error': 'VLM grasp 모델 처리 중 오류가 발생했습니다.',
@@ -838,6 +1035,7 @@ class OperatorUiNode(Node):
             'rejected': '거절',
             'tool_dropped': '공구 낙하 감지',
             'vlm_loading': 'VLM 로드 중',
+            'vlm_inferencing': 'VLM 탐색 중',
             'vlm_ready': 'VLM 준비 완료',
             'vlm_warning': 'VLM 경고',
             'vlm_error': 'VLM 오류',
@@ -861,7 +1059,7 @@ class OperatorUiNode(Node):
             'moving_to_handoff': '전달 위치 이동 중',
             'searching_hand': '사용자 손 찾는 중',
             'waiting_handoff': '사용자 잡기 대기',
-            'handoff_inspection_pending': '재시도/복귀 선택 대기',
+            'handoff_inspection_pending': '재인식 또는 복귀 선택 대기',
             'handoff_complete': '공구 전달 완료',
             'waiting_return_handoff': '반납 공구 수령 대기',
             'moving_return_grasp_pose': '반납 공구 감지 위치 이동 중',
@@ -882,6 +1080,7 @@ class OperatorUiNode(Node):
             'rejected': '작업 거절',
             'tool_dropped': '공구 낙하 감지',
             'vlm_loading': 'VLM 모델 로드 중',
+            'vlm_inferencing': 'VLM 파지점 탐색 중',
             'vlm_ready': 'VLM 모델 준비 완료',
             'vlm_warning': 'VLM 상태 경고',
             'vlm_error': 'VLM 상태 오류',
@@ -890,9 +1089,28 @@ class OperatorUiNode(Node):
     @staticmethod
     def _chat_robot_statuses():
         return {
+            'accepted',
+            'searching_drawer',
+            'moving_to_drawer',
+            'searching_drawer_handle',
+            'opening_drawer',
+            'closing_drawer',
+            'searching',
+            'picking',
+            'approaching_tool',
+            'grasping',
+            'grasp_success',
+            'lifting_tool',
+            'moving_to_handoff',
+            'searching_hand',
             'waiting_handoff',
             'handoff_inspection_pending',
+            'handoff_complete',
             'waiting_return_handoff',
+            'moving_return_grasp_pose',
+            'checking_return_target',
+            'return_hand_detected',
+            'placing_return_tool',
             'returning_home',
             'done',
             'completed',
@@ -905,8 +1123,9 @@ class OperatorUiNode(Node):
             'cancelled',
             'rejected',
             'tool_dropped',
-            'handoff_complete',
+            'returned',
             'vlm_loading',
+            'vlm_inferencing',
             'vlm_ready',
             'vlm_warning',
             'vlm_error',
@@ -928,6 +1147,7 @@ class OperatorUiNode(Node):
             'handoff_complete',
             'tool_dropped',
             'vlm_loading',
+            'vlm_inferencing',
             'vlm_ready',
             'vlm_warning',
             'vlm_error',
@@ -937,15 +1157,53 @@ class OperatorUiNode(Node):
     def _robot_status_severity(state):
         if state in ('failed', 'error', 'tool_dropped', 'vlm_error'):
             return 'error'
-        if state in ('busy', 'paused', 'cancelled', 'rejected', 'vlm_warning'):
+        if state in (
+            'busy',
+            'paused',
+            'cancelled',
+            'rejected',
+            'handoff_inspection_pending',
+            'vlm_warning',
+        ):
             return 'warn'
         return 'info'
 
     @staticmethod
     def _robot_log_message(status, state, target_label, message, reason):
-        base = f'robot_status={state}, target={target_label}, message={message}'
+        task = status.get('task')
+        action = status.get('action')
+        tool_name = status.get('tool_name')
+        base_parts = [
+            'topic=/robot_task_status',
+            f'status={state}',
+        ]
+        if task not in (None, ''):
+            base_parts.append(f'task={task}')
+        if action not in (None, ''):
+            base_parts.append(f'action={action}')
+        if tool_name not in (None, ''):
+            base_parts.append(f'tool={tool_name}')
+        base_parts.extend(
+            [
+                f'target={target_label}',
+                f'message="{message}"',
+            ]
+        )
+        base = ', '.join(base_parts)
         details = []
-        for key in ('action', 'step', 'phase', 'progress', 'source'):
+        for key in (
+            'step',
+            'phase',
+            'progress',
+            'source',
+            'reason',
+            'bx',
+            'by',
+            'bz',
+            'vlm_yaw_deg',
+            'drawer_id',
+            'width_mm',
+        ):
             value = status.get(key)
             if value not in (None, ''):
                 details.append(f'{key}={value}')
@@ -964,7 +1222,7 @@ class OperatorUiNode(Node):
                 if value not in (None, ''):
                     details.append(f'{label}={value}')
 
-        if reason:
+        if reason and not any(item == f'reason={reason}' for item in details):
             details.append(f'reason={reason}')
         if details:
             return f'{base}, {", ".join(details)}'
@@ -984,6 +1242,62 @@ class OperatorUiNode(Node):
         }
         return display_names.get(label, label)
 
+    @staticmethod
+    def _event_name_for_state(state):
+        normalized = str(state or 'unknown').strip().upper()
+        if not normalized:
+            return 'ROBOT_STATUS'
+        return normalized.replace('-', '_')
+
+    @staticmethod
+    def _command_detail(command):
+        if not isinstance(command, dict):
+            return ''
+        return OperatorUiNode._format_detail(
+            {
+                'topic': TOOL_COMMAND_TOPIC,
+                'action': command.get('action'),
+                'tool': command.get('tool_name'),
+                'target_mode': command.get('target_mode'),
+                'method': command.get('match_method'),
+                'confidence': command.get('confidence'),
+                'raw_text': command.get('raw_text'),
+            }
+        )
+
+    @staticmethod
+    def _feedback_detail(feedback):
+        command = feedback.get('command') or {}
+        return OperatorUiNode._format_detail(
+            {
+                'topic': COMMAND_FEEDBACK_TOPIC,
+                'status': feedback.get('status'),
+                'reason': feedback.get('reason'),
+                'raw_text': feedback.get('raw_text'),
+                'cmd_action': command.get('action'),
+                'tool': command.get('tool_name'),
+                'method': command.get('match_method'),
+                'confidence': command.get('confidence'),
+            }
+        )
+
+    @staticmethod
+    def _format_detail(payload):
+        if not isinstance(payload, dict):
+            return str(payload or '').strip()
+
+        parts = []
+        for key, value in payload.items():
+            if value in (None, ''):
+                continue
+            if isinstance(value, dict):
+                nested = OperatorUiNode._format_detail(value)
+                if nested:
+                    parts.append(f'{key}=({nested})')
+                continue
+            parts.append(f'{key}={value}')
+        return ', '.join(parts)
+
     def _append_user(self, text, source='keyboard'):
         if self.window is not None:
             self.window.append_user(text, source=source)
@@ -992,16 +1306,17 @@ class OperatorUiNode(Node):
         if self.window is not None:
             self.window.append_bot(text)
 
-    def _append_abnormal_chat(self, event, message, force=False):
-        message = str(message or '').strip()
+    def _append_event_chat(self, event, text, force=False):
+        message = str(text or '').strip()
         if not message:
-            return
+            return False
 
         key = (str(event or ''), message)
-        if not force and key == self._last_abnormal_chat_key:
-            return
-        self._last_abnormal_chat_key = key
+        if not force and key == self._last_event_chat_key:
+            return False
+        self._last_event_chat_key = key
         self._append_bot(message)
+        return True
 
     def _append_system(self, text):
         if self.window is not None:
@@ -1010,14 +1325,28 @@ class OperatorUiNode(Node):
     def get_logger(self):
         return _StructuredLoggerAdapter(super().get_logger())
 
-    def _append_log(self, level, message, ros=True):
+    def _append_log(
+        self,
+        level,
+        message,
+        ros=True,
+        source='ui.operator',
+        event='EVENT',
+        detail='',
+    ):
         level = str(level or 'info').lower()
         message = str(message or '').strip()
         if not message:
             return
 
         if self.window is not None and hasattr(self.window, 'append_task_log'):
-            self.window.append_task_log(level, message)
+            self.window.append_task_log(
+                level,
+                message,
+                source=source,
+                event=event,
+                detail=detail,
+            )
 
         if not ros:
             return

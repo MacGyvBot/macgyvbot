@@ -128,6 +128,7 @@ class VLMStatusLogger:
     def __init__(self, logger, publish_status_payload):
         self._logger = logger
         self._publish_status_payload = publish_status_payload
+        self._vlm_inference_active = False
 
     def info(self, message):
         if self._publish_if_vlm_status("info", message):
@@ -152,8 +153,18 @@ class VLMStatusLogger:
             status = "vlm_loading"
         elif "로드 완료" in text or "weights loaded" in text:
             status = "vlm_ready"
+            self._vlm_inference_active = False
+        elif "inference progress" in text:
+            if self._vlm_inference_active:
+                return
+            self._vlm_inference_active = True
+            status = "vlm_inferencing"
+        elif "inference complete" in text:
+            self._vlm_inference_active = False
+            return
         elif level == "error" or "실패" in text:
             status = "vlm_error"
+            self._vlm_inference_active = False
         elif level == "warn" or "CPU 실행" in text or "not using CUDA" in text:
             status = "vlm_warning"
         else:
@@ -178,6 +189,8 @@ class VLMStatusLogger:
             return f"{model_prefix}VLM 모델을 로드하는 중입니다."
         if status == "vlm_ready":
             return f"{model_prefix}VLM 모델 로드가 완료되었습니다."
+        if status == "vlm_inferencing":
+            return f"{model_prefix}VLM으로 공구 파지점을 탐색하는 중입니다."
         if status == "vlm_warning":
             return f"{model_prefix}VLM 모델 상태를 확인해야 합니다."
         if status == "vlm_error":
