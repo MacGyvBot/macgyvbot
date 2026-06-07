@@ -95,6 +95,14 @@ class GripperPanelSmokeTest(unittest.TestCase):
         self.assertTrue(self.window._send_button.isEnabled())
         self.assertEqual(self.published_texts, ["드라이버 가져다줘"])
 
+    def test_enabled_chat_input_can_show_waiting_placeholder(self):
+        message = "로봇 노드 실행 대기 중입니다. 실행 후 명령을 입력해주세요."
+        self.window.set_chat_input_enabled(True, message)
+
+        self.assertTrue(self.window._input.isEnabled())
+        self.assertTrue(self.window._send_button.isEnabled())
+        self.assertEqual(self.window._input.placeholderText(), message)
+
     def test_pause_and_resume_status_buttons_publish_control_text(self):
         self.window._pause_button.click()
         self.window._resume_button.click()

@@ -110,16 +110,17 @@ class OperatorUiNode(Node):
         'waiting_return_handoff',
         'moving_return_grasp_pose',
         'checking_return_target',
+        'return_hand_detected',
         'placing_return_tool',
         'returning_home',
         'closing_drawer',
         'resumed',
-    }
-    _CHAT_INPUT_DISABLED_STATES = _GRIPPER_ACTIVE_STATES | {
         'busy',
         'tool_dropped',
         'vlm_loading',
+        'vlm_inferencing',
     }
+    _CHAT_INPUT_DISABLED_STATES = _GRIPPER_ACTIVE_STATES
 
     def __init__(self):
         super().__init__('operator_ui_node')
@@ -1477,15 +1478,13 @@ class OperatorUiNode(Node):
             return False, '비활성화: 그리퍼 명령 처리 중'
         if not self._manual_gripper_backend_available:
             return False, '비활성화: 안전한 그리퍼 제어 인터페이스 없음'
-        if state in self._GRIPPER_SAFE_STATES:
-            return True, '활성화: 수동 조작 가능'
         if state in self._GRIPPER_ACTIVE_STATES:
             return False, '비활성화: 작업 실행 중'
-        return False, '비활성화: 로봇 상태 미확인'
+        return True, '활성화: 수동 조작 가능'
 
     def _gripper_state_is_safe(self, state):
         normalized = str(state or 'unknown').strip().lower()
-        return normalized in self._GRIPPER_SAFE_STATES
+        return normalized not in self._GRIPPER_ACTIVE_STATES
 
     def _refresh_chat_input_state(self):
         if self.window is None or not hasattr(self.window, 'set_chat_input_enabled'):
@@ -1504,6 +1503,8 @@ class OperatorUiNode(Node):
 
     def _chat_input_state(self):
         state = str(self._last_robot_state or 'unknown').strip().lower()
+        if state in {'unknown', 'initializing'}:
+            return True, '로봇 노드 실행 대기 중입니다. 실행 후 명령을 입력해주세요.'
         if state in self._CHAT_INPUT_DISABLED_STATES:
             return False, '동작 실행 중... 상태 버튼이나 음성 명령을 사용해주세요.'
         return True, ''

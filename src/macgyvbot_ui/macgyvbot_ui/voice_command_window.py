@@ -386,15 +386,19 @@ else:
 
         def set_chat_input_enabled(self, enabled, reason=''):
             enabled = bool(enabled)
+            placeholder = str(reason or '').strip()
             self._chat_input_enabled = enabled
             self._input.setEnabled(enabled)
             self._send_button.setEnabled(enabled)
             if enabled:
-                self._input.setPlaceholderText(self._INPUT_READY_PLACEHOLDER)
+                self._input.setPlaceholderText(
+                    placeholder or self._INPUT_READY_PLACEHOLDER
+                )
             else:
                 self._input.clear()
-                placeholder = str(reason or '').strip() or self._INPUT_BUSY_PLACEHOLDER
-                self._input.setPlaceholderText(placeholder)
+                self._input.setPlaceholderText(
+                    placeholder or self._INPUT_BUSY_PLACEHOLDER
+                )
 
         def set_gripper_control_state(self, enabled, reason):
             reason = str(reason or '').strip()
@@ -1081,49 +1085,22 @@ else:
                     color: #8A9AAA;
                     border: 1px solid #D3DFEA;
                 }
-                QPushButton#pauseControlButton {
-                    background-color: #FFF8E6;
-                    color: #A16207;
-                    border: 1px solid #F4D98B;
-                    border-radius: 12px;
-                    padding: 10px 12px;
-                    font-weight: 800;
-                }
-                QPushButton#pauseControlButton:hover {
-                    background-color: #FFF1C2;
-                }
-                QPushButton#resumeControlButton {
-                    background-color: #ECFDF3;
-                    color: #15803D;
-                    border: 1px solid #B7E4C7;
-                    border-radius: 12px;
-                    padding: 10px 12px;
-                    font-weight: 800;
-                }
-                QPushButton#resumeControlButton:hover {
-                    background-color: #DDFBEA;
-                }
-                QPushButton#homeControlButton {
-                    background-color: #FFFFFF;
-                    color: #2563B8;
-                    border: 1px solid #BFD4EE;
-                    border-radius: 12px;
-                    padding: 10px 12px;
-                    font-weight: 800;
-                }
-                QPushButton#homeControlButton:hover {
-                    background-color: #EEF6FF;
-                }
+                QPushButton#pauseControlButton,
+                QPushButton#resumeControlButton,
+                QPushButton#homeControlButton,
                 QPushButton#exitControlButton {
-                    background-color: #FFF5F5;
-                    color: #C24141;
-                    border: 1px solid #F2C6C6;
+                    background-color: #FFFFFF;
+                    color: #223B5C;
+                    border: 1px solid #D3DFEA;
                     border-radius: 12px;
                     padding: 10px 12px;
                     font-weight: 800;
                 }
+                QPushButton#pauseControlButton:hover,
+                QPushButton#resumeControlButton:hover,
+                QPushButton#homeControlButton:hover,
                 QPushButton#exitControlButton:hover {
-                    background-color: #FFECEC;
+                    background-color: #F5F8FC;
                 }
                 '''
             )
