@@ -28,8 +28,10 @@ class VoiceCommandWindowSmokeTest(unittest.TestCase):
 
     def setUp(self):
         self.published_texts = []
+        self.robot_refresh_count = 0
         self.window = VoiceCommandGuiWindow(
             on_user_text=self.published_texts.append,
+            on_robot_refresh=self._record_robot_refresh,
         )
 
     def tearDown(self):
@@ -75,6 +77,15 @@ class VoiceCommandWindowSmokeTest(unittest.TestCase):
 
     def test_chat_timestamp_includes_seconds(self):
         self.assertRegex(self.window._timestamp(), r"^\d{2}:\d{2}:\d{2}$")
+
+    def test_robot_refresh_button_uses_refresh_callback(self):
+        self.window._refresh_robot_button.click()
+
+        self.assertEqual(self.robot_refresh_count, 1)
+        self.assertEqual(self.published_texts, [])
+
+    def _record_robot_refresh(self):
+        self.robot_refresh_count += 1
 
 
 if __name__ == "__main__":

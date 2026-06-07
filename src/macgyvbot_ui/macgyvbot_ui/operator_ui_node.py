@@ -21,6 +21,7 @@ from macgyvbot_config.topics import (
     MANUAL_GRIPPER_SERVICE,
     ROBOT_STATUS_TOPIC,
     STT_TEXT_TOPIC,
+    TASK_CONTROL_TOPIC,
     TOOL_DROP_TOPIC,
     TOOL_COMMAND_TOPIC,
 )
@@ -30,6 +31,7 @@ from macgyvbot_interfaces.msg import (
     CommandShutdown,
     CommandText,
     HumanGraspResult,
+    RobotTaskControl,
     RobotTaskStatus,
     ToolCommand,
     ToolDropEvent,
@@ -190,6 +192,11 @@ class OperatorUiNode(Node):
         )
 
         self._stt_pub = self.create_publisher(CommandText, stt_text_topic, 10)
+        self._task_control_pub = self.create_publisher(
+            RobotTaskControl,
+            TASK_CONTROL_TOPIC,
+            10,
+        )
         self._command_shutdown_pub = self.create_publisher(
             CommandShutdown,
             COMMAND_SHUTDOWN_TOPIC,
@@ -255,6 +262,21 @@ class OperatorUiNode(Node):
         msg.source = 'operator_ui'
         self._command_shutdown_pub.publish(msg)
         self.get_logger().info('/command_shutdown 발행: command_input_node 종료 요청')
+
+    def request_robot_refresh(self):
+        msg = RobotTaskControl()
+        msg.action = 'refresh_robot'
+        msg.reason = 'operator_refresh_button'
+        msg.source = 'operator_ui'
+        self._task_control_pub.publish(msg)
+        self._append_log(
+            'info',
+            '로봇 제어 노드 새로고침 요청을 발행했습니다.',
+            source='ui.operator',
+            event='ROBOT_REFRESH',
+            detail=f'topic={TASK_CONTROL_TOPIC}, action=refresh_robot',
+        )
+        self._append_bot('로봇 제어 노드 연결을 다시 확인합니다.')
 
     def publish_user_text(self, text):
         text = (text or '').strip()
@@ -976,6 +998,9 @@ class OperatorUiNode(Node):
             'returned': '반납 작업을 완료했습니다.',
             'rejected': '요청을 수행할 수 없습니다.',
             'tool_dropped': '공구 drop이 감지되었습니다.',
+            'waiting_robot': '로봇 제어 노드 실행을 기다리는 중입니다.',
+            'robot_refreshing': '로봇 제어 노드 연결을 다시 확인하는 중입니다.',
+            'robot_ready': '로봇 제어 노드 연결을 확인했습니다.',
             'vlm_loading': 'VLM grasp 모델을 로드하는 중입니다. 잠시만 기다려주세요.',
             'vlm_inferencing': 'VLM으로 공구 파지점을 탐색하는 중입니다.',
             'vlm_ready': 'VLM grasp 모델 준비가 완료되었습니다.',
@@ -1025,6 +1050,9 @@ class OperatorUiNode(Node):
             'returned': '반납 완료',
             'rejected': '거절',
             'tool_dropped': '공구 낙하 감지',
+            'waiting_robot': '로봇 대기',
+            'robot_refreshing': '로봇 새로고침',
+            'robot_ready': '로봇 준비 완료',
             'vlm_loading': 'VLM 로드 중',
             'vlm_inferencing': 'VLM 탐색 중',
             'vlm_ready': 'VLM 준비 완료',
@@ -1070,6 +1098,9 @@ class OperatorUiNode(Node):
             'returned': '반납 완료',
             'rejected': '작업 거절',
             'tool_dropped': '공구 낙하 감지',
+            'waiting_robot': '로봇 제어 노드 대기 중',
+            'robot_refreshing': '로봇 제어 노드 확인 중',
+            'robot_ready': '로봇 제어 노드 준비 완료',
             'vlm_loading': 'VLM 모델 로드 중',
             'vlm_inferencing': 'VLM 파지점 탐색 중',
             'vlm_ready': 'VLM 모델 준비 완료',
@@ -1114,6 +1145,9 @@ class OperatorUiNode(Node):
             'cancelled',
             'rejected',
             'tool_dropped',
+            'waiting_robot',
+            'robot_refreshing',
+            'robot_ready',
             'returned',
             'vlm_loading',
             'vlm_inferencing',
@@ -1137,6 +1171,9 @@ class OperatorUiNode(Node):
             'rejected',
             'handoff_complete',
             'tool_dropped',
+            'waiting_robot',
+            'robot_refreshing',
+            'robot_ready',
             'vlm_loading',
             'vlm_inferencing',
             'vlm_ready',
@@ -1154,6 +1191,8 @@ class OperatorUiNode(Node):
             'cancelled',
             'rejected',
             'handoff_inspection_pending',
+            'waiting_robot',
+            'robot_refreshing',
             'vlm_warning',
         ):
             return 'warn'
@@ -1487,6 +1526,7 @@ def main(args=None):
     window = VoiceCommandGuiWindow(
         on_user_text=node.publish_user_text,
         on_gripper_width=node.request_manual_gripper_width,
+        on_robot_refresh=node.request_robot_refresh,
     )
     node.attach_window(window)
     window.show()

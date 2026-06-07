@@ -288,15 +288,10 @@ class TaskCoordinatorNode(Node):
 
         self.declare_parameter("display_debug_windows", False)
         self.declare_parameter("manual_gripper_service", MANUAL_GRIPPER_SERVICE)
-        self.declare_parameter("robot_ready_retry_sec", 3.0)
         self.bridge = CvBridge()
         self.display_debug_windows = self._read_bool_parameter(
             "display_debug_windows",
             False,
-        )
-        self.robot_ready_retry_sec = max(
-            0.5,
-            float(self.get_parameter("robot_ready_retry_sec").value),
         )
         self.display = DebugDisplay(enabled=self.display_debug_windows)
         self.exit_req = threading.Event()
@@ -317,7 +312,6 @@ class TaskCoordinatorNode(Node):
         self._vlm_preload_timer = None
         self._manual_gripper_lock = threading.Lock()
         self._robot_ready = False
-        self._robot_wait_status_published = False
 
         self.grasp_point_mode = self._read_grasp_point_mode()
         self.yolo_model = self._read_yolo_model()
@@ -1075,6 +1069,9 @@ class TaskCoordinatorNode(Node):
         if action == "retry":
             self._handle_retry(reason)
             return
+        if action == "refresh_robot":
+            self._handle_robot_refresh(reason)
+            return
         if action == "cancel":
             self._handle_cancel(reason)
             return
@@ -1147,12 +1144,39 @@ class TaskCoordinatorNode(Node):
             command=command,
         )
 
+    def _publish_waiting_robot_status(self, *, command=None):
+        self._publish_robot_status(
+            "waiting_robot",
+            tool_name=self.state.target_label or "unknown",
+            action="system",
+            message=(
+                "로봇 제어 노드가 아직 준비되지 않았습니다. "
+                "로봇/MoveIt 실행 후 새로고침을 눌러주세요."
+            ),
+            reason="robot_not_ready",
+            command=command or self.state.current_command,
+        )
+
+    def _handle_robot_refresh(self, reason):
+        self._publish_robot_status(
+            "robot_refreshing",
+            tool_name=self.state.target_label or "unknown",
+            action="refresh_robot",
+            message="로봇 제어 노드 연결을 다시 확인하는 중입니다.",
+            reason=reason or "robot_refresh_requested",
+            command=self.state.current_command,
+        )
+        if self._try_initialize_robot_home():
+            return True
+
+        self._publish_waiting_robot_status(command=self.state.current_command)
+        return False
+
     def _try_initialize_robot_home(self):
         ok = self.home_initializer.initialize()
         if ok:
             was_ready = self._robot_ready
             self._robot_ready = True
-            self._robot_wait_status_published = False
             if not was_ready:
                 self._publish_robot_status(
                     "robot_ready",
@@ -1971,29 +1995,11 @@ class TaskCoordinatorNode(Node):
         self.state.latest_wrench = msg.wrench
 
     def run(self):
-        while rclpy.ok() and not self._robot_ready:
-            if self._try_initialize_robot_home():
-                break
-            if not self._robot_wait_status_published:
-                self._robot_wait_status_published = True
-                self._publish_robot_status(
-                    "waiting_robot",
-                    tool_name="unknown",
-                    action="system",
-                    message=(
-                        "로봇 제어 노드가 아직 준비되지 않았습니다. "
-                        "로봇/MoveIt 실행을 기다리는 중입니다."
-                    ),
-                    reason="robot_not_ready",
-                    command=self.state.current_command,
-                )
-            time.sleep(self.robot_ready_retry_sec)
-
+        if not self._try_initialize_robot_home():
+            self._publish_waiting_robot_status(command=self.state.current_command)
         self._process_frames()
 
     def _process_frames(self):
-        if self.state.home_xyz is None or self.state.home_ori is None:
-            return
         self._task_log("camera", quiet_info=True).info(
             "task coordinator camera loop waiting",
             step="camera_loop",
@@ -2001,6 +2007,10 @@ class TaskCoordinatorNode(Node):
         )
 
         while rclpy.ok():
+            if self.state.home_xyz is None or self.state.home_ori is None:
+                time.sleep(CAMERA_LOOP_IDLE_SLEEP_SEC)
+                continue
+
             if not self.frame_processor.has_camera_state():
                 time.sleep(CAMERA_LOOP_IDLE_SLEEP_SEC)
                 continue

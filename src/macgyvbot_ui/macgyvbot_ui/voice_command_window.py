@@ -29,10 +29,16 @@ except ImportError:  # pragma: no cover - runtime environment guidance
 else:
 
     class VoiceCommandGuiWindow(QMainWindow):
-        def __init__(self, on_user_text=None, on_gripper_width=None):
+        def __init__(
+            self,
+            on_user_text=None,
+            on_gripper_width=None,
+            on_robot_refresh=None,
+        ):
             super().__init__()
             self._on_user_text = on_user_text
             self._on_gripper_width = on_gripper_width
+            self._on_robot_refresh = on_robot_refresh
             self.setWindowTitle('MacGyvBot Assistant')
             self.setFixedSize(1420, 900)
             self._detector_pixmap = None
@@ -66,6 +72,9 @@ else:
             self._current_status = QLabel('현재 상태: 명령 대기')
             self._task_target_status = QLabel('작업 대상: 없음')
             self._task_stage_status = QLabel('작업 단계: 대기')
+            self._refresh_robot_button = QPushButton('새로고침')
+            self._refresh_robot_button.setObjectName('refreshControlButton')
+            self._refresh_robot_button.clicked.connect(self._request_robot_refresh)
             self._home_button = QPushButton('복귀')
             self._home_button.setObjectName('homeControlButton')
             self._home_button.clicked.connect(
@@ -79,6 +88,7 @@ else:
             control_button_layout = QHBoxLayout()
             control_button_layout.setContentsMargins(0, 0, 0, 0)
             control_button_layout.setSpacing(8)
+            control_button_layout.addWidget(self._refresh_robot_button)
             control_button_layout.addWidget(self._home_button)
             control_button_layout.addWidget(self._exit_button)
             self._task_log_entries = []
@@ -623,6 +633,11 @@ else:
             if self._on_user_text is not None:
                 self._on_user_text(text)
 
+        def _request_robot_refresh(self):
+            self.append_user('로봇 새로고침')
+            if self._on_robot_refresh is not None:
+                self._on_robot_refresh()
+
         def _add_chat_widget(self, widget):
             self._chat_layout.insertWidget(self._chat_layout.count() - 1, widget)
             QTimer.singleShot(0, self._scroll_to_bottom)
@@ -1037,6 +1052,7 @@ else:
                 QPushButton:hover {
                     background-color: #245FC4;
                 }
+                QPushButton#refreshControlButton,
                 QPushButton#homeControlButton {
                     background-color: #FFFFFF;
                     color: #2563B8;
@@ -1045,6 +1061,7 @@ else:
                     padding: 10px 12px;
                     font-weight: 800;
                 }
+                QPushButton#refreshControlButton:hover,
                 QPushButton#homeControlButton:hover {
                     background-color: #EEF6FF;
                 }
