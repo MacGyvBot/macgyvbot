@@ -23,7 +23,9 @@ class GripperPanelSmokeTest(unittest.TestCase):
 
     def setUp(self):
         self.gripper_widths = []
+        self.published_texts = []
         self.window = VoiceCommandGuiWindow(
+            on_user_text=self.published_texts.append,
             on_gripper_width=self.gripper_widths.append,
         )
 
@@ -69,6 +71,35 @@ class GripperPanelSmokeTest(unittest.TestCase):
         self.assertFalse(self.window._gripper_slider.isEnabled())
         self.assertFalse(self.window._gripper_width_input.isEnabled())
         self.assertEqual(self.window._gripper_status.text(), reason)
+
+    def test_chat_input_can_be_disabled_without_blocking_control_buttons(self):
+        self.window.set_chat_input_enabled(False, "동작 실행 중...")
+        self.window._input.setText("드라이버 가져다줘")
+        self.window._send_text()
+
+        self.assertFalse(self.window._input.isEnabled())
+        self.assertFalse(self.window._send_button.isEnabled())
+        self.assertEqual(self.published_texts, [])
+
+        self.window._send_control_text("멈춰")
+
+        self.assertEqual(self.published_texts, ["멈춰"])
+
+    def test_chat_input_reenable_restores_text_send_path(self):
+        self.window.set_chat_input_enabled(False, "동작 실행 중...")
+        self.window.set_chat_input_enabled(True)
+        self.window._input.setText("드라이버 가져다줘")
+        self.window._send_text()
+
+        self.assertTrue(self.window._input.isEnabled())
+        self.assertTrue(self.window._send_button.isEnabled())
+        self.assertEqual(self.published_texts, ["드라이버 가져다줘"])
+
+    def test_pause_and_resume_status_buttons_publish_control_text(self):
+        self.window._pause_button.click()
+        self.window._resume_button.click()
+
+        self.assertEqual(self.published_texts, ["멈춰", "재개"])
 
 
 if __name__ == "__main__":

@@ -29,6 +29,9 @@ except ImportError:  # pragma: no cover - runtime environment guidance
 else:
 
     class VoiceCommandGuiWindow(QMainWindow):
+        _INPUT_READY_PLACEHOLDER = '메시지를 입력하거나 음성으로 말해주세요.'
+        _INPUT_BUSY_PLACEHOLDER = '동작 실행 중... 상태 버튼이나 음성 명령을 사용해주세요.'
+
         def __init__(self, on_user_text=None, on_gripper_width=None):
             super().__init__()
             self._on_user_text = on_user_text
@@ -54,11 +57,12 @@ else:
             )
 
             self._input = QLineEdit()
-            self._input.setPlaceholderText('메시지를 입력하거나 음성으로 말해주세요.')
+            self._input.setPlaceholderText(self._INPUT_READY_PLACEHOLDER)
             self._input.returnPressed.connect(self._send_text)
 
             self._send_button = QPushButton('전송  >')
             self._send_button.clicked.connect(self._send_text)
+            self._chat_input_enabled = True
 
             self._robot_connection_status = QLabel('로봇 노드: 미확인')
             self._camera_connection_status = QLabel('카메라 노드: 미확인')
@@ -67,6 +71,16 @@ else:
             self._current_status = QLabel('현재 상태: 명령 대기')
             self._task_target_status = QLabel('작업 대상: 없음')
             self._task_stage_status = QLabel('작업 단계: 대기')
+            self._pause_button = QPushButton('멈춤')
+            self._pause_button.setObjectName('pauseControlButton')
+            self._pause_button.clicked.connect(
+                lambda _checked=False: self._send_control_text('멈춰')
+            )
+            self._resume_button = QPushButton('재개')
+            self._resume_button.setObjectName('resumeControlButton')
+            self._resume_button.clicked.connect(
+                lambda _checked=False: self._send_control_text('재개')
+            )
             self._home_button = QPushButton('복귀')
             self._home_button.setObjectName('homeControlButton')
             self._home_button.clicked.connect(
@@ -77,6 +91,11 @@ else:
             self._exit_button.clicked.connect(
                 lambda _checked=False: self._send_control_text('종료')
             )
+            pause_resume_button_layout = QHBoxLayout()
+            pause_resume_button_layout.setContentsMargins(0, 0, 0, 0)
+            pause_resume_button_layout.setSpacing(8)
+            pause_resume_button_layout.addWidget(self._pause_button)
+            pause_resume_button_layout.addWidget(self._resume_button)
             control_button_layout = QHBoxLayout()
             control_button_layout.setContentsMargins(0, 0, 0, 0)
             control_button_layout.setSpacing(8)
@@ -127,6 +146,7 @@ else:
             status_panel_layout.addWidget(self._task_target_status)
             status_panel_layout.addWidget(self._task_stage_status)
             status_panel_layout.addStretch(1)
+            status_panel_layout.addLayout(pause_resume_button_layout)
             status_panel_layout.addLayout(control_button_layout)
 
             gripper_title = QLabel('Gripper Control')
@@ -300,6 +320,9 @@ else:
             )
 
         def _send_text(self):
+            if not self._chat_input_enabled:
+                return
+
             text = self._input.text().strip()
             if not text:
                 return
@@ -361,6 +384,18 @@ else:
         def set_task_status(self, target_text, stage_text):
             self._task_target_status.setText(f'작업 대상: {target_text}')
             self._task_stage_status.setText(f'작업 단계: {stage_text}')
+
+        def set_chat_input_enabled(self, enabled, reason=''):
+            enabled = bool(enabled)
+            self._chat_input_enabled = enabled
+            self._input.setEnabled(enabled)
+            self._send_button.setEnabled(enabled)
+            if enabled:
+                self._input.setPlaceholderText(self._INPUT_READY_PLACEHOLDER)
+            else:
+                self._input.clear()
+                placeholder = str(reason or '').strip() or self._INPUT_BUSY_PLACEHOLDER
+                self._input.setPlaceholderText(placeholder)
 
         def set_gripper_control_state(self, enabled, reason):
             reason = str(reason or '').strip()
@@ -1029,6 +1064,37 @@ else:
                 }
                 QPushButton:hover {
                     background-color: #245FC4;
+                }
+                QPushButton:disabled {
+                    background-color: #E5EDF6;
+                    color: #8A9AAA;
+                }
+                QLineEdit:disabled {
+                    background-color: #EFF4F9;
+                    color: #8A9AAA;
+                    border: 1px solid #D3DFEA;
+                }
+                QPushButton#pauseControlButton {
+                    background-color: #FFF8E6;
+                    color: #A16207;
+                    border: 1px solid #F4D98B;
+                    border-radius: 12px;
+                    padding: 10px 12px;
+                    font-weight: 800;
+                }
+                QPushButton#pauseControlButton:hover {
+                    background-color: #FFF1C2;
+                }
+                QPushButton#resumeControlButton {
+                    background-color: #ECFDF3;
+                    color: #15803D;
+                    border: 1px solid #B7E4C7;
+                    border-radius: 12px;
+                    padding: 10px 12px;
+                    font-weight: 800;
+                }
+                QPushButton#resumeControlButton:hover {
+                    background-color: #DDFBEA;
                 }
                 QPushButton#homeControlButton {
                     background-color: #FFFFFF;

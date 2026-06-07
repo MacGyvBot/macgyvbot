@@ -116,6 +116,11 @@ class OperatorUiNode(Node):
         'closing_drawer',
         'resumed',
     }
+    _CHAT_INPUT_DISABLED_STATES = _GRIPPER_ACTIVE_STATES | {
+        'busy',
+        'tool_dropped',
+        'vlm_loading',
+    }
 
     def __init__(self):
         super().__init__('operator_ui_node')
@@ -169,6 +174,8 @@ class OperatorUiNode(Node):
         self._manual_gripper_request_pending = False
         self._last_gripper_enabled = None
         self._last_gripper_reason = ''
+        self._last_chat_input_enabled = None
+        self._last_chat_input_reason = ''
         self._robot_status_topic = robot_status_topic
         self._manual_gripper_service = (
             str(manual_gripper_service).strip() or MANUAL_GRIPPER_SERVICE
@@ -233,6 +240,7 @@ class OperatorUiNode(Node):
         self._update_connection_status()
         self._update_manual_gripper_backend_availability()
         self._refresh_gripper_control_state()
+        self._refresh_chat_input_state()
         self._append_log('info', 'GUI 연결 완료')
 
     def set_shutdown_callback(self, callback):
@@ -457,6 +465,7 @@ class OperatorUiNode(Node):
         self._set_task_status(view['target_label'], view['stage_text'])
         self._last_robot_state = view['state']
         self._refresh_gripper_control_state()
+        self._refresh_chat_input_state()
 
         if view['show_log']:
             self._append_log(view['severity'], view['log_message'], ros=False)
@@ -1148,6 +1157,27 @@ class OperatorUiNode(Node):
     def _gripper_state_is_safe(self, state):
         normalized = str(state or 'unknown').strip().lower()
         return normalized in self._GRIPPER_SAFE_STATES
+
+    def _refresh_chat_input_state(self):
+        if self.window is None or not hasattr(self.window, 'set_chat_input_enabled'):
+            return
+
+        enabled, reason = self._chat_input_state()
+        if (
+            enabled == self._last_chat_input_enabled
+            and reason == self._last_chat_input_reason
+        ):
+            return
+
+        self._last_chat_input_enabled = enabled
+        self._last_chat_input_reason = reason
+        self.window.set_chat_input_enabled(enabled, reason)
+
+    def _chat_input_state(self):
+        state = str(self._last_robot_state or 'unknown').strip().lower()
+        if state in self._CHAT_INPUT_DISABLED_STATES:
+            return False, '동작 실행 중... 상태 버튼이나 음성 명령을 사용해주세요.'
+        return True, ''
 
 
 def main(args=None):
