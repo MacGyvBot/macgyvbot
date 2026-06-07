@@ -43,17 +43,26 @@ class VLMGraspServiceClient:
         interrupted = interrupted or (lambda: False)
         request_created_mono = time.monotonic()
         request_created_wall = self._timestamp()
-        self.node.get_logger().info(
-            "VLM service request created: "
-            f"created_at={request_created_wall}, "
-            f"service={self.service_name}, mode={mode}, "
-            f"target={target_label}, label={label}, bbox={list(bbox_xyxy)}"
+        self._log().info(
+            "VLM service request created",
+            step="request",
+            event="created",
+            created_at=request_created_wall,
+            service=self.service_name,
+            mode=mode,
+            target=target_label,
+            label=label,
+            bbox=list(bbox_xyxy),
         )
 
         if not self.client.wait_for_service(timeout_sec=self.wait_timeout_sec):
-            self.node.get_logger().warn(
-                "VLM service unavailable within timeout: "
-                f"service={self.service_name}, timeout_sec={self.wait_timeout_sec}"
+            self._log().warn(
+                "VLM service unavailable within timeout",
+                step="service",
+                event="timeout",
+                service=self.service_name,
+                timeout_sec=self.wait_timeout_sec,
+                reason="service_unavailable",
             )
             return None
 
@@ -66,9 +75,12 @@ class VLMGraspServiceClient:
 
         send_wall = self._timestamp()
         send_mono = time.monotonic()
-        self.node.get_logger().info(
-            "VLM service request sent: "
-            f"sent_at={send_wall}, queue_wait_sec={send_mono - request_created_mono:.3f}"
+        self._log().info(
+            "VLM service request sent",
+            step="request",
+            event="sent",
+            sent_at=send_wall,
+            queue_wait_sec=f"{send_mono - request_created_mono:.3f}",
         )
         future = self.client.call_async(request)
 
@@ -76,15 +88,22 @@ class VLMGraspServiceClient:
         while not future.done():
             if interrupted():
                 future.cancel()
-                self.node.get_logger().warn(
-                    "VLM service request interrupted while waiting for response."
+                self._log().warn(
+                    "VLM service request interrupted while waiting for response",
+                    step="response",
+                    event="interrupted",
+                    reason="interrupted",
                 )
                 return None
             if time.monotonic() >= deadline:
                 future.cancel()
-                self.node.get_logger().warn(
-                    "VLM service response timeout: "
-                    f"service={self.service_name}, timeout_sec={self.response_timeout_sec}"
+                self._log().warn(
+                    "VLM service response timeout",
+                    step="response",
+                    event="timeout",
+                    service=self.service_name,
+                    timeout_sec=self.response_timeout_sec,
+                    reason="response_timeout",
                 )
                 return None
             time.sleep(0.02)
@@ -93,31 +112,73 @@ class VLMGraspServiceClient:
         response_mono = time.monotonic()
         service_latency = response_mono - send_mono
         total_latency = response_mono - request_created_mono
-        self.node.get_logger().info(
-            "VLM service response received: "
-            f"received_at={response_wall}, "
-            f"service_latency_sec={service_latency:.3f}, "
-            f"total_latency_sec={total_latency:.3f}"
+        self._log().info(
+            "VLM service response received",
+            step="response",
+            event="received",
+            received_at=response_wall,
+            service_latency_sec=f"{service_latency:.3f}",
+            total_latency_sec=f"{total_latency:.3f}",
         )
 
         try:
             response = future.result()
         except Exception as exc:
-            self.node.get_logger().warn(f"VLM service future failed: {exc}")
+            self._log().warn(
+                "VLM service future failed",
+                step="response",
+                event="fail",
+                reason=str(exc) or type(exc).__name__,
+            )
             return None
 
         if response is None:
-            self.node.get_logger().warn("VLM service returned no response object.")
+            self._log().warn(
+                "VLM service returned no response object",
+                step="response",
+                event="empty",
+                reason="empty_response",
+            )
             return None
         if not response.success:
-            self.node.get_logger().warn(
-                "VLM service reported failure: "
-                f"message={response.error_message or response.result_text}"
+            self._log().warn(
+                "VLM service reported failure",
+                step="response",
+                event="fail",
+                reason=response.error_message or response.result_text,
             )
             return None
 
         return response
 
+    def _log(self):
+        task_log = getattr(self.node, "_task_log", None)
+        if task_log is not None:
+            return task_log("vlm", quiet_info=True)
+        return _PlainLoggerAdapter(self.node.get_logger())
+
     @staticmethod
     def _timestamp():
         return datetime.now().isoformat(timespec="milliseconds")
+
+
+class _PlainLoggerAdapter:
+    """Accept structured fields when a task logger is not available."""
+
+    def __init__(self, logger):
+        self._logger = logger
+
+    def info(self, message, **fields):
+        self._logger.info(_format_fallback(message, fields))
+
+    def warn(self, message, **fields):
+        self._logger.warn(_format_fallback(message, fields))
+
+
+def _format_fallback(message, fields):
+    if not fields:
+        return str(message)
+    field_text = " ".join(
+        f"{key}={value}" for key, value in fields.items() if value is not None
+    )
+    return f"{message} {field_text}"

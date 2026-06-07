@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 import numpy as np
 
 
@@ -13,22 +15,29 @@ def pixel_to_camera_point(
     depth_scale=0.001,
     logger=None,
     source="pixel",
+    warn_fn=None,
 ):
     """Project an image pixel with depth into the camera frame."""
     height, width = depth_image.shape[:2]
 
     if not (0 <= u < width and 0 <= v < height):
-        if logger is not None:
-            logger.warn(
+        _warn(
+            logger,
+            warn_fn,
+            (
                 f"{source} is outside depth image: u={u}, v={v}, "
                 f"size=({width}, {height})"
-            )
+            ),
+        )
         return None
 
     z_raw = float(depth_image[v, u])
     if not np.isfinite(z_raw) or z_raw <= 0.0:
-        if logger is not None:
-            logger.warn(f"{source} depth is invalid: u={u}, v={v}, depth={z_raw}")
+        _warn(
+            logger,
+            warn_fn,
+            f"{source} depth is invalid: u={u}, v={v}, depth={z_raw}",
+        )
         return None
 
     z_m = z_raw * depth_scale
@@ -48,6 +57,7 @@ class DepthProjector:
 
     def __init__(self, base_to_camera_provider):
         self.base_to_camera_provider = base_to_camera_provider
+        self._warn_history = {}
 
     def pixel_to_base_target(
         self,
@@ -67,6 +77,11 @@ class DepthProjector:
             intrinsics,
             logger=logger,
             source=source,
+            warn_fn=lambda message: self._warn_throttled(
+                logger,
+                source,
+                message,
+            ),
         )
         if camera_point is None:
             return None
@@ -75,7 +90,7 @@ class DepthProjector:
         bx, by, bz = self.camera_to_base(camera_point)
 
         logger.info(
-            f"'{label}' detected: source={source}, "
+            f"'{label}' 감지: source={source}, "
             f"pixel=({u}, {v}), "
             f"camera=({cam_x:.3f}, {cam_y:.3f}, {z_m:.3f}), "
             f"base=({bx:.3f}, {by:.3f}, {bz:.3f})"
@@ -85,3 +100,48 @@ class DepthProjector:
 
     def camera_to_base(self, cam_xyz):
         return transform_point_to_base(cam_xyz, self.base_to_camera_provider())
+
+    def pixel_to_camera_point(
+        self,
+        u,
+        v,
+        depth_image,
+        intrinsics,
+        logger=None,
+        source="pixel",
+        depth_scale=0.001,
+    ):
+        return pixel_to_camera_point(
+            u,
+            v,
+            depth_image,
+            intrinsics,
+            depth_scale=depth_scale,
+            logger=logger,
+            source=source,
+            warn_fn=lambda message: self._warn_throttled(
+                logger,
+                source,
+                message,
+            ),
+        )
+
+    def _warn_throttled(self, logger, source, message, interval_sec=1.0):
+        if logger is None:
+            return
+
+        now = time.monotonic()
+        last_time = self._warn_history.get(source)
+        if last_time is not None and now - last_time < interval_sec:
+            return
+
+        self._warn_history[source] = now
+        logger.warn(message)
+
+
+def _warn(logger, warn_fn, message):
+    if warn_fn is not None:
+        warn_fn(message)
+        return
+    if logger is not None:
+        logger.warn(message)

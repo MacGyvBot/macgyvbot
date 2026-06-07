@@ -1,4 +1,4 @@
-"""Resolve a user-held return target from hand observation data."""
+﻿"""Resolve a user-held return target from hand observation data."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from macgyvbot_manipulation.handover_targeting import (
     TargetCandidate,
     candidate_from_grasp_result,
 )
+from macgyvbot_task.application.logging_utils import log_warn
 
 
 RETURN_SOURCE_HAND = "hand"
@@ -67,8 +68,12 @@ class ReturnTargetResolver:
             self.wait_fn(self.poll_sec)
 
         if saw_hand_without_position:
-            logger.warn(
-                "손은 감지했지만 base 좌표를 계산하지 못했습니다."
+            log_warn(
+                logger,
+                "hand detected without usable base position",
+                step="target_resolve",
+                event="fail",
+                reason="hand_position_unavailable",
             )
             return ReturnTarget(
                 source=RETURN_SOURCE_NONE,

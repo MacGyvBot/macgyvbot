@@ -24,7 +24,7 @@ from macgyvbot_manipulation.robot_pose import (
 )
 from macgyvbot_manipulation.robot_safezone import safe_z_min_for_drawer
 from macgyvbot_task.application.drawer_store_motion import (
-    drawer_store_clearance_z,
+    drawer_wall_clearance_z_for_drawer,
     move_to_drawer_store_exit,
 )
 from macgyvbot_task.application.pick_flow.pick_grasp_flow import (
@@ -86,32 +86,6 @@ class ReturnDrawerPlacementFlow:
         if not self._move_to_pose(
             plan.target_x,
             plan.target_y,
-            plan.travel_z,
-            ori,
-            logger,
-            tool_name,
-            command,
-            "return_store_tool_grasp_failed",
-            "임시 공구 파지 전 안전 높이 이동에 실패했습니다.",
-        ):
-            return False
-
-        if not self._move_to_pose(
-            plan.target_x,
-            plan.target_y,
-            plan.approach_z,
-            ori,
-            logger,
-            tool_name,
-            command,
-            "return_store_tool_grasp_failed",
-            "임시 공구 파지 접근에 실패했습니다.",
-        ):
-            return False
-
-        if plan.should_descend_to_grasp and not self._move_to_pose(
-            plan.target_x,
-            plan.target_y,
             plan.grasp_z,
             ori,
             logger,
@@ -143,17 +117,7 @@ class ReturnDrawerPlacementFlow:
         if self.tool_hold_monitor is not None:
             self.tool_hold_monitor.start(tool_name, "return", command)
 
-        return self._move_to_pose(
-            plan.target_x,
-            plan.target_y,
-            plan.travel_z,
-            ori,
-            logger,
-            tool_name,
-            command,
-            "return_store_tool_grasp_failed",
-            "임시 공구 파지 후 안전 높이 복귀에 실패했습니다.",
-        )
+        return True
 
     def _pregrasp_depth_adjust(self, plan, ori, tool_name, command, logger):
         logger.info("임시 공구 pre-grasp depth 측정")
@@ -276,24 +240,23 @@ class ReturnDrawerPlacementFlow:
 
         marker_x, marker_y, marker_z = marker_target.base_xyz
         safe_z_min = safe_z_min_for_drawer(drawer_id)
-        clearance_z = drawer_store_clearance_z(drawer_id)
-        approach_z = max(
+        drawer_wall_clearance_z = drawer_wall_clearance_z_for_drawer(drawer_id)
+        marker_approach_z = max(
             safe_z_min,
             float(marker_z) + DRAWER_STORE_MARKER_APPROACH_Z_OFFSET_M,
         )
-        release_z = max(
+        marker_release_z = max(
             safe_z_min,
             float(marker_z) + DRAWER_STORE_MARKER_RELEASE_Z_OFFSET_M,
         )
-        if not self._rotate_wrist_for_drawer_place(tool_name, command, logger):
-            return False
         ori = current_ee_orientation(self.robot)
         logger.info(
             "서랍 marker place 높이 계산: "
             f"drawer={drawer_id}, marker_z={marker_z:.3f}, "
             f"safe_z_min={safe_z_min:.3f}, "
-            f"clearance_z={clearance_z:.3f}, "
-            f"approach_z={approach_z:.3f}, release_z={release_z:.3f}"
+            f"drawer_wall_clearance_z={drawer_wall_clearance_z:.3f}, "
+            f"marker_approach_z={marker_approach_z:.3f}, "
+            f"marker_release_z={marker_release_z:.3f}"
         )
 
         self.reporter.publish(
@@ -302,8 +265,8 @@ class ReturnDrawerPlacementFlow:
             f"{tool_name}을 서랍 내부 marker 중심으로 이동합니다.",
             command,
         )
-        if not self._move_to_current_xy_clearance(
-            clearance_z,
+        if not self._move_to_current_xy_drawer_wall_clearance(
+            drawer_wall_clearance_z,
             ori,
             logger,
             tool_name,
@@ -313,10 +276,14 @@ class ReturnDrawerPlacementFlow:
         ):
             return False
 
+        if not self._rotate_wrist_for_drawer_place(tool_name, command, logger):
+            return False
+        ori = current_ee_orientation(self.robot)
+
         if not self._move_to_pose(
             marker_x,
             marker_y,
-            clearance_z,
+            drawer_wall_clearance_z,
             ori,
             logger,
             tool_name,
@@ -329,7 +296,7 @@ class ReturnDrawerPlacementFlow:
         if not self._move_to_pose(
             marker_x,
             marker_y,
-            approach_z,
+            marker_approach_z,
             ori,
             logger,
             tool_name,
@@ -342,7 +309,7 @@ class ReturnDrawerPlacementFlow:
         if not self._move_to_pose(
             marker_x,
             marker_y,
-            release_z,
+            marker_release_z,
             ori,
             logger,
             tool_name,
@@ -364,7 +331,7 @@ class ReturnDrawerPlacementFlow:
         if not self._move_to_pose(
             marker_x,
             marker_y,
-            clearance_z,
+            drawer_wall_clearance_z,
             ori,
             logger,
             tool_name,
@@ -379,7 +346,7 @@ class ReturnDrawerPlacementFlow:
             logger,
             marker_x,
             marker_y,
-            clearance_z,
+            drawer_wall_clearance_z,
             ori,
             "서랍 marker release 후 exit offset 이동",
             "서랍 내부 공구를 놓은 뒤 y축 exit offset 이동에 실패했습니다.",
@@ -420,13 +387,9 @@ class ReturnDrawerPlacementFlow:
         )
         return False
 
-    @classmethod
-    def _clearance_z_for_drawer(cls, drawer_id):
-        return drawer_store_clearance_z(drawer_id)
-
-    def _move_to_current_xy_clearance(
+    def _move_to_current_xy_drawer_wall_clearance(
         self,
-        clearance_z,
+        drawer_wall_clearance_z,
         ori,
         logger,
         tool_name,
@@ -440,7 +403,7 @@ class ReturnDrawerPlacementFlow:
         return self._move_to_pose(
             current_x,
             current_y,
-            clearance_z,
+            drawer_wall_clearance_z,
             ori,
             logger,
             tool_name,

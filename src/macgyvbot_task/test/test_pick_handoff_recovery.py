@@ -1,5 +1,6 @@
 import math
 import sys
+import threading
 import types
 
 
@@ -63,8 +64,8 @@ sys.modules.setdefault("scipy", scipy_module)
 sys.modules.setdefault("scipy.spatial", scipy_spatial_module)
 sys.modules.setdefault("scipy.spatial.transform", scipy_transform_module)
 
-from macgyvbot_config.drawer import DRAWER_STORE_MARKER_CLEARANCE_Z_OFFSET_M
 from macgyvbot_config.drawer import DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M
+from macgyvbot_config.drawer import DRAWER_WALL_CLEARANCE_Z_OFFSET_M
 from macgyvbot_manipulation.robot_safezone import safe_z_min_for_drawer
 from macgyvbot_task.application.pick_flow import pick_handoff_flow
 from macgyvbot_task.application.pick_flow.pick_handoff_flow import PickHandoffFlow
@@ -135,15 +136,17 @@ class FakeHandoff:
     def __init__(self):
         self.returned_drawer_id = None
         self.events = []
+        self.last_failure_reason = ""
 
     def wait_for_human_grasp(self, logger):
+        self.last_failure_reason = "handoff_timeout"
         return False
 
     def return_tool_to_original_position(
         self,
         target_x,
         target_y,
-        travel_z,
+        drawer_wall_clearance_z,
         grasp_z,
         ori,
         logger,
@@ -158,12 +161,26 @@ class FakeHandoff:
         assert not move_home
         return True
 
-    def move_to_handoff_pose(self, ori, logger):
+    def move_to_handoff_pose(self, logger):
+        self.last_failure_reason = "handoff_search_failed"
         return None, None, None
 
     def move_home_after_handoff(self, logger, publish_on_failure=True):
         self.events.append("home")
         return True
+
+
+class RetryableHandoff(FakeHandoff):
+    def __init__(self):
+        super().__init__()
+        self.move_calls = 0
+
+    def move_to_handoff_pose(self, logger):
+        self.move_calls += 1
+        if self.move_calls == 1:
+            self.last_failure_reason = "handoff_search_failed"
+            return None, None, None
+        return 0.4, 0.1, 0.5
 
 
 class FakeDrawerFlow:
@@ -211,20 +228,20 @@ def test_return_tool_to_original_position_uses_drawer_clearance(monkeypatch):
         drawer_id=1,
     )
 
-    clearance_z = (
+    drawer_wall_clearance_z = (
         safe_z_min_for_drawer(1)
-        + DRAWER_STORE_MARKER_CLEARANCE_Z_OFFSET_M
+        + DRAWER_WALL_CLEARANCE_Z_OFFSET_M
     )
     positions = [target.pose.position for target in motion.targets]
 
     assert math.isclose(positions[0].x, 0.12)
     assert math.isclose(positions[0].y, -0.05)
-    assert math.isclose(positions[0].z, clearance_z)
+    assert math.isclose(positions[0].z, drawer_wall_clearance_z)
     assert math.isclose(positions[1].x, 0.30)
     assert math.isclose(positions[1].y, 0.10)
-    assert math.isclose(positions[1].z, clearance_z)
+    assert math.isclose(positions[1].z, drawer_wall_clearance_z)
     assert math.isclose(positions[2].z, 0.35)
-    assert math.isclose(positions[3].z, clearance_z)
+    assert math.isclose(positions[3].z, drawer_wall_clearance_z)
     assert math.isclose(
         positions[4].x,
         0.30 + DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M[0],
@@ -235,7 +252,7 @@ def test_return_tool_to_original_position_uses_drawer_clearance(monkeypatch):
     )
     assert math.isclose(
         positions[4].z,
-        clearance_z + DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M[2],
+        drawer_wall_clearance_z + DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M[2],
     )
     assert gripper.open_calls == 1
     assert motion.home_calls == 1
@@ -250,7 +267,7 @@ def test_handoff_timeout_return_closes_drawer():
     plan = types.SimpleNamespace(
         target_x=0.30,
         target_y=0.10,
-        travel_z=0.40,
+        drawer_wall_clearance_z=0.40,
         grasp_z=0.25,
     )
     context = {
@@ -278,7 +295,7 @@ def test_handoff_timeout_reports_drawer_close_failure():
     plan = types.SimpleNamespace(
         target_x=0.30,
         target_y=0.10,
-        travel_z=0.40,
+        drawer_wall_clearance_z=0.40,
         grasp_z=0.25,
     )
     context = {
@@ -305,7 +322,7 @@ def test_handoff_search_failure_returns_directly_to_target_clearance():
     plan = types.SimpleNamespace(
         target_x=0.30,
         target_y=0.10,
-        travel_z=0.40,
+        drawer_wall_clearance_z=0.40,
         grasp_z=0.25,
     )
     context = {
@@ -322,6 +339,93 @@ def test_handoff_search_failure_returns_directly_to_target_clearance():
     assert runner.handoff.events == ["return", "close", "home"]
     assert runner.state.statuses[-1][0] == "returned"
     assert runner.state.statuses[-1][1]["reason"] == "handoff_pose_unavailable"
+
+
+def test_handoff_search_failure_can_retry_before_fallback(monkeypatch):
+    runner = PickSequenceRunner.__new__(PickSequenceRunner)
+    retry_req = threading.Event()
+    fallback_req = threading.Event()
+    pending = threading.Event()
+    runner.handoff = RetryableHandoff()
+    runner.drawer_flow = FakeDrawerFlow(events=runner.handoff.events)
+    runner.state = FakeState()
+    runner.control_events = {
+        "handoff_retry": retry_req,
+        "handoff_fallback": fallback_req,
+        "handoff_decision_pending": pending,
+    }
+    plan = types.SimpleNamespace(
+        target_x=0.30,
+        target_y=0.10,
+        drawer_wall_clearance_z=0.40,
+        grasp_z=0.25,
+    )
+    context = {
+        "drawer_id": 1,
+        "safe_z_min": safe_z_min_for_drawer(1),
+        "ori": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+    }
+
+    def choose_retry(_duration):
+        if pending.is_set():
+            retry_req.set()
+
+    monkeypatch.setattr(
+        "macgyvbot_task.application.pick_flow.pick_sequence.cooperative_wait",
+        choose_retry,
+    )
+
+    assert runner._move_to_handoff(plan, context)
+
+    assert runner.handoff.move_calls == 2
+    assert runner.drawer_flow.closed == []
+    assert any(
+        status == "handoff_inspection_pending"
+        for status, _payload in runner.state.statuses
+    )
+
+
+def test_handoff_search_failure_fallback_clears_pending(monkeypatch):
+    runner = PickSequenceRunner.__new__(PickSequenceRunner)
+    retry_req = threading.Event()
+    fallback_req = threading.Event()
+    pending = threading.Event()
+    runner.handoff = FakeHandoff()
+    runner.drawer_flow = FakeDrawerFlow(events=runner.handoff.events)
+    runner.state = FakeState()
+    runner.control_events = {
+        "handoff_retry": retry_req,
+        "handoff_fallback": fallback_req,
+        "handoff_decision_pending": pending,
+    }
+    runner.handoff.last_failure_reason = "handoff_search_failed"
+    plan = types.SimpleNamespace(
+        target_x=0.30,
+        target_y=0.10,
+        drawer_wall_clearance_z=0.40,
+        grasp_z=0.25,
+    )
+    context = {
+        "drawer_id": 1,
+        "safe_z_min": safe_z_min_for_drawer(1),
+        "ori": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+    }
+
+    def choose_fallback(_duration):
+        if pending.is_set():
+            fallback_req.set()
+
+    monkeypatch.setattr(
+        "macgyvbot_task.application.pick_flow.pick_sequence.cooperative_wait",
+        choose_fallback,
+    )
+
+    assert not runner._move_to_handoff(plan, context)
+
+    assert not pending.is_set()
+    assert runner.drawer_flow.closed == [1]
+    assert runner.handoff.events == ["return", "close", "home"]
+    assert runner.state.statuses[-1][0] == "returned"
 
 
 def test_pregrasp_depth_adjust_can_descend_below_drawer_safe_z_by_depth():

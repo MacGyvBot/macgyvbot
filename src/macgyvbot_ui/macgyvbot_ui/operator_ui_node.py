@@ -24,6 +24,7 @@ from macgyvbot_config.topics import (
     TOOL_DROP_TOPIC,
     TOOL_COMMAND_TOPIC,
 )
+from macgyvbot_config.structured_logging import format_structured_log
 from macgyvbot_interfaces.msg import (
     CommandFeedback,
     CommandShutdown,
@@ -44,6 +45,38 @@ from macgyvbot_ui.voice_command_window import (
     QTimer,
     VoiceCommandGuiWindow,
 )
+
+def _format_operator_ros_log(message):
+    text = str(message or "").strip()
+    if not text or text.startswith("[pkg] ") or text.startswith("pkg="):
+        return text
+    return format_structured_log(
+        svc="ui",
+        pipe="operator",
+        step="log",
+        event="status",
+        msg=text,
+    )
+
+
+class _StructuredLoggerAdapter:
+    def __init__(self, logger):
+        self._logger = logger
+
+    def debug(self, message):
+        self._logger.debug(_format_operator_ros_log(message))
+
+    def info(self, message):
+        self._logger.info(_format_operator_ros_log(message))
+
+    def warn(self, message):
+        self._logger.warn(_format_operator_ros_log(message))
+
+    def warning(self, message):
+        self.warn(message)
+
+    def error(self, message):
+        self._logger.error(_format_operator_ros_log(message))
 
 
 class OperatorUiNode(Node):
@@ -308,7 +341,7 @@ class OperatorUiNode(Node):
         if status == 'accepted':
             command = feedback.get('command') or {}
             action = command.get('action')
-            if action in {'pause', 'resume', 'cancel', 'exit'}:
+            if action in {'pause', 'resume', 'retry', 'cancel', 'exit'}:
                 if self.window is not None and hasattr(self.window, 'append_command_result'):
                     self.window.append_command_result(command)
 
@@ -355,6 +388,13 @@ class OperatorUiNode(Node):
                     detail=feedback_detail,
                 )
                 self._set_status('재개 대기')
+                return
+
+            if action == 'retry':
+                retry_message = message or '사용자 손 인식을 다시 시도합니다.'
+                self._append_bot(retry_message)
+                self._append_log('info', 'handoff inspection 재시도 요청 발행')
+                self._set_status('손 인식 재시도')
                 return
 
             if action == 'cancel':
@@ -522,7 +562,19 @@ class OperatorUiNode(Node):
             )
 
         if view['show_chat']:
-            self._append_event_chat(view['state'], view['chat_message'])
+            appended = self._append_event_chat(view['state'], view['chat_message'])
+            if (
+                appended
+                and view['state'] == 'handoff_inspection_pending'
+                and self.window is not None
+                and hasattr(self.window, 'append_control_actions')
+            ):
+                self.window.append_control_actions(
+                    (
+                        ('재시도', '재시도'),
+                        ('복귀', '복귀'),
+                    )
+                )
 
         self._handle_exit_status(status, view['state'])
 
@@ -835,7 +887,11 @@ class OperatorUiNode(Node):
         raw_message = str(status.get('message') or '').strip()
         reason = str(status.get('reason') or '').strip()
 
-        abnormal_message = robot_status_chat(state, reason, raw_message)
+        abnormal_message = (
+            ''
+            if state == 'handoff_inspection_pending'
+            else robot_status_chat(state, reason, raw_message)
+        )
         message = (
             abnormal_message
             or self._robot_status_message(state, target_label, raw_message, reason)
@@ -1069,6 +1125,7 @@ class OperatorUiNode(Node):
     @staticmethod
     def _always_show_robot_statuses():
         return {
+            'handoff_inspection_pending',
             'waiting_return_handoff',
             'done',
             'completed',
@@ -1243,17 +1300,21 @@ class OperatorUiNode(Node):
     def _append_event_chat(self, event, text, force=False):
         message = str(text or '').strip()
         if not message:
-            return
+            return False
 
         key = (str(event or ''), message)
         if not force and key == self._last_event_chat_key:
-            return
+            return False
         self._last_event_chat_key = key
         self._append_bot(message)
+        return True
 
     def _append_system(self, text):
         if self.window is not None:
             self.window.append_system(text)
+
+    def get_logger(self):
+        return _StructuredLoggerAdapter(super().get_logger())
 
     def _append_log(
         self,
@@ -1281,13 +1342,14 @@ class OperatorUiNode(Node):
         if not ros:
             return
 
+        ros_message = _format_operator_ros_log(message)
         logger = self.get_logger()
         if level == 'error':
-            logger.error(message)
+            logger.error(ros_message)
         elif level in ('warn', 'warning'):
-            logger.warn(message)
+            logger.warn(ros_message)
         else:
-            logger.info(message)
+            logger.info(ros_message)
 
     def _set_status(self, text):
         if self.window is not None:

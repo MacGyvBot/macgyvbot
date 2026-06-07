@@ -1,5 +1,10 @@
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, EmitEvent, RegisterEventHandler
+from launch.actions import (
+    DeclareLaunchArgument,
+    EmitEvent,
+    RegisterEventHandler,
+    SetEnvironmentVariable,
+)
 from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessExit
 from launch.events import Shutdown
@@ -20,6 +25,8 @@ from macgyvbot_config.topics import (
 )
 from macgyvbot_config.vlm import VLM_GRASP_SERVICE_NAME
 from moveit_configs_utils import MoveItConfigsBuilder
+
+SCREEN_OUTPUT_FORMAT = "{line}"
 
 
 def generate_launch_description():
@@ -93,6 +100,7 @@ def generate_launch_description():
         executable="command_input_node",
         name="command_input_node",
         output="screen",
+        output_format=SCREEN_OUTPUT_FORMAT,
         parameters=[
             {
                 "enable_microphone": use_stt,
@@ -123,6 +131,7 @@ def generate_launch_description():
         executable="operator_ui_node",
         name="operator_ui_node",
         output="screen",
+        output_format=SCREEN_OUTPUT_FORMAT,
         parameters=[
             {
                 "camera_status_topic": CAMERA_COLOR_TOPIC,
@@ -249,15 +258,68 @@ def generate_launch_description():
                 "sam_checkpoint",
                 default_value=default_sam_checkpoint,
             ),
+            SetEnvironmentVariable(
+                "RCUTILS_CONSOLE_OUTPUT_FORMAT",
+                "{message}",
+            ),
+            SetEnvironmentVariable(
+                "PYTHONWARNINGS",
+                "ignore",
+            ),
+            SetEnvironmentVariable(
+                "TF_CPP_MIN_LOG_LEVEL",
+                "3",
+            ),
+            SetEnvironmentVariable(
+                "GLOG_minloglevel",
+                "2",
+            ),
+            SetEnvironmentVariable(
+                "ABSL_MIN_LOG_LEVEL",
+                "2",
+            ),
             Node(
                 package="macgyvbot_task",
                 executable="macgyvbot",
                 output="screen",
+                output_format=SCREEN_OUTPUT_FORMAT,
             ),
             Node(
                 package="macgyvbot_task",
                 executable="task_coordinator_node",
                 output="screen",
+                output_format=SCREEN_OUTPUT_FORMAT,
+                arguments=[
+                    "--ros-args",
+                    "--log-level",
+                    "moveit.py.cpp_initializer:=warn",
+                    "--log-level",
+                    "moveit_rdf_loader.rdf_loader:=warn",
+                    "--log-level",
+                    "moveit_robot_model.robot_model:=warn",
+                    "--log-level",
+                    "moveit.ros_planning_interface.moveit_cpp:=warn",
+                    "--log-level",
+                    "moveit_ros.current_state_monitor:=warn",
+                    "--log-level",
+                    "moveit.ros.occupancy_map_monitor.middleware_handle:=error",
+                    "--log-level",
+                    "moveit.ros_planning.planning_pipeline:=warn",
+                    "--log-level",
+                    "moveit_ros.add_time_optimal_parameterization:=warn",
+                    "--log-level",
+                    "moveit_ros.fix_workspace_bounds:=warn",
+                    "--log-level",
+                    "moveit_ros.fix_start_state_bounds:=warn",
+                    "--log-level",
+                    "moveit_ros.fix_start_state_collision:=warn",
+                    "--log-level",
+                    "moveit_ros.planning_scene_monitor.planning_scene_monitor:=error",
+                    "--log-level",
+                    "moveit.pilz_industrial_motion_planner.trajectory_generator_ptp:=warn",
+                    "--log-level",
+                    "moveit.pilz_industrial_motion_planner.trajectory_generator:=warn",
+                ],
                 parameters=[
                     moveit_config.to_dict(),
                     moveit_py_params,
@@ -292,6 +354,7 @@ def generate_launch_description():
                 executable="vlm_grasp_service_node",
                 name="vlm_grasp_service_node",
                 output="screen",
+                output_format=SCREEN_OUTPUT_FORMAT,
                 parameters=[
                     {
                         "vlm_service_name": vlm_service_name,
@@ -309,6 +372,7 @@ def generate_launch_description():
                 executable="hand_grasp_detection",
                 name="hand_grasp_detection_node",
                 output="screen",
+                output_format=SCREEN_OUTPUT_FORMAT,
                 parameters=[
                     {
                         "color_topic": CAMERA_COLOR_TOPIC,
