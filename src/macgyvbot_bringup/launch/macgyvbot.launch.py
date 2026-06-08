@@ -48,7 +48,7 @@ def ensure_rrtconnect_planner_config(moveit_config_dict):
     planner_configs = ompl_config.setdefault("planner_configs", {})
     rrtconnect_config = planner_configs.setdefault(PLANNER_ID, {})
     rrtconnect_config.setdefault("type", "geometric::RRTConnect")
-    rrtconnect_config.setdefault("range", 0.0)
+    rrtconnect_config.setdefault("range", 0.1)
 
     group_config = ompl_config.setdefault(GROUP_NAME, {})
     group_config.setdefault("default_planner_config", PLANNER_ID)
