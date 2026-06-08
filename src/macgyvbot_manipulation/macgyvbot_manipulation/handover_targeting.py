@@ -299,7 +299,7 @@ def move_to_candidate_with_offset(
             )
             return False, last_pose, "interrupted"
 
-        _log_info(
+        _log_warn(
             logger,
             "handover planning attempt",
             step="handover_plan",
@@ -395,11 +395,11 @@ def _unbounded_retry_count(target_x: float, target_y: float, x_step_m: float) ->
     return max(x_steps, y_steps)
 
 
-def _log_info(logger, message, **fields):
+def _log_warn(logger, message, **fields):
     try:
-        logger.info(message, **fields)
+        logger.warn(message, **fields)
     except TypeError:
-        logger.info(
+        logger.warn(
             format_structured_log(
                 svc="manipulation",
                 pipe="moveit",
