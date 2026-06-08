@@ -84,25 +84,28 @@ DRAWER_BODY_COLLISION_BOX = {
 DRAWER_OPENED_COLLISION_BOX_1 = {
     "id": "drawer_opened_boundary_floor_1",
     "frame_id": DRAWER_COLLISION_FRAME_ID,
-    "center_xyz": [0.5400, 0.2150, 0.06325],
-    "size_xyz": [0.1800, 0.1700, 0.0843],
-    "color_rgba": [0.12, 0.45, 0.85, 0.30],
+    "center_xyz": [0.5400, 0.2150, 0.045],
+
+    "size_xyz": [0.1800, 0.1700, 0.09],
+    "color_rgba": [0.1, 0.45, 0.85, 0.30],
 }
 
 DRAWER_OPENED_COLLISION_BOX_2 = {
     "id": "drawer_opened_boundary_floor_2",
     "frame_id": DRAWER_COLLISION_FRAME_ID,
-    "center_xyz": [0.5400, 0.2150, 0.1265],
-    "size_xyz": [0.1800, 0.1700, 0.0843],
-    "color_rgba": [0.12, 0.45, 0.85, 0.35],
+    "center_xyz": [0.5400, 0.2150, 0.135],
+
+    "size_xyz": [0.1800, 0.1700, 0.09],
+    "color_rgba": [0.2, 0.45, 0.85, 0.35],
 }
 
 DRAWER_OPENED_COLLISION_BOX_3 = {
     "id": "drawer_opened_boundary_floor_3",
     "frame_id": DRAWER_COLLISION_FRAME_ID,
-    "center_xyz": [0.5400, 0.2150, 0.18975],
-    "size_xyz": [0.1800, 0.1700, 0.0844],
-    "color_rgba": [0.12, 0.45, 0.85, 0.4],
+    "center_xyz": [0.5400, 0.2150, 0.225],
+
+    "size_xyz": [0.1800, 0.1700, 0.09],
+    "color_rgba": [0.3, 0.45, 0.85, 0.4],
 }
 
 DRAWER_COLLISION_BOX_PROFILES = {
