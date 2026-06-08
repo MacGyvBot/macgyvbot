@@ -18,6 +18,11 @@ from macgyvbot_config.gripper import (
     DEFAULT_SCENE_SETTLE_SEC,
     RG2_ALLOWED_COLLISION_PAIRS,
 )
+from macgyvbot_config.structured_logging import format_structured_log
+
+_LOG_SVC = "manipulation"
+_LOG_PIPE = "gripper_collision_scene"
+_LOG_STEP = "gripper_acm"
 
 
 class GripperSelfCollisionManager:
@@ -297,13 +302,31 @@ def _wait_for_future(future, timeout_sec, logger, label):
 
 
 def _info(logger, message):
-    if logger is not None:
-        logger.info(message)
+    _emit_log(logger, "info", message)
 
 
 def _warn(logger, message):
+    _emit_log(logger, "warn", message)
+
+
+def _emit_log(logger, level, message):
     if logger is None:
         return
-    warn = getattr(logger, "warn", None) or getattr(logger, "warning", None)
-    if warn is not None:
-        warn(message)
+    formatted = format_structured_log(
+        svc=_LOG_SVC,
+        pipe=_LOG_PIPE,
+        step=_LOG_STEP,
+        event=level,
+        msg=message,
+    )
+    raw_logger = getattr(logger, "_logger", logger)
+    if level == "warn":
+        emit = getattr(raw_logger, "warn", None) or getattr(
+            raw_logger,
+            "warning",
+            None,
+        )
+    else:
+        emit = getattr(raw_logger, "info", None)
+    if emit is not None:
+        emit(formatted)

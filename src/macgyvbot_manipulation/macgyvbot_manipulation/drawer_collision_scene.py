@@ -18,6 +18,11 @@ from macgyvbot_config.drawer import (
     DRAWER_COLLISION_SCENE_TOPICS,
     DRAWER_COLLISION_SCENE_KEY_PROFILES,
 )
+from macgyvbot_config.structured_logging import format_structured_log
+
+_LOG_SVC = "manipulation"
+_LOG_PIPE = "drawer_collision_scene"
+_LOG_STEP = "drawer_scene"
 
 
 class DrawerCollisionSceneManager:
@@ -376,13 +381,31 @@ def _make_object_color(box):
 
 
 def _info(logger, message):
-    if logger is not None:
-        logger.info(message)
+    _emit_log(logger, "info", message)
 
 
 def _warn(logger, message):
+    _emit_log(logger, "warn", message)
+
+
+def _emit_log(logger, level, message):
     if logger is None:
         return
-    warn = getattr(logger, "warn", None) or getattr(logger, "warning", None)
-    if warn is not None:
-        warn(message)
+    formatted = format_structured_log(
+        svc=_LOG_SVC,
+        pipe=_LOG_PIPE,
+        step=_LOG_STEP,
+        event=level,
+        msg=message,
+    )
+    raw_logger = getattr(logger, "_logger", logger)
+    if level == "warn":
+        emit = getattr(raw_logger, "warn", None) or getattr(
+            raw_logger,
+            "warning",
+            None,
+        )
+    else:
+        emit = getattr(raw_logger, "info", None)
+    if emit is not None:
+        emit(formatted)
