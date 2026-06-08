@@ -18,6 +18,7 @@ from macgyvbot_config.drawer import (
     TOOL_DRAWER_IDS,
 )
 from macgyvbot_config.robot import EE_LINK
+from macgyvbot_config.structured_logging import format_structured_log
 from macgyvbot_manipulation.robot_pose import (
     current_ee_orientation,
     get_ee_matrix,
@@ -76,6 +77,7 @@ class DrawerMotionFlow:
             f"drawer {drawer_id} open",
             logger,
             collision_scene_key="drawer/open_pull",
+            drawer_id=drawer_id,
         ):
             return False
 
@@ -92,7 +94,12 @@ class DrawerMotionFlow:
         """Move from the opened handle pose to the drawer observation pose."""
         opened = self._opened_drawers.get(drawer_id)
         if opened is None:
-            logger.error(f"drawer {drawer_id} opened pose가 없어 관찰할 수 없습니다.")
+            _log_drawer_motion_failed(
+                logger,
+                stage="observe_opened_pose",
+                drawer_id=drawer_id,
+                reason="opened_pose_missing",
+            )
             return False
 
         observe_ori = self._observation_orientation(opened["ori"], logger)
@@ -103,13 +110,19 @@ class DrawerMotionFlow:
             f"drawer {drawer_id} observe",
             logger,
             collision_scene_key="drawer/observe",
+            drawer_id=drawer_id,
         )
 
     def close_drawer(self, drawer_id, logger):
         """Move to the opened handle pose, grip it, push closed, then release."""
         opened = self._opened_drawers.get(drawer_id)
         if opened is None:
-            logger.error(f"drawer {drawer_id} opened pose가 없어 닫을 수 없습니다.")
+            _log_drawer_motion_failed(
+                logger,
+                stage="close_opened_pose",
+                drawer_id=drawer_id,
+                reason="opened_pose_missing",
+            )
             return False
 
         open_handle_xyz = self._open_handle_target_xyz(drawer_id, opened["xyz"])
@@ -119,6 +132,7 @@ class DrawerMotionFlow:
             f"drawer {drawer_id} return_to_open_handle",
             logger,
             collision_scene_key="drawer/approach_to_close",
+            drawer_id=drawer_id,
         ):
             return False
 
@@ -133,6 +147,7 @@ class DrawerMotionFlow:
                 f"drawer {drawer_id} {label}",
                 logger,
                 collision_scene_key="drawer/close_push",
+                drawer_id=drawer_id,
             ):
                 return False
 
@@ -157,7 +172,12 @@ class DrawerMotionFlow:
     def _move_to_handle_joints(self, drawer_id, logger):
         joint_positions = self._joint_positions(drawer_id)
         if joint_positions is None:
-            logger.error(f"지원하지 않는 drawer id입니다: {drawer_id}")
+            _log_drawer_motion_failed(
+                logger,
+                stage="handle_joint_config",
+                drawer_id=drawer_id,
+                reason="unsupported_drawer_id",
+            )
             return False
 
         logger.info(
@@ -185,13 +205,24 @@ class DrawerMotionFlow:
             f"drawer {drawer_id} handle preapproach",
             logger,
             collision_scene_key="drawer/handle_preapproach",
+            drawer_id=drawer_id,
         ):
             return False
-        return self.motion.plan_and_execute(
+        ok = self.motion.plan_and_execute(
             logger,
             state_goal=state_goal,
             collision_scene_key="drawer/handle_pose",
         )
+        if not ok:
+            _log_drawer_motion_failed(
+                logger,
+                stage="handle_joint_pose",
+                drawer_id=drawer_id,
+                reason="state_goal_plan_failed",
+                target_xyz=handle_xyz,
+                collision_scene_key="drawer/handle_pose",
+            )
+        return ok
 
     def _move_to_handle_pose_with_preapproach(
         self,
@@ -200,6 +231,7 @@ class DrawerMotionFlow:
         label,
         logger,
         collision_scene_key=None,
+        drawer_id=None,
     ):
         if not self._move_to_handle_preapproach(
             target_xyz,
@@ -207,6 +239,7 @@ class DrawerMotionFlow:
             f"{label} preapproach",
             logger,
             collision_scene_key=collision_scene_key,
+            drawer_id=drawer_id,
         ):
             return False
         return self._move_by_offset(
@@ -216,6 +249,7 @@ class DrawerMotionFlow:
             label,
             logger,
             collision_scene_key=collision_scene_key,
+            drawer_id=drawer_id,
         )
 
     def _move_to_handle_preapproach(
@@ -225,6 +259,7 @@ class DrawerMotionFlow:
         label,
         logger,
         collision_scene_key=None,
+        drawer_id=None,
     ):
         return self._move_by_offset(
             target_xyz,
@@ -233,6 +268,7 @@ class DrawerMotionFlow:
             label,
             logger,
             collision_scene_key=collision_scene_key,
+            drawer_id=drawer_id,
         )
 
     def _move_by_offset(
@@ -243,6 +279,7 @@ class DrawerMotionFlow:
         label,
         logger,
         collision_scene_key=None,
+        drawer_id=None,
     ):
         target_xyz = [
             float(base_xyz[0]) + float(offset_xyz[0]),
@@ -257,7 +294,7 @@ class DrawerMotionFlow:
         if self.dry_run:
             return True
 
-        return self.motion.plan_and_execute(
+        ok = self.motion.plan_and_execute(
             logger,
             pose_goal=make_safe_pose(
                 target_xyz[0],
@@ -268,6 +305,18 @@ class DrawerMotionFlow:
             ),
             collision_scene_key=collision_scene_key,
         )
+        if not ok:
+            _log_drawer_motion_failed(
+                logger,
+                stage=label,
+                drawer_id=drawer_id,
+                reason="pose_goal_plan_failed",
+                base_xyz=base_xyz,
+                offset_xyz=offset_xyz,
+                target_xyz=target_xyz,
+                collision_scene_key=collision_scene_key,
+            )
+        return ok
 
     def _observation_orientation(self, fallback_ori, logger):
         if self.observation_orientation_provider is None:
@@ -292,7 +341,12 @@ class DrawerMotionFlow:
             self.gripper.close_gripper()
             self.wait_fn(DRAWER_GRIPPER_SETTLE_SEC)
         except Exception as exc:
-            logger.error(f"그리퍼 닫기 실패: {exc}")
+            _log_drawer_motion_failed(
+                logger,
+                stage=label,
+                reason="gripper_close_failed",
+                error=str(exc) or type(exc).__name__,
+            )
             return False
         return True
 
@@ -304,7 +358,12 @@ class DrawerMotionFlow:
             self.gripper.open_gripper()
             self.wait_fn(DRAWER_GRIPPER_SETTLE_SEC)
         except Exception as exc:
-            logger.error(f"그리퍼 열기 실패: {exc}")
+            _log_drawer_motion_failed(
+                logger,
+                stage=label,
+                reason="gripper_open_failed",
+                error=str(exc) or type(exc).__name__,
+            )
             return False
         return True
 
@@ -353,3 +412,53 @@ class DrawerMotionFlow:
             f"{float(values[1]):.3f}, "
             f"{float(values[2]):.3f})"
         )
+
+
+def _log_drawer_motion_failed(
+    logger,
+    *,
+    stage,
+    reason,
+    drawer_id=None,
+    base_xyz=None,
+    offset_xyz=None,
+    target_xyz=None,
+    collision_scene_key=None,
+    error=None,
+):
+    fields = {
+        "step": "drawer_motion",
+        "event": "fail",
+        "stage": stage,
+        "drawer_id": drawer_id,
+        "reason": reason,
+        "base_xyz": _format_optional_xyz(base_xyz),
+        "offset_xyz": _format_optional_xyz(offset_xyz),
+        "target_xyz": _format_optional_xyz(target_xyz),
+        "collision_scene_key": collision_scene_key,
+        "error": error,
+    }
+    try:
+        logger.error("drawer motion failed", **fields)
+    except TypeError:
+        logger.error(
+            format_structured_log(
+                svc="manipulation",
+                pipe="drawer",
+                msg="drawer motion failed",
+                **fields,
+            )
+        )
+
+
+def _format_optional_xyz(values):
+    if values is None:
+        return None
+    try:
+        return (
+            f"({float(values[0]):.3f},"
+            f"{float(values[1]):.3f},"
+            f"{float(values[2]):.3f})"
+        )
+    except (TypeError, ValueError, IndexError):
+        return str(values)
