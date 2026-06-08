@@ -99,6 +99,7 @@ class PickSequenceRunner:
             "drawer_id": drawer_id,
             "safe_z_min": safe_z_min,
             "vlm_yaw_deg": vlm_yaw_deg,
+            "grasp_wrist_joint_rad": None,
         }
 
         log_info(
@@ -136,7 +137,7 @@ class PickSequenceRunner:
                 "pick/pregrasp_depth_adjust",
                 lambda: self._pregrasp_depth_adjust(context),
             ),
-            TaskStep("pick/grasp_tool", self._grasp_tool),
+            TaskStep("pick/grasp_tool", lambda: self._grasp_tool(context)),
             TaskStep(
                 "pick/lift",
                 lambda: self._move_to_pose(
@@ -398,10 +399,11 @@ class PickSequenceRunner:
             collision_scene_key="pick/grasp_descent",
         )
 
-    def _grasp_tool(self):
+    def _grasp_tool(self, context):
         log = self.state.logger()
         log_info(log, "robot grasp", step="grasp", event="start")
         if self.grasp.try_robot_grasp(log):
+            context["grasp_wrist_joint_rad"] = self._current_wrist_joint_rad(log)
             self.state._publish_robot_status(
                 "grasp_success",
                 message="공구 grasp에 성공했습니다.",
@@ -692,6 +694,7 @@ class PickSequenceRunner:
             drawer_id=drawer_id,
             move_home=False,
             lift_from_current=lift_from_current,
+            grasp_wrist_joint_rad=context.get("grasp_wrist_joint_rad"),
         )
         if not returned:
             return False, False, False
@@ -744,6 +747,12 @@ class PickSequenceRunner:
     def _home_after_handoff(self):
         log_info(self.state.logger(), "home after handoff", step="home", event="start")
         return self.handoff.move_home_after_handoff(self.state.logger())
+
+    def _current_wrist_joint_rad(self, log):
+        reader = getattr(self.motion, "current_wrist_joint_rad", None)
+        if reader is None:
+            return None
+        return reader(log)
 
     def _close_drawer_after_handoff(self, context):
         drawer_id = context.get("drawer_id")
