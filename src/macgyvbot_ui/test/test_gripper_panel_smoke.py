@@ -8,6 +8,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from macgyvbot_ui.voice_command_window import (  # noqa: E402
     QApplication,
+    QFrame,
     VoiceCommandGuiWindow,
 )
 
@@ -24,9 +25,13 @@ class GripperPanelSmokeTest(unittest.TestCase):
     def setUp(self):
         self.gripper_widths = []
         self.published_texts = []
+        self.control_actions = []
         self.window = VoiceCommandGuiWindow(
             on_user_text=self.published_texts.append,
             on_gripper_width=self.gripper_widths.append,
+            on_control_action=lambda action, text: self.control_actions.append(
+                (action, text)
+            ),
         )
 
     def tearDown(self):
@@ -103,11 +108,23 @@ class GripperPanelSmokeTest(unittest.TestCase):
         self.assertTrue(self.window._send_button.isEnabled())
         self.assertEqual(self.window._input.placeholderText(), message)
 
-    def test_pause_and_resume_status_buttons_publish_control_text(self):
+    def test_pause_and_resume_status_buttons_publish_control_actions(self):
         self.window._pause_button.click()
         self.window._resume_button.click()
 
-        self.assertEqual(self.published_texts, ["멈춰", "재개"])
+        self.assertEqual(self.published_texts, [])
+        self.assertEqual(
+            self.control_actions,
+            [("pause", "멈춰"), ("resume", "재개")],
+        )
+
+    def test_gripper_panel_has_room_for_controls(self):
+        self.window.show()
+        self.app.processEvents()
+
+        gripper_panel = self.window.findChild(QFrame, "gripperPanel")
+        self.assertIsNotNone(gripper_panel)
+        self.assertGreaterEqual(gripper_panel.height(), 245)
 
 
 if __name__ == "__main__":

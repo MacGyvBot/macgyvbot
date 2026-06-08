@@ -21,6 +21,7 @@ from macgyvbot_config.topics import (
     MANUAL_GRIPPER_SERVICE,
     ROBOT_STATUS_TOPIC,
     STT_TEXT_TOPIC,
+    TASK_CONTROL_TOPIC,
     TOOL_DROP_TOPIC,
     TOOL_COMMAND_TOPIC,
 )
@@ -30,6 +31,7 @@ from macgyvbot_interfaces.msg import (
     CommandShutdown,
     CommandText,
     HumanGraspResult,
+    RobotTaskControl,
     RobotTaskStatus,
     ToolCommand,
     ToolDropEvent,
@@ -203,6 +205,11 @@ class OperatorUiNode(Node):
             COMMAND_SHUTDOWN_TOPIC,
             10,
         )
+        self._task_control_pub = self.create_publisher(
+            RobotTaskControl,
+            TASK_CONTROL_TOPIC,
+            10,
+        )
         self._manual_gripper_client = self.create_client(
             SetGripper,
             self._manual_gripper_service,
@@ -275,6 +282,41 @@ class OperatorUiNode(Node):
         msg.text = text
         msg.source = 'operator_ui'
         self._stt_pub.publish(msg)
+
+    def publish_control_action(self, action, text=''):
+        action = str(action or '').strip()
+        if action not in {'pause', 'resume'}:
+            self.publish_user_text(text)
+            return
+
+        label = str(text or '').strip() or action
+
+        msg = RobotTaskControl()
+        msg.action = action
+        msg.reason = label
+        msg.source = 'operator_ui'
+        self._task_control_pub.publish(msg)
+
+        if action == 'pause':
+            message = '정지 요청을 로봇에 전달했습니다.'
+            event = 'CONTROL_PAUSE'
+            level = 'warn'
+            status = '정지 요청 전달'
+        else:
+            message = '재개 요청을 로봇에 전달했습니다.'
+            event = 'CONTROL_RESUME'
+            level = 'info'
+            status = '재개 요청 전달'
+
+        self._append_bot(message)
+        self._append_log(
+            level,
+            message,
+            source='ui.control',
+            event=event,
+            detail=f'topic={TASK_CONTROL_TOPIC}, action={action}, source=operator_ui',
+        )
+        self._set_status(status)
 
     def _mark_self_published(self, text):
         with self._self_pub_lock:
@@ -1518,6 +1560,7 @@ def main(args=None):
     window = VoiceCommandGuiWindow(
         on_user_text=node.publish_user_text,
         on_gripper_width=node.request_manual_gripper_width,
+        on_control_action=node.publish_control_action,
     )
     node.attach_window(window)
     window.show()

@@ -23,6 +23,7 @@ try:
     )
 except ImportError:  # pragma: no cover - runtime environment guidance
     QApplication = None
+    QFrame = None
     Qt = None
     QTimer = None
     VoiceCommandGuiWindow = None
@@ -32,10 +33,16 @@ else:
         _INPUT_READY_PLACEHOLDER = '메시지를 입력하거나 음성으로 말해주세요.'
         _INPUT_BUSY_PLACEHOLDER = '동작 실행 중... 상태 버튼이나 음성 명령을 사용해주세요.'
 
-        def __init__(self, on_user_text=None, on_gripper_width=None):
+        def __init__(
+            self,
+            on_user_text=None,
+            on_gripper_width=None,
+            on_control_action=None,
+        ):
             super().__init__()
             self._on_user_text = on_user_text
             self._on_gripper_width = on_gripper_width
+            self._on_control_action = on_control_action
             self.setWindowTitle('MacGyvBot Assistant')
             self.setFixedSize(1420, 900)
             self._detector_pixmap = None
@@ -73,12 +80,18 @@ else:
             self._pause_button = QPushButton('멈춤')
             self._pause_button.setObjectName('pauseControlButton')
             self._pause_button.clicked.connect(
-                lambda _checked=False: self._send_control_text('멈춰')
+                lambda _checked=False: self._send_control_action(
+                    action='pause',
+                    text='멈춰',
+                )
             )
             self._resume_button = QPushButton('재개')
             self._resume_button.setObjectName('resumeControlButton')
             self._resume_button.clicked.connect(
-                lambda _checked=False: self._send_control_text('재개')
+                lambda _checked=False: self._send_control_action(
+                    action='resume',
+                    text='재개',
+                )
             )
             self._home_button = QPushButton('복귀')
             self._home_button.setObjectName('homeControlButton')
@@ -199,7 +212,7 @@ else:
             gripper_panel = QFrame()
             gripper_panel.setObjectName('gripperPanel')
             gripper_panel.setFixedWidth(290)
-            gripper_panel.setMinimumHeight(210)
+            gripper_panel.setMinimumHeight(245)
             gripper_panel.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
             gripper_panel_layout = QVBoxLayout()
             gripper_panel_layout.setContentsMargins(16, 14, 16, 14)
@@ -659,6 +672,14 @@ else:
 
         def _send_control_text(self, text):
             self.append_user(text)
+            if self._on_user_text is not None:
+                self._on_user_text(text)
+
+        def _send_control_action(self, action, text):
+            self.append_user(text)
+            if self._on_control_action is not None:
+                self._on_control_action(action, text)
+                return
             if self._on_user_text is not None:
                 self._on_user_text(text)
 
