@@ -12,16 +12,27 @@ from urllib import error, request
 
 from PIL import Image
 
+from macgyvbot_config.vlm import (
+    GRASP_POINT_API_BASE_URL,
+    GRASP_POINT_API_ENV_FILENAME,
+    GRASP_POINT_API_KEY_NAME,
+    GRASP_POINT_API_MAX_IMAGE_SIZE,
+    GRASP_POINT_API_MAX_OUTPUT_TOKENS,
+    GRASP_POINT_API_MODEL,
+    GRASP_POINT_API_TEMPERATURE,
+    GRASP_POINT_API_THINKING_BUDGET,
+    GRASP_POINT_API_TIMEOUT_SEC,
+)
 from macgyvbot_perception.grasp_point.api_method.prompts import build_grasp_prompt
 from macgyvbot_perception.grasp_point.vlm.parser import Parser
 from macgyvbot_resources.resources import resolve_env_file
 
 
-DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
-DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
-DEFAULT_ENV_FILENAME = ".env"
-DEFAULT_MAX_IMAGE_SIZE = 640
-GEMINI_API_KEY_NAME = "GEMINI_API_KEY"
+DEFAULT_GEMINI_MODEL = GRASP_POINT_API_MODEL
+DEFAULT_GEMINI_BASE_URL = GRASP_POINT_API_BASE_URL
+DEFAULT_ENV_FILENAME = GRASP_POINT_API_ENV_FILENAME
+DEFAULT_MAX_IMAGE_SIZE = GRASP_POINT_API_MAX_IMAGE_SIZE
+GEMINI_API_KEY_NAME = GRASP_POINT_API_KEY_NAME
 
 
 @dataclass(frozen=True)
@@ -41,12 +52,12 @@ class GeminiGraspAPIClient:
         self,
         model_id: str | None = None,
         max_image_size: int = DEFAULT_MAX_IMAGE_SIZE,
-        max_output_tokens: int = 256,
-        timeout_sec: float = 30.0,
+        max_output_tokens: int = GRASP_POINT_API_MAX_OUTPUT_TOKENS,
+        timeout_sec: float = GRASP_POINT_API_TIMEOUT_SEC,
         env_file: str | None = None,
         base_url: str | None = None,
-        temperature: float = 0.0,
-        thinking_budget: int = 0,
+        temperature: float = GRASP_POINT_API_TEMPERATURE,
+        thinking_budget: int = GRASP_POINT_API_THINKING_BUDGET,
     ):
         self.model_id = model_id or DEFAULT_GEMINI_MODEL
         self.max_image_size = int(max_image_size)

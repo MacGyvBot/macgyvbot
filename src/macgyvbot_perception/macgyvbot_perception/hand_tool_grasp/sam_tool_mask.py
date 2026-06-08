@@ -7,6 +7,7 @@ import warnings
 import cv2
 import numpy as np
 
+from macgyvbot_config.vlm import SAM_BACKEND_DEFAULT
 from macgyvbot_domain.mask_models import (
     LockedToolMask,
     MaskContactResult,
@@ -37,7 +38,7 @@ class BBoxPromptSegmenter:
         if not checkpoint.exists():
             raise RuntimeError(f"SAM checkpoint not found: {checkpoint}")
 
-        if backend == "mobile_sam":
+        if backend == SAM_BACKEND_DEFAULT:
             with warnings.catch_warnings():
                 warnings.filterwarnings(
                     "ignore",

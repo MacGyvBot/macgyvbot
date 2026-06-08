@@ -2,11 +2,16 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 
 from huggingface_hub import snapshot_download
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "macgyvbot_config"))
 
-MODEL_ID = "Qwen/Qwen2.5-VL-7B-Instruct"
+from macgyvbot_config.vlm import VLM_MODEL_QWEN7B
+
+
+MODEL_ID = VLM_MODEL_QWEN7B
 DEST_ROOT = Path(__file__).resolve().parent / "vlm"
 
 

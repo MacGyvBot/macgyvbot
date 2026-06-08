@@ -4,11 +4,7 @@ from macgyvbot_config.drawer import (
     DRAWER_1_SAFE_Z_OFFSET_M,
     DRAWER_2_SAFE_Z_OFFSET_M,
 )
-
-SAFE_X_MIN = 0.0
-SAFE_Y_MIN = -0.3
-SAFE_Y_MAX = 0.3
-SAFE_Z_MIN = 0.24
+from macgyvbot_config.robot import SAFE_X_MIN, SAFE_Y_MAX, SAFE_Y_MIN, SAFE_Z_MIN
 
 
 def safe_z_min_for_drawer(drawer_id):

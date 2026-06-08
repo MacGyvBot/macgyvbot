@@ -12,8 +12,16 @@ import cv2
 import numpy as np
 from PIL import Image
 
+from macgyvbot_config.vlm import (
+    SAM_DEPTH_EXPAND_ITERATIONS,
+    SAM_DEPTH_MIN_VALID_RATIO,
+    SAM_DEPTH_TOLERANCE_MM,
+    VLM_DATA_ROOT,
+    VLM_INFERENCE_HISTORY_DIR,
+)
 
-DEFAULT_DATA_ROOT = Path("src/macgyvbot_perception/data")
+
+DEFAULT_DATA_ROOT = Path(VLM_DATA_ROOT)
 
 
 @dataclass(frozen=True)
@@ -21,7 +29,7 @@ class GraspDetectionRecordConfig:
     """Configuration for optional grasp detection recording."""
 
     enabled: bool = True
-    root_dir: str = "src/macgyvbot_perception/data/inference_history"
+    root_dir: str = VLM_INFERENCE_HISTORY_DIR
     csv_name: str = "inference_history.csv"
 
 
@@ -248,9 +256,9 @@ def generate_sam_depth_mask_image_for_grasp_detection(
     data_root: str | Path = DEFAULT_DATA_ROOT,
     filename_prefix: str = "grasp_detection",
     timestamp: Optional[str] = None,
-    sam_depth_tolerance_mm: float = 30.0,
-    sam_depth_min_valid_ratio: float = 0.03,
-    sam_depth_expand_iterations: int = 1,
+    sam_depth_tolerance_mm: float = SAM_DEPTH_TOLERANCE_MM,
+    sam_depth_min_valid_ratio: float = SAM_DEPTH_MIN_VALID_RATIO,
+    sam_depth_expand_iterations: int = SAM_DEPTH_EXPAND_ITERATIONS,
 ) -> list[np.ndarray] | None:
     """Generate/save a YOLO-bbox crop using a SAM mask refined by depth.
 

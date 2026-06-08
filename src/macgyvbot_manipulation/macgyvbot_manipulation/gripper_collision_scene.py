@@ -15,10 +15,12 @@ from macgyvbot_config.gripper import (
     DEFAULT_APPLY_PLANNING_SCENE_SERVICE,
     DEFAULT_GET_PLANNING_SCENE_SERVICE,
     DEFAULT_PLANNING_SCENE_TOPICS,
+    DEFAULT_PLANNING_SCENE_SERVICE_TIMEOUT_SEC,
     DEFAULT_SCENE_SETTLE_SEC,
     RG2_ALLOWED_COLLISION_PAIRS,
 )
 from macgyvbot_config.structured_logging import format_structured_log
+from macgyvbot_config.timing import ROS_FUTURE_POLL_SEC
 
 _LOG_SVC = "manipulation"
 _LOG_PIPE = "gripper_collision_scene"
@@ -58,7 +60,11 @@ class GripperSelfCollisionManager:
         self._get_service_name = get_service_name
         self._apply_service_name = apply_service_name
 
-    def apply(self, logger=None, timeout_sec=3.0):
+    def apply(
+        self,
+        logger=None,
+        timeout_sec=DEFAULT_PLANNING_SCENE_SERVICE_TIMEOUT_SEC,
+    ):
         """Patch RG2 internal pairs in the local and shared planning scene ACM."""
         log = logger or self.node.get_logger()
         local_ok, local_changed = self._apply_to_moveit_py(log)
@@ -292,7 +298,7 @@ def _wait_for_future(future, timeout_sec, logger, label):
         if time.monotonic() >= deadline:
             _warn(logger, f"Timed out waiting for {label}")
             return None
-        time.sleep(0.02)
+        time.sleep(ROS_FUTURE_POLL_SEC)
 
     try:
         return future.result()

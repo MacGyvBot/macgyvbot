@@ -8,12 +8,17 @@ import sys
 import urllib.request
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "macgyvbot_config"))
+
+from macgyvbot_config.models import HAND_GRASP_SAM_CHECKPOINT_NAME
+from macgyvbot_config.vlm import SAM_BACKEND_DEFAULT
+
 
 DEST_ROOT = Path(__file__).resolve().parent
 
 MOBILE_SAM = {
     "repo_id": "dhkim2810/MobileSAM",
-    "filename": "mobile_sam.pt",
+    "filename": HAND_GRASP_SAM_CHECKPOINT_NAME,
     "sha256": "6dbb90523a35330fedd7f1d3dfc66f995213d81b29a5ca8108dbcdd4e37d6c2f",
 }
 
@@ -28,7 +33,7 @@ def main() -> None:
     dest_dir = Path(args.dest_dir).expanduser().resolve()
     dest_dir.mkdir(parents=True, exist_ok=True)
 
-    if args.model in {"mobile_sam", "all"}:
+    if args.model in {SAM_BACKEND_DEFAULT, "all"}:
         download_mobile_sam(dest_dir, force=args.force)
 
     if args.model in {"sam_vit_b", "all"}:
@@ -45,9 +50,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--model",
-        choices=("mobile_sam", "sam_vit_b", "all"),
-        default="mobile_sam",
-        help="Checkpoint to download. Default: mobile_sam.",
+        choices=(SAM_BACKEND_DEFAULT, "sam_vit_b", "all"),
+        default=SAM_BACKEND_DEFAULT,
+        help=f"Checkpoint to download. Default: {SAM_BACKEND_DEFAULT}.",
     )
     parser.add_argument(
         "--dest-dir",

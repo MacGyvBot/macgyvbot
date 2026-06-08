@@ -1,8 +1,9 @@
 """YOLO detector construction and model path resolution."""
 
+from macgyvbot_config.models import YOLO_MODEL_NAME
 from macgyvbot_perception.model_paths import resolve_weight_path
 
-DEFAULT_MODEL_PATH = "yolov11_best.pt"
+DEFAULT_MODEL_PATH = YOLO_MODEL_NAME
 
 
 def resolve_model_path(model_name):

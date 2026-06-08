@@ -1,5 +1,7 @@
 from itertools import combinations
 
+ENABLE_GRIPPER_SELF_COLLISION_ACM_DEFAULT = True
+
 RG2_INTERNAL_COLLISION_LINKS = (
     "quick_changer",
     "angle_bracket",
@@ -28,3 +30,4 @@ DEFAULT_PLANNING_SCENE_TOPICS = (
 )
 
 DEFAULT_SCENE_SETTLE_SEC = 0.1
+DEFAULT_PLANNING_SCENE_SERVICE_TIMEOUT_SEC = 3.0

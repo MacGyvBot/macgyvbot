@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 import time
 
+from macgyvbot_config.timing import ROS_FUTURE_POLL_SEC
 from macgyvbot_config.vlm import (
     SAM_YAW_SERVICE_NAME,
     SAM_YAW_SERVICE_RESPONSE_TIMEOUT_SEC,
@@ -103,7 +104,7 @@ class SAMYawServiceClient:
                     reason="response_timeout",
                 )
                 return None
-            time.sleep(0.02)
+            time.sleep(ROS_FUTURE_POLL_SEC)
 
         response_mono = time.monotonic()
         self._log().info(

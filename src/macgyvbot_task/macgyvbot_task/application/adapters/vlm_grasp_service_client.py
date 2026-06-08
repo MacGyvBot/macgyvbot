@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 import time
 
+from macgyvbot_config.timing import ROS_FUTURE_POLL_SEC
 from macgyvbot_config.vlm import (
     VLM_GRASP_SERVICE_NAME,
     VLM_SERVICE_RESPONSE_TIMEOUT_SEC,
@@ -106,7 +107,7 @@ class VLMGraspServiceClient:
                     reason="response_timeout",
                 )
                 return None
-            time.sleep(0.02)
+            time.sleep(ROS_FUTURE_POLL_SEC)
 
         response_wall = self._timestamp()
         response_mono = time.monotonic()

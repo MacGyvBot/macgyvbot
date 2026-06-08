@@ -13,8 +13,41 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image
 
 from macgyvbot_config.hand_grasp import (
+    HAND_GRASP_ALLOW_BBOX_LOCK,
+    HAND_GRASP_DEPTH_DIFF_THRESHOLD_MM,
+    HAND_GRASP_DEPTH_LOCK_DURATION_SEC,
+    HAND_GRASP_DEPTH_LOCK_MAX_AREA_RATIO,
+    HAND_GRASP_DEPTH_LOCK_MIN_AREA_RATIO,
+    HAND_GRASP_DEPTH_LOCK_MIN_FRAMES,
+    HAND_GRASP_DEPTH_LOCK_MIN_VALID_RATIO,
+    HAND_GRASP_DEPTH_LOCK_STABILITY_MM,
+    HAND_GRASP_DEPTH_MIN_CONTACT_LANDMARKS,
+    HAND_GRASP_DEPTH_TOOL_MASK_ENABLED,
+    HAND_GRASP_DEPTH_TOOL_MASK_MARGIN,
+    HAND_GRASP_DEPTH_TOOL_MASK_TOLERANCE_MM,
+    HAND_GRASP_DISPLAY_DEFAULT,
     HAND_GRASP_LOCK_ON_STATUS,
+    HAND_GRASP_MASK_CONTACT_RADIUS,
+    HAND_GRASP_MASK_MIN_CONTACT_LANDMARKS,
+    HAND_GRASP_MASK_PROXIMITY_THRESHOLD,
+    HAND_GRASP_MAX_HANDS,
     HAND_GRASP_ML_CONFIDENCE,
+    HAND_GRASP_PRE_GRASP_MASK_MAX_SCALE,
+    HAND_GRASP_PRE_GRASP_MASK_MIN_SCALE,
+    HAND_GRASP_PUBLISH_ANNOTATED_DEFAULT,
+    HAND_GRASP_SAM_RESEED_FROM_YOLO,
+    HAND_GRASP_SAM_TRACK_INTERVAL,
+    HAND_GRASP_SAM_TRACK_MARGIN,
+    HAND_GRASP_SAM_TRACK_MAX_AREA_RATIO,
+    HAND_GRASP_SAM_TRACK_MAX_CENTER_SHIFT_PX,
+    HAND_GRASP_SAM_TRACK_MIN_AREA_RATIO,
+    HAND_GRASP_SAM_YOLO_MAX_CENTER_SHIFT_PX,
+    HAND_GRASP_SAM_YOLO_MIN_IOU,
+    HAND_GRASP_SAM_YOLO_MISSING_GRACE_FRAMES,
+    HAND_GRASP_SHOW_RETURN_CLOSE_ROI_DEFAULT,
+    HAND_GRASP_USE_DEPTH_DEFAULT,
+    HAND_GRASP_YOLO_CONFIDENCE,
+    HAND_GRASP_YOLO_IMAGE_SIZE,
 )
 from macgyvbot_config.structured_logging import (
     format_structured_log,
@@ -30,6 +63,15 @@ from macgyvbot_config.topics import (
     HAND_GRASP_MASK_LOCK_TOPIC,
     HAND_GRASP_TOPIC,
     ROBOT_STATUS_TOPIC,
+)
+from macgyvbot_config.vlm import (
+    SAM_BACKEND_DEFAULT,
+    SAM_DEPTH_EXPAND_ITERATIONS,
+    SAM_DEPTH_MIN_VALID_RATIO,
+    SAM_DEPTH_TOLERANCE_MM,
+    SAM_DEVICE_DEFAULT,
+    SAM_ENABLED_DEFAULT,
+    SAM_MODEL_TYPE_DEFAULT,
 )
 from macgyvbot_interfaces.msg import HumanGraspResult, RobotTaskStatus, ToolMaskLock
 from macgyvbot_domain.mask_models import LockedToolMask
@@ -169,13 +211,28 @@ class HandGraspDetectionNode(Node):
             "annotated_topic",
             HAND_GRASP_IMAGE_TOPIC,
         ).value
-        self.use_depth = self._as_bool(self.declare_parameter("use_depth", True).value)
-        self.publish_annotated = bool(
-            self._as_bool(self.declare_parameter("publish_annotated", True).value)
+        self.use_depth = self._as_bool(
+            self.declare_parameter(
+                "use_depth",
+                HAND_GRASP_USE_DEPTH_DEFAULT,
+            ).value
         )
-        self.display = self._as_bool(self.declare_parameter("display", False).value)
+        self.publish_annotated = bool(
+            self._as_bool(
+                self.declare_parameter(
+                    "publish_annotated",
+                    HAND_GRASP_PUBLISH_ANNOTATED_DEFAULT,
+                ).value
+            )
+        )
+        self.display = self._as_bool(
+            self.declare_parameter("display", HAND_GRASP_DISPLAY_DEFAULT).value
+        )
         self.show_return_close_roi = self._as_bool(
-            self.declare_parameter("show_return_close_roi", False).value
+            self.declare_parameter(
+                "show_return_close_roi",
+                HAND_GRASP_SHOW_RETURN_CLOSE_ROI_DEFAULT,
+            ).value
         )
         self.robot_status_topic = self.declare_parameter(
             "robot_status_topic",
@@ -204,79 +261,145 @@ class HandGraspDetectionNode(Node):
             ).value
         )
         self.sam_enabled = self._as_bool(
-            self.declare_parameter("sam_enabled", True).value
+            self.declare_parameter("sam_enabled", SAM_ENABLED_DEFAULT).value
         )
-        self.sam_backend = str(self.declare_parameter("sam_backend", "mobile_sam").value)
+        self.sam_backend = str(
+            self.declare_parameter("sam_backend", SAM_BACKEND_DEFAULT).value
+        )
         self.sam_checkpoint = str(
             self.declare_parameter(
                 "sam_checkpoint",
                 str(Path("weights") / HAND_GRASP_SAM_CHECKPOINT_NAME),
             ).value
         )
-        self.sam_model_type = str(self.declare_parameter("sam_model_type", "vit_t").value)
-        self.sam_device = str(self.declare_parameter("sam_device", "cuda").value)
+        self.sam_model_type = str(
+            self.declare_parameter("sam_model_type", SAM_MODEL_TYPE_DEFAULT).value
+        )
+        self.sam_device = str(
+            self.declare_parameter("sam_device", SAM_DEVICE_DEFAULT).value
+        )
         self.sam_track_interval = int(
-            self.declare_parameter("sam_track_interval", 10).value
+            self.declare_parameter(
+                "sam_track_interval",
+                HAND_GRASP_SAM_TRACK_INTERVAL,
+            ).value
         )
         self.sam_track_margin = int(
-            self.declare_parameter("sam_track_margin", 12).value
+            self.declare_parameter(
+                "sam_track_margin",
+                HAND_GRASP_SAM_TRACK_MARGIN,
+            ).value
         )
         self.sam_reseed_from_yolo = self._as_bool(
-            self.declare_parameter("sam_reseed_from_yolo", False).value
+            self.declare_parameter(
+                "sam_reseed_from_yolo",
+                HAND_GRASP_SAM_RESEED_FROM_YOLO,
+            ).value
         )
         self.sam_track_max_center_shift_px = float(
-            self.declare_parameter("sam_track_max_center_shift_px", 80.0).value
+            self.declare_parameter(
+                "sam_track_max_center_shift_px",
+                HAND_GRASP_SAM_TRACK_MAX_CENTER_SHIFT_PX,
+            ).value
         )
         self.sam_track_min_area_ratio = float(
-            self.declare_parameter("sam_track_min_area_ratio", 0.35).value
+            self.declare_parameter(
+                "sam_track_min_area_ratio",
+                HAND_GRASP_SAM_TRACK_MIN_AREA_RATIO,
+            ).value
         )
         self.sam_track_max_area_ratio = float(
-            self.declare_parameter("sam_track_max_area_ratio", 2.5).value
+            self.declare_parameter(
+                "sam_track_max_area_ratio",
+                HAND_GRASP_SAM_TRACK_MAX_AREA_RATIO,
+            ).value
         )
         self.sam_yolo_missing_grace_frames = int(
-            self.declare_parameter("sam_yolo_missing_grace_frames", 5).value
+            self.declare_parameter(
+                "sam_yolo_missing_grace_frames",
+                HAND_GRASP_SAM_YOLO_MISSING_GRACE_FRAMES,
+            ).value
         )
         self.sam_yolo_min_iou = float(
-            self.declare_parameter("sam_yolo_min_iou", 0.20).value
+            self.declare_parameter(
+                "sam_yolo_min_iou",
+                HAND_GRASP_SAM_YOLO_MIN_IOU,
+            ).value
         )
         self.sam_yolo_max_center_shift_px = float(
-            self.declare_parameter("sam_yolo_max_center_shift_px", 45.0).value
+            self.declare_parameter(
+                "sam_yolo_max_center_shift_px",
+                HAND_GRASP_SAM_YOLO_MAX_CENTER_SHIFT_PX,
+            ).value
         )
         self.pre_grasp_mask_min_scale = float(
-            self.declare_parameter("pre_grasp_mask_min_scale", 0.70).value
+            self.declare_parameter(
+                "pre_grasp_mask_min_scale",
+                HAND_GRASP_PRE_GRASP_MASK_MIN_SCALE,
+            ).value
         )
         self.pre_grasp_mask_max_scale = float(
-            self.declare_parameter("pre_grasp_mask_max_scale", 1.50).value
+            self.declare_parameter(
+                "pre_grasp_mask_max_scale",
+                HAND_GRASP_PRE_GRASP_MASK_MAX_SCALE,
+            ).value
         )
         self.depth_tool_mask_enabled = self._as_bool(
-            self.declare_parameter("depth_tool_mask_enabled", True).value
+            self.declare_parameter(
+                "depth_tool_mask_enabled",
+                HAND_GRASP_DEPTH_TOOL_MASK_ENABLED,
+            ).value
         )
         self.depth_tool_mask_tolerance_mm = float(
-            self.declare_parameter("depth_tool_mask_tolerance_mm", 45.0).value
+            self.declare_parameter(
+                "depth_tool_mask_tolerance_mm",
+                HAND_GRASP_DEPTH_TOOL_MASK_TOLERANCE_MM,
+            ).value
         )
         self.depth_tool_mask_margin = int(
-            self.declare_parameter("depth_tool_mask_margin", 12).value
+            self.declare_parameter(
+                "depth_tool_mask_margin",
+                HAND_GRASP_DEPTH_TOOL_MASK_MARGIN,
+            ).value
         )
         self.sam_depth_tolerance_mm = float(
-            self.declare_parameter("sam_depth_tolerance_mm", 30.0).value
+            self.declare_parameter(
+                "sam_depth_tolerance_mm",
+                SAM_DEPTH_TOLERANCE_MM,
+            ).value
         )
         self.sam_depth_min_valid_ratio = float(
-            self.declare_parameter("sam_depth_min_valid_ratio", 0.03).value
+            self.declare_parameter(
+                "sam_depth_min_valid_ratio",
+                SAM_DEPTH_MIN_VALID_RATIO,
+            ).value
         )
         self.sam_depth_expand_iterations = int(
-            self.declare_parameter("sam_depth_expand_iterations", 1).value
+            self.declare_parameter(
+                "sam_depth_expand_iterations",
+                SAM_DEPTH_EXPAND_ITERATIONS,
+            ).value
         )
         self.allow_bbox_lock = self._as_bool(
-            self.declare_parameter("allow_bbox_lock", True).value
+            self.declare_parameter("allow_bbox_lock", HAND_GRASP_ALLOW_BBOX_LOCK).value
         )
         self.mask_contact_radius = int(
-            self.declare_parameter("mask_contact_radius", 6).value
+            self.declare_parameter(
+                "mask_contact_radius",
+                HAND_GRASP_MASK_CONTACT_RADIUS,
+            ).value
         )
         self.mask_min_contact_landmarks = int(
-            self.declare_parameter("mask_min_contact_landmarks", 2).value
+            self.declare_parameter(
+                "mask_min_contact_landmarks",
+                HAND_GRASP_MASK_MIN_CONTACT_LANDMARKS,
+            ).value
         )
         self.mask_proximity_threshold = float(
-            self.declare_parameter("mask_proximity_threshold", 45.0).value
+            self.declare_parameter(
+                "mask_proximity_threshold",
+                HAND_GRASP_MASK_PROXIMITY_THRESHOLD,
+            ).value
         )
 
         yolo_model = str(
@@ -288,32 +411,62 @@ class HandGraspDetectionNode(Node):
                 ",".join(DEFAULT_TOOL_CLASSES),
             ).value
         )
-        yolo_conf = float(self.declare_parameter("yolo_conf", 0.20).value)
-        yolo_imgsz = int(self.declare_parameter("yolo_imgsz", 640).value)
-        max_hands = int(self.declare_parameter("max_hands", 2).value)
+        yolo_conf = float(
+            self.declare_parameter("yolo_conf", HAND_GRASP_YOLO_CONFIDENCE).value
+        )
+        yolo_imgsz = int(
+            self.declare_parameter("yolo_imgsz", HAND_GRASP_YOLO_IMAGE_SIZE).value
+        )
+        max_hands = int(
+            self.declare_parameter("max_hands", HAND_GRASP_MAX_HANDS).value
+        )
         self.depth_diff_threshold_mm = float(
-            self.declare_parameter("depth_diff_threshold_mm", 50.0).value
+            self.declare_parameter(
+                "depth_diff_threshold_mm",
+                HAND_GRASP_DEPTH_DIFF_THRESHOLD_MM,
+            ).value
         )
         self.depth_min_contact_landmarks = int(
-            self.declare_parameter("depth_min_contact_landmarks", 2).value
+            self.declare_parameter(
+                "depth_min_contact_landmarks",
+                HAND_GRASP_DEPTH_MIN_CONTACT_LANDMARKS,
+            ).value
         )
         self.depth_lock_min_frames = int(
-            self.declare_parameter("depth_lock_min_frames", 5).value
+            self.declare_parameter(
+                "depth_lock_min_frames",
+                HAND_GRASP_DEPTH_LOCK_MIN_FRAMES,
+            ).value
         )
         self.depth_lock_duration_sec = float(
-            self.declare_parameter("depth_lock_duration_sec", 3.0).value
+            self.declare_parameter(
+                "depth_lock_duration_sec",
+                HAND_GRASP_DEPTH_LOCK_DURATION_SEC,
+            ).value
         )
         self.depth_lock_stability_mm = float(
-            self.declare_parameter("depth_lock_stability_mm", 20.0).value
+            self.declare_parameter(
+                "depth_lock_stability_mm",
+                HAND_GRASP_DEPTH_LOCK_STABILITY_MM,
+            ).value
         )
         self.depth_lock_min_valid_ratio = float(
-            self.declare_parameter("depth_lock_min_valid_ratio", 0.5).value
+            self.declare_parameter(
+                "depth_lock_min_valid_ratio",
+                HAND_GRASP_DEPTH_LOCK_MIN_VALID_RATIO,
+            ).value
         )
         self.depth_lock_min_area_ratio = float(
-            self.declare_parameter("depth_lock_min_area_ratio", 0.001).value
+            self.declare_parameter(
+                "depth_lock_min_area_ratio",
+                HAND_GRASP_DEPTH_LOCK_MIN_AREA_RATIO,
+            ).value
         )
         self.depth_lock_max_area_ratio = float(
-            self.declare_parameter("depth_lock_max_area_ratio", 1.5).value
+            self.declare_parameter(
+                "depth_lock_max_area_ratio",
+                HAND_GRASP_DEPTH_LOCK_MAX_AREA_RATIO,
+            ).value
         )
         self.hand_detector = HandDetector(max_num_hands=max_hands)
         self.tool_detector = self._create_tool_detector(

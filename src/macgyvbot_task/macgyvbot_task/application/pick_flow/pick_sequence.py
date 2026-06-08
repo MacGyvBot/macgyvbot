@@ -5,6 +5,15 @@ import time
 import rclpy
 
 from macgyvbot_config.drawer import TOOL_OBSERVE_X_BACKOFF_M
+from macgyvbot_config.handoff import (
+    HANDOFF_RELEASE_WAIT_SEC,
+    HANDOFF_WAIT_POLL_SEC,
+)
+from macgyvbot_config.pick import (
+    PICK_OPEN_GRIPPER_WAIT_SEC,
+    PICK_PREGRASP_REOPEN_WAIT_SEC,
+    PICK_REFINE_SETTLE_WAIT_SEC,
+)
 
 from macgyvbot_manipulation.robot_pose import (
     current_ee_orientation,
@@ -28,7 +37,7 @@ from macgyvbot_task.application.logging_utils import (
 )
 from macgyvbot_task.application.task_control.task_step import TaskStep
 
-HANDOFF_DECISION_POLL_SEC = 0.1
+HANDOFF_DECISION_POLL_SEC = HANDOFF_WAIT_POLL_SEC
 HANDOFF_DECISION_PENDING_STATUS = "handoff_inspection_pending"
 
 
@@ -172,7 +181,7 @@ class PickSequenceRunner:
         return steps
     def _open_gripper(self):
         self.gripper.open_gripper()
-        cooperative_wait(0.5)
+        cooperative_wait(PICK_OPEN_GRIPPER_WAIT_SEC)
         return True
 
     def _move_to_pose(
@@ -218,7 +227,7 @@ class PickSequenceRunner:
         refine_started = time.monotonic()
 
         if self.refine_pick_target is not None and target_label:
-            cooperative_wait(0.2)
+            cooperative_wait(PICK_REFINE_SETTLE_WAIT_SEC)
             try:
                 log_info(
                     log,
@@ -465,7 +474,7 @@ class PickSequenceRunner:
         )
 
         self.gripper.open_gripper()
-        cooperative_wait(0.3)
+        cooperative_wait(PICK_PREGRASP_REOPEN_WAIT_SEC)
 
         if actual_descent_m <= 0.0:
             log_info(
@@ -726,7 +735,7 @@ class PickSequenceRunner:
         if self.tool_hold_monitor is not None:
             self.tool_hold_monitor.stop("handoff_release")
         self.gripper.open_gripper()
-        cooperative_wait(0.8)
+        cooperative_wait(HANDOFF_RELEASE_WAIT_SEC)
         return True
 
     def _home_before_close_drawer(self):

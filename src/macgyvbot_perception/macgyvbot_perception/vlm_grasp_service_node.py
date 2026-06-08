@@ -14,6 +14,10 @@ from rclpy.node import Node
 from macgyvbot_config.vlm import (
     DEFAULT_GRASP_POINT_MODE,
     GRASP_POINT_MODE_VLM,
+    SAM_BACKEND_DEFAULT,
+    SAM_DEVICE_DEFAULT,
+    SAM_ENABLED_DEFAULT,
+    SAM_MODEL_TYPE_DEFAULT,
     VLM_GRASP_SERVICE_NAME,
     VLM_ONLY_MODEL_BY_MODE,
     VLM_ONLY_MODES,
@@ -37,11 +41,11 @@ class VLMGraspServiceNode(Node):
         self.bridge = CvBridge()
         self.declare_parameter("vlm_service_name", VLM_GRASP_SERVICE_NAME)
         self.declare_parameter("grasp_point_mode", DEFAULT_GRASP_POINT_MODE)
-        self.declare_parameter("sam_enabled", True)
+        self.declare_parameter("sam_enabled", SAM_ENABLED_DEFAULT)
         self.declare_parameter("sam_checkpoint", "")
-        self.declare_parameter("sam_backend", "mobile_sam")
-        self.declare_parameter("sam_model_type", "vit_t")
-        self.declare_parameter("sam_device", "cuda")
+        self.declare_parameter("sam_backend", SAM_BACKEND_DEFAULT)
+        self.declare_parameter("sam_model_type", SAM_MODEL_TYPE_DEFAULT)
+        self.declare_parameter("sam_device", SAM_DEVICE_DEFAULT)
 
         self.grasp_point_mode = str(self.get_parameter("grasp_point_mode").value).strip()
         self.sam_kwargs = {

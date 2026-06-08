@@ -8,7 +8,12 @@ from PIL import Image
 
 from macgyvbot_config.vlm import (
     GRASP_POINT_MODE_VLM,
+    SAM_BACKEND_DEFAULT,
+    SAM_DEVICE_DEFAULT,
+    SAM_ENABLED_DEFAULT,
+    SAM_MODEL_TYPE_DEFAULT,
     VLM_GRASP_GRID_SIZES,
+    VLM_DEVICE_CUDA,
     VLM_INFERENCE_HISTORY_DIR,
     VLM_INFERENCE_HISTORY_ENABLED,
 )
@@ -28,11 +33,11 @@ class VLMGraspPointSelector:
     def __init__(
         self,
         logger,
-        sam_enabled=True,
+        sam_enabled=SAM_ENABLED_DEFAULT,
         sam_checkpoint="",
-        sam_backend="mobile_sam",
-        sam_model_type="vit_t",
-        sam_device="cuda",
+        sam_backend=SAM_BACKEND_DEFAULT,
+        sam_model_type=SAM_MODEL_TYPE_DEFAULT,
+        sam_device=SAM_DEVICE_DEFAULT,
         history_enabled=VLM_INFERENCE_HISTORY_ENABLED,
         history_dir=VLM_INFERENCE_HISTORY_DIR,
     ):
@@ -136,7 +141,7 @@ class VLMGraspPointSelector:
             f"local_weights={runtime['using_local_weights']}, "
             f"source={runtime['model_source']}"
         )
-        if runtime["device"] != "cuda":
+        if runtime["device"] != VLM_DEVICE_CUDA:
             self.logger.warn("VLM is not using CUDA. Running on CPU.")
         self.logger.info(
             "VLM 가중치 로드 시작: "

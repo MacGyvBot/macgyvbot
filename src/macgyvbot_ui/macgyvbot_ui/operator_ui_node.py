@@ -25,6 +25,12 @@ from macgyvbot_config.topics import (
     TOOL_DROP_TOPIC,
     TOOL_COMMAND_TOPIC,
 )
+from macgyvbot_config.ui import (
+    UI_CAMERA_TIMEOUT_SEC,
+    UI_CONNECTION_CHECK_PERIOD_SEC,
+    UI_DETECTOR_TIMEOUT_SEC,
+    UI_ROBOT_NODE_NAMES,
+)
 from macgyvbot_config.structured_logging import format_structured_log
 from macgyvbot_interfaces.msg import (
     CommandFeedback,
@@ -134,12 +140,15 @@ class OperatorUiNode(Node):
         self.declare_parameter('camera_status_topic', CAMERA_COLOR_TOPIC)
         self.declare_parameter('detector_image_topic', HAND_GRASP_IMAGE_TOPIC)
         self.declare_parameter('manual_gripper_service', MANUAL_GRIPPER_SERVICE)
-        self.declare_parameter('connection_check_period_sec', 1.0)
-        self.declare_parameter('camera_timeout_sec', 3.0)
-        self.declare_parameter('detector_timeout_sec', 3.0)
+        self.declare_parameter(
+            'connection_check_period_sec',
+            UI_CONNECTION_CHECK_PERIOD_SEC,
+        )
+        self.declare_parameter('camera_timeout_sec', UI_CAMERA_TIMEOUT_SEC)
+        self.declare_parameter('detector_timeout_sec', UI_DETECTOR_TIMEOUT_SEC)
         self.declare_parameter(
             'robot_node_names',
-            'macgyvbot_main_node,macgyvbot',
+            UI_ROBOT_NODE_NAMES,
         )
 
         if QApplication is None or VoiceCommandGuiWindow is None:

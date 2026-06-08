@@ -14,7 +14,18 @@ from rclpy.node import Node
 
 from macgyvbot_config.models import HAND_GRASP_SAM_CHECKPOINT_NAME
 from macgyvbot_config.structured_logging import format_structured_log
-from macgyvbot_config.vlm import SAM_YAW_SERVICE_NAME
+from macgyvbot_config.vlm import (
+    SAM_BACKEND_DEFAULT,
+    SAM_DEPTH_EXPAND_ITERATIONS,
+    SAM_DEPTH_MIN_VALID_RATIO,
+    SAM_DEPTH_TOLERANCE_MM,
+    SAM_DEVICE_DEFAULT,
+    SAM_ENABLED_DEFAULT,
+    SAM_MODEL_TYPE_DEFAULT,
+    SAM_YAW_SERVICE_NAME,
+    VLM_DATA_ROOT,
+    VLM_YAW_PCA_DEBUG_DIR,
+)
 from macgyvbot_interfaces.srv import SAMYaw
 from macgyvbot_perception.grasp_point.grasp_method import (
     estimate_yaw_from_binary_crop,
@@ -34,17 +45,23 @@ class SAMYawServiceNode(Node):
 
         self.bridge = CvBridge()
         self.declare_parameter("sam_yaw_service_name", SAM_YAW_SERVICE_NAME)
-        self.declare_parameter("sam_enabled", True)
+        self.declare_parameter("sam_enabled", SAM_ENABLED_DEFAULT)
         self.declare_parameter(
             "sam_checkpoint",
             str(Path("weights") / HAND_GRASP_SAM_CHECKPOINT_NAME),
         )
-        self.declare_parameter("sam_backend", "mobile_sam")
-        self.declare_parameter("sam_model_type", "vit_t")
-        self.declare_parameter("sam_device", "cuda")
-        self.declare_parameter("sam_depth_tolerance_mm", 30.0)
-        self.declare_parameter("sam_depth_min_valid_ratio", 0.03)
-        self.declare_parameter("sam_depth_expand_iterations", 1)
+        self.declare_parameter("sam_backend", SAM_BACKEND_DEFAULT)
+        self.declare_parameter("sam_model_type", SAM_MODEL_TYPE_DEFAULT)
+        self.declare_parameter("sam_device", SAM_DEVICE_DEFAULT)
+        self.declare_parameter("sam_depth_tolerance_mm", SAM_DEPTH_TOLERANCE_MM)
+        self.declare_parameter(
+            "sam_depth_min_valid_ratio",
+            SAM_DEPTH_MIN_VALID_RATIO,
+        )
+        self.declare_parameter(
+            "sam_depth_expand_iterations",
+            SAM_DEPTH_EXPAND_ITERATIONS,
+        )
 
         self.sam_enabled = self._as_bool(self.get_parameter("sam_enabled").value)
         self.sam_checkpoint = str(self.get_parameter("sam_checkpoint").value).strip()
@@ -131,7 +148,7 @@ class SAMYawServiceNode(Node):
             depth_mm=depth_to_mm(depth_image, "passthrough"),
             bbox_xyxy=bbox,
             sam_segmenter=segmenter,
-            data_root=Path("src/macgyvbot_perception/data"),
+            data_root=Path(VLM_DATA_ROOT),
             filename_prefix=f"pick_sam_yaw_{request.target_label}",
             sam_depth_tolerance_mm=self.sam_depth_tolerance_mm,
             sam_depth_min_valid_ratio=self.sam_depth_min_valid_ratio,
@@ -169,7 +186,7 @@ class SAMYawServiceNode(Node):
 
         response.success = True
         response.yaw_deg = float(yaw_deg)
-        response.debug_image_path = "src/macgyvbot_perception/data/yaw_pca"
+        response.debug_image_path = VLM_YAW_PCA_DEBUG_DIR
         self.get_logger().info(
             _log(
                 "SAM yaw service response ready",
