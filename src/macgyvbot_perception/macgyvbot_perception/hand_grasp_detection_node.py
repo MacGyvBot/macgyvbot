@@ -1585,7 +1585,11 @@ class HandGraspDetectionNode(Node):
         active_hand: Optional[dict],
         hand_infos: list[dict],
     ) -> None:
-        hand_pixel = extract_hand_center_pixel(active_hand, hand_infos)
+        hand_pixel = extract_hand_center_pixel(
+            active_hand,
+            hand_infos,
+            tool_mask=self.locked_tool.mask if self.locked_tool is not None else None,
+        )
         payload = {
             "state": result["state"],
             "hand_present": bool(hand_infos),

@@ -1847,6 +1847,7 @@ class TaskCoordinatorNode(Node):
 
     def _depth_cb(self, msg):
         self.state.depth_image = self.bridge.imgmsg_to_cv2(msg, "passthrough")
+        self.state.depth_encoding = msg.encoding
 
     def _wrench_cb(self, msg):
         self.state.latest_wrench = msg.wrench
