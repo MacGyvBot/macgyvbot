@@ -385,7 +385,7 @@ class CommandInputNode(Node):
             "resume": "재개 명령으로 이해했습니다. 작업 재개 요청으로 전달합니다.",
             "retry": "다시 인식하라는 뜻으로 이해했습니다.",
             "cancel": "현재 작업을 취소합니다. 다음 명령을 기다리겠습니다.",
-            "home": "Home 위치로 복귀하라는 뜻으로 이해했습니다.",
+            "home": "Home으로 복귀합니다.",
         }.get(action, "명령을 올바른 입력으로 판단했습니다.")
 
     def _publish_command(self, command):

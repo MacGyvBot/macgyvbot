@@ -14,6 +14,7 @@ HAND_DETECTED_MESSAGE = "손이 인식되었습니다."
 BRING_SEARCH_HAND_MESSAGE = "손 위치를 탐색합니다."
 BRING_WAIT_HANDOFF_MESSAGE = "공구를 받아주세요."
 BRING_DONE_MESSAGE = "공구 전달을 완료했습니다."
+BRING_RETURNED_HOME_MESSAGE = "공구를 원래 위치에 두고 Home으로 복귀했습니다."
 RETURN_SEARCH_HAND_MESSAGE = "손 위치를 탐색합니다."
 RETURN_WAIT_TOOL_MESSAGE = "공구를 그리퍼 위치에 둬주세요."
 RETURN_STORE_START_MESSAGE = "정리를 시작합니다."
@@ -92,6 +93,8 @@ def normal_robot_status_chat(status, action="", reason=""):
             return BRING_WAIT_HANDOFF_MESSAGE
         if normalized_status in {"done", "completed", "success"}:
             return BRING_DONE_MESSAGE
+        if normalized_status == "returned":
+            return BRING_RETURNED_HOME_MESSAGE
         return ""
 
     if normalized_action == "return":

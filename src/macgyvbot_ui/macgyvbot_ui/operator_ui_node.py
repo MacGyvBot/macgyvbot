@@ -123,7 +123,10 @@ class OperatorUiNode(Node):
         'vlm_loading',
         'vlm_inferencing',
     }
-    _CHAT_INPUT_DISABLED_STATES = _GRIPPER_ACTIVE_STATES
+    _CHAT_INPUT_DISABLED_STATES = _GRIPPER_ACTIVE_STATES - {
+        'busy',
+        'resumed',
+    }
 
     def __init__(self):
         super().__init__('operator_ui_node')
@@ -179,6 +182,8 @@ class OperatorUiNode(Node):
         self._last_hand_log_key = None
         self._last_tool_drop_key = None
         self._last_robot_state = 'unknown'
+        self._task_chat_count = 0
+        self._task_chat_limit = 5
         self._manual_gripper_backend_available = False
         self._manual_gripper_request_pending = False
         self._last_gripper_enabled = None
@@ -323,10 +328,16 @@ class OperatorUiNode(Node):
             level = 'info'
             status = '손 인식 재시도'
         else:
-            message = '사용자 손 인식을 중단하고 복귀합니다.'
-            event = 'CONTROL_HANDOFF_FALLBACK'
-            level = 'warn'
-            status = '인스팩션 복귀 요청'
+            if label == '복귀':
+                message = 'Home으로 복귀합니다.'
+                event = 'CONTROL_HANDOFF_FALLBACK'
+                level = 'warn'
+                status = 'Home 복귀 요청'
+            else:
+                message = '현재 작업을 취소합니다.'
+                event = 'CONTROL_CANCEL'
+                level = 'warn'
+                status = '작업 취소 요청'
 
         self._append_bot(message)
         self._append_log(
@@ -999,14 +1010,22 @@ class OperatorUiNode(Node):
         if command_key != self._task_chat_command_key:
             self._task_chat_command_key = command_key
             self._shown_task_chat_keys.clear()
+            self._task_chat_count = 0
 
         chat_message = abnormal_message or normal_chat_message
         if not chat_message and state in self._operational_chat_statuses():
             chat_message = message
         key = (command_key, state, chat_message)
         show_chat = bool(chat_message) and key not in self._shown_task_chat_keys
+        if (
+            show_chat
+            and self._task_chat_count >= self._task_chat_limit
+            and state not in self._chat_limit_exempt_statuses()
+        ):
+            show_chat = False
         if show_chat:
             self._shown_task_chat_keys.add(key)
+            self._task_chat_count += 1
             self._last_robot_status_key = key
 
         log_key = (state, str(tool_name), raw_message or message, reason)
@@ -1243,6 +1262,20 @@ class OperatorUiNode(Node):
             'vlm_loading',
             'vlm_inferencing',
             'vlm_ready',
+            'vlm_warning',
+            'vlm_error',
+        }
+
+    @staticmethod
+    def _chat_limit_exempt_statuses():
+        return {
+            'handoff_inspection_pending',
+            'failed',
+            'error',
+            'busy',
+            'rejected',
+            'cancelled',
+            'tool_dropped',
             'vlm_warning',
             'vlm_error',
         }
