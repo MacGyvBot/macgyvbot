@@ -1,4 +1,4 @@
-﻿"""Pick sequence step construction."""
+"""Pick sequence step construction."""
 
 import time
 
@@ -148,6 +148,7 @@ class PickSequenceRunner:
                     "서랍 벽 회피 높이 복귀 실패",
                     "서랍 벽 회피 높이 복귀 실패",
                     "lift_failed",
+                    collision_scene_key="pick/lift",
                 ),
             ),
             TaskStep(
@@ -160,7 +161,7 @@ class PickSequenceRunner:
                 lambda: self._wait_human_grasp(context["plan"], context),
             ),
             TaskStep("pick/release_to_human", self._release_to_human),
-            TaskStep("pick/home_before_close_drawer", self._home_before_close_drawer),
+            #TaskStep("pick/home_before_close_drawer", self._home_before_close_drawer),
             TaskStep(
                 "pick/close_drawer",
                 lambda: self._close_drawer_after_handoff(context),
@@ -185,6 +186,7 @@ class PickSequenceRunner:
         failure_message,
         failure_reason,
         min_z=None,
+        collision_scene_key=None,
     ):
         log = self.state.logger()
         log_info(log, log_message, step=failure_reason, event="start")
@@ -192,6 +194,7 @@ class PickSequenceRunner:
             log,
             pose_goal=make_safe_pose(x, y, z, ori, log),
             min_z=min_z,
+            collision_scene_key=collision_scene_key,
         )
         if ok:
             return True
@@ -292,6 +295,7 @@ class PickSequenceRunner:
             "서랍 내부 관찰 offset 이동 실패. Pick 시퀀스 중단",
             "서랍 내부 관찰 offset 이동 실패",
             "observe_offset_move_failed",
+            collision_scene_key="pick/observe_offset_move",
         )
         if not ok:
             return False
@@ -328,7 +332,11 @@ class PickSequenceRunner:
 
     def _rotate_wrist(self, vlm_yaw_deg, context):
         log = self.state.logger()
-        ok = self.motion.rotate_wrist_by_yaw_deg(vlm_yaw_deg, log)
+        ok = self.motion.rotate_wrist_by_yaw_deg(
+            vlm_yaw_deg,
+            log,
+            collision_scene_key="pick/apply_wrist_yaw",
+        )
         if ok:
             context["ori"] = current_ee_orientation(self.robot)
             return True
@@ -362,6 +370,7 @@ class PickSequenceRunner:
             "파지 XY 위치 정렬 실패. Pick 시퀀스 중단",
             "파지 XY 위치 정렬 실패",
             "grasp_xy_move_failed",
+            collision_scene_key="pick/grasp_xy_align",
         ):
             return False
 
@@ -386,6 +395,7 @@ class PickSequenceRunner:
             "파지 높이 하강 실패. Pick 시퀀스를 중단합니다.",
             "파지 높이 하강 실패",
             "grasp_descent_failed",
+            collision_scene_key="pick/grasp_descent",
         )
 
     def _grasp_tool(self):
@@ -468,7 +478,7 @@ class PickSequenceRunner:
             return True
 
         return self._move_to_pose(
-            "4.5?④퀎: pre-grasp actual depth 湲곕컲 異붽? ?섍컯",
+            "4.5단계: pre-grasp actual depth 기반 추가 하강",
             plan.target_x,
             plan.target_y,
             target_z,
@@ -477,6 +487,7 @@ class PickSequenceRunner:
             "pre-grasp 추가 하강 실패",
             "pregrasp_descent_failed",
             min_z=redescend_min_z,
+            collision_scene_key="pick/pregrasp_depth_adjust",
         )
 
     def _wait_tool_mask_lock(self):
@@ -725,7 +736,10 @@ class PickSequenceRunner:
             step="home_before_close_drawer",
             event="start",
         )
-        return self.handoff.move_home_after_handoff(self.state.logger())
+        return self.handoff.move_home_after_handoff(
+            self.state.logger(),
+            collision_scene_key="handoff/home_before_close_drawer",
+        )
 
     def _home_after_handoff(self):
         log_info(self.state.logger(), "home after handoff", step="home", event="start")

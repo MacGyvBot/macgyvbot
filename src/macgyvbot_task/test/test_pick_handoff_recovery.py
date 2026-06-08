@@ -90,12 +90,19 @@ class FakeMotion:
         self.min_z_values = []
         self.home_calls = 0
 
-    def plan_and_execute(self, logger, pose_goal=None, state_goal=None, min_z=None):
+    def plan_and_execute(
+        self,
+        logger,
+        pose_goal=None,
+        state_goal=None,
+        min_z=None,
+        collision_scene_key=None,
+    ):
         self.targets.append(pose_goal)
         self.min_z_values.append(min_z)
         return self.results.pop(0)
 
-    def move_to_home_joints(self, logger):
+    def move_to_home_joints(self, logger, collision_scene_key=None):
         self.home_calls += 1
         return True
 
@@ -165,7 +172,12 @@ class FakeHandoff:
         self.last_failure_reason = "handoff_search_failed"
         return None, None, None
 
-    def move_home_after_handoff(self, logger, publish_on_failure=True):
+    def move_home_after_handoff(
+        self,
+        logger,
+        publish_on_failure=True,
+        collision_scene_key=None,
+    ):
         self.events.append("home")
         return True
 

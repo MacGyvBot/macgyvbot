@@ -293,13 +293,28 @@ def plan_and_execute(
     params=None,
     should_interrupt=None,
     execute_trajectory=None,
+    planning_precondition=None,
     min_z=None,
 ):
     if should_interrupt is not None and should_interrupt():
         logger.info("중단 요청으로 planning/execution을 시작하지 않습니다.")
         return False
 
+    if planning_precondition is not None:
+        try:
+            planning_ready = bool(planning_precondition(logger))
+        except Exception as exc:
+            logger.error(f"planning precondition 확인 중 예외 발생: {exc}")
+            return False
+        if not planning_ready:
+            logger.error("planning precondition을 만족하지 않아 planning을 중단합니다.")
+            return False
+
     arm.set_start_state_to_current_state()
+
+    if should_interrupt is not None and should_interrupt():
+        logger.info("중단 요청으로 planning/execution을 시작하지 않습니다.")
+        return False
 
     if pose_goal:
         x = pose_goal.pose.position.x
@@ -361,16 +376,27 @@ class MoveItController:
         node=None,
         trajectory_action_name=DEFAULT_TRAJECTORY_ACTION_NAME,
         poll_interval_sec=0.02,
+        planning_precondition=None,
+        drawer_collision_scene=None,
+        gripper_self_collision_scene=None,
+        enable_drawer_collision_scene=True,
+        enable_gripper_self_collision_acm=True,
     ):
         self.robot = robot
         self.arm = arm
         self.params = params
         self.should_interrupt = should_interrupt
+        self.planning_precondition = planning_precondition
+        self.drawer_collision_scene = drawer_collision_scene
+        self.gripper_self_collision_scene = gripper_self_collision_scene
+        self.enable_drawer_collision_scene = enable_drawer_collision_scene
+        self.enable_gripper_self_collision_acm = enable_gripper_self_collision_acm
         self.node = node
         self.trajectory_action_name = trajectory_action_name
         self.poll_interval_sec = poll_interval_sec
         self._current_goal_handle = None
         self._goal_lock = threading.Lock()
+        self._gripper_self_collision_acm_applied = False
         self._trajectory_client = None
         if self.node is not None:
             self._trajectory_client = ActionClient(
@@ -379,7 +405,20 @@ class MoveItController:
                 self.trajectory_action_name,
             )
 
-    def plan_and_execute(self, logger, pose_goal=None, state_goal=None, min_z=None):
+    def plan_and_execute(
+        self,
+        logger,
+        pose_goal=None,
+        state_goal=None,
+        min_z=None,
+        collision_scene_key=None,
+    ):
+        if not self._ensure_collision_planning_scene_ready(
+            logger,
+            collision_scene_key=collision_scene_key,
+        ):
+            return False
+
         return plan_and_execute(
             self.robot,
             self.arm,
@@ -391,8 +430,68 @@ class MoveItController:
             execute_trajectory=self._execute_trajectory_action
             if self._trajectory_client is not None
             else None,
+            planning_precondition=self.planning_precondition,
             min_z=min_z,
         )
+
+    def _ensure_collision_planning_scene_ready(
+        self,
+        logger,
+        collision_scene_key=None,
+    ):
+        if not self.ensure_gripper_self_collision_acm(logger):
+            return False
+        return self._ensure_drawer_collision_scene_ready(
+            logger,
+            collision_scene_key=collision_scene_key,
+        )
+
+    def _ensure_drawer_collision_scene_ready(
+        self,
+        logger,
+        collision_scene_key=None,
+    ):
+        if not self.enable_drawer_collision_scene:
+            return True
+        if self.drawer_collision_scene is None:
+            logger.error("drawer collision scene manager is not initialized")
+            return False
+
+        return self.drawer_collision_scene.ensure_ready_for_scene_key(
+            collision_scene_key,
+            logger=logger,
+            attempts=2,
+            retry_delay_sec=0.1,
+            refresh=True,
+        )
+
+    def ensure_gripper_self_collision_acm(
+        self,
+        logger,
+        attempts=1,
+        retry_delay_sec=0.0,
+    ):
+        if not self.enable_gripper_self_collision_acm:
+            return True
+        if self._gripper_self_collision_acm_applied:
+            return True
+        if self.gripper_self_collision_scene is None:
+            logger.error("RG2 self-collision ACM manager is not initialized")
+            return False
+
+        attempts = max(1, int(attempts))
+        for attempt_index in range(attempts):
+            if self.gripper_self_collision_scene.apply(logger):
+                self._gripper_self_collision_acm_applied = True
+                return True
+            if attempt_index + 1 < attempts and retry_delay_sec > 0.0:
+                time.sleep(float(retry_delay_sec))
+
+        logger.error(
+            "RG2 self-collision ACM patch failed; planning may start in "
+            "gripper self-collision"
+        )
+        return False
 
     def cancel_current_goal(self, logger=None, reason=""):
         """Cancel the active controller goal if this controller owns one."""
@@ -566,7 +665,7 @@ class MoveItController:
         )
         return None
 
-    def move_to_home_joints(self, logger):
+    def move_to_home_joints(self, logger, collision_scene_key="robot/home"):
         """Move to the configured Home joint pose."""
         if self._is_at_joint_goal(
             HOME_JOINTS,
@@ -581,7 +680,11 @@ class MoveItController:
         state_goal.update()
 
         logger.info("Home joint pose로 복귀합니다.")
-        ok = self.plan_and_execute(logger, state_goal=state_goal)
+        ok = self.plan_and_execute(
+            logger,
+            state_goal=state_goal,
+            collision_scene_key=collision_scene_key,
+        )
         if ok:
             return True
 
@@ -647,7 +750,12 @@ class MoveItController:
 
         return True
 
-    def rotate_wrist_by_yaw_deg(self, yaw_deg, logger):
+    def rotate_wrist_by_yaw_deg(
+        self,
+        yaw_deg,
+        logger,
+        collision_scene_key="robot/rotate_wrist",
+    ):
         if yaw_deg is None:
             return True
 
@@ -709,4 +817,8 @@ class MoveItController:
         state_goal.set_joint_group_positions(GROUP_NAME, target_positions)
         state_goal.update()
 
-        return self.plan_and_execute(logger, state_goal=state_goal)
+        return self.plan_and_execute(
+            logger,
+            state_goal=state_goal,
+            collision_scene_key=collision_scene_key,
+        )

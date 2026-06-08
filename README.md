@@ -261,6 +261,29 @@ MoveIt pose goal 이동은 `macgyvbot_manipulation.moveit_controller`에서
 RobotState goal로 사용합니다. 안전 한계를 넘는 큰 joint delta가 남으면 pose goal
 fallback으로 우회하지 않고 planning을 중단합니다.
 
+Task coordinator는 전역 MoveIt planner로 OMPL `RRTConnectkConfigDefault`를
+사용합니다. drawer collision object가 있는 상태에서 sampling 기반 우회 경로를
+찾기 위한 설정이며, 관련 MoveItPy pipeline 목록은
+`src/macgyvbot_bringup/config/moveit_py.yaml`에서 관리합니다.
+
+Drawer collision scene은 `base_link` 기준의 직육면체 keep-out 영역으로
+등록됩니다. 기본 profile은 `drawer_only`이고, 특정 motion key가
+`macgyvbot_config.drawer.DRAWER_COLLISION_SCENE_KEY_PROFILES`에 등록된 경우에만
+`drawer_opened` profile로 승격되어 열린 서랍 boundary까지 함께 적용됩니다.
+`MoveItController.plan_and_execute()`는 모든 planning 직전에 drawer scene과 RG2
+내부 self-collision ACM 적용 상태를 확인하며, scene이 준비되지 않으면 planning을
+시작하지 않습니다.
+
+기본 launch에서는 drawer collision scene과 RG2 내부 self-collision ACM이 켜져
+있습니다. 장비 bringup 또는 디버깅 중에는 아래 launch argument로 끌 수 있지만,
+실제 로봇 동작에서는 안전 검증 없이 비활성화하지 않습니다.
+
+```bash
+ros2 launch macgyvbot_bringup macgyvbot.launch.py \
+  enable_drawer_collision_scene:=false \
+  enable_gripper_self_collision_acm:=false
+```
+
 ## 테스트
 
 빠른 문법 검사:

@@ -50,6 +50,11 @@ setup(
         ["*.npy", "*.md"],
     )
     + gather_data_files(
+        "urdf",
+        f"share/{package_name}/urdf",
+        ["**/*.urdf", "**/*.xacro", "**/*.stl", "**/*.dae"],
+    )
+    + gather_data_files(
         "weights",
         f"share/{package_name}/weights",
         ["*.pt", "*.pth", "*.pkl", "*.py", ".gitkeep"],

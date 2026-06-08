@@ -92,6 +92,7 @@ class PickHandoffFlow:
                     ori,
                     logger,
                 ),
+                collision_scene_key="handoff/return_lift_to_clearance",
             )
             if not ok:
                 logger.error(
@@ -114,6 +115,7 @@ class PickHandoffFlow:
                 ori,
                 logger,
             ),
+            collision_scene_key="handoff/return_move_above_target",
         )
         if not ok:
             logger.error(
@@ -126,6 +128,7 @@ class PickHandoffFlow:
         ok = self.motion.plan_and_execute(
             logger,
             pose_goal=make_safe_pose(target_x, target_y, grasp_z, ori, logger),
+            collision_scene_key="handoff/return_descent_to_target",
         )
         if not ok:
             logger.error(
@@ -150,6 +153,7 @@ class PickHandoffFlow:
                 ori,
                 logger,
             ),
+            collision_scene_key="handoff/return_lift_after_release",
         )
         if not ok:
             logger.error("공구를 놓은 뒤 안전 높이 복귀 실패")
@@ -172,7 +176,10 @@ class PickHandoffFlow:
             return True
 
         logger.info("반환 7단계: Home joint pose로 복귀")
-        ok = self.motion.move_to_home_joints(logger)
+        ok = self.motion.move_to_home_joints(
+            logger,
+            collision_scene_key="handoff/home_after_release",
+        )
         if not ok:
             logger.error("공구 반환 후 Home 복귀 실패")
             return False
@@ -333,8 +340,16 @@ class PickHandoffFlow:
 
         return final_pose.x, final_pose.y, final_pose.z
 
-    def move_home_after_handoff(self, logger, publish_on_failure=True):
-        ok = self.motion.move_to_home_joints(logger)
+    def move_home_after_handoff(
+        self,
+        logger,
+        publish_on_failure=True,
+        collision_scene_key="handoff/home_after_release",
+    ):
+        ok = self.motion.move_to_home_joints(
+            logger,
+            collision_scene_key=collision_scene_key,
+        )
         if not ok:
             logger.error("전달 후 Home 복귀 실패")
             if publish_on_failure:

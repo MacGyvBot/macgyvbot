@@ -91,7 +91,13 @@ class FakeMotion:
         self.plan_calls = 0
         self.pose_goals = []
 
-    def plan_and_execute(self, logger, pose_goal=None, state_goal=None):
+    def plan_and_execute(
+        self,
+        logger,
+        pose_goal=None,
+        state_goal=None,
+        collision_scene_key=None,
+    ):
         self.plan_calls += 1
         if pose_goal is not None:
             self.pose_goals.append(pose_goal)
