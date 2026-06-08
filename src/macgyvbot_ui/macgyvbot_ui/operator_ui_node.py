@@ -38,6 +38,7 @@ from macgyvbot_interfaces.msg import (
 )
 from macgyvbot_ui.event_chat import (
     command_feedback_chat,
+    normal_robot_status_chat,
     robot_status_chat,
     tool_drop_chat,
 )
@@ -171,6 +172,8 @@ class OperatorUiNode(Node):
         self._last_robot_status_key = None
         self._last_robot_log_key = None
         self._last_event_chat_key = None
+        self._task_chat_command_key = None
+        self._shown_task_chat_keys = set()
         self._last_hand_present = None
         self._last_hand_log_key = None
         self._last_tool_drop_key = None
@@ -946,6 +949,7 @@ class OperatorUiNode(Node):
 
         tool_name = status.get('tool_name') or self._last_target_label or 'unknown'
         target_label = self._tool_display_name(tool_name)
+        action = self._status_action(status)
         raw_message = str(status.get('message') or '').strip()
         reason = str(status.get('reason') or '').strip()
 
@@ -954,6 +958,7 @@ class OperatorUiNode(Node):
             if state == 'handoff_inspection_pending'
             else robot_status_chat(state, reason, raw_message)
         )
+        normal_chat_message = normal_robot_status_chat(state, action, reason)
         message = (
             abnormal_message
             or self._robot_status_message(state, target_label, raw_message, reason)
@@ -963,11 +968,18 @@ class OperatorUiNode(Node):
         severity = self._robot_status_severity(state)
         log_message = self._robot_log_message(status, state, target_label, message, reason)
 
-        key = (state, str(tool_name), raw_message or message)
-        chat_state = bool(abnormal_message) or state in self._chat_robot_statuses()
-        force_show = state in self._always_show_robot_statuses()
-        show_chat = chat_state and (force_show or key != self._last_robot_status_key)
+        command_key = self._status_command_key(status, action, tool_name)
+        if command_key != self._task_chat_command_key:
+            self._task_chat_command_key = command_key
+            self._shown_task_chat_keys.clear()
+
+        chat_message = abnormal_message or normal_chat_message
+        if not chat_message and state in self._operational_chat_statuses():
+            chat_message = message
+        key = (command_key, state, chat_message)
+        show_chat = bool(chat_message) and key not in self._shown_task_chat_keys
         if show_chat:
+            self._shown_task_chat_keys.add(key)
             self._last_robot_status_key = key
 
         log_key = (state, str(tool_name), raw_message or message, reason)
@@ -978,7 +990,7 @@ class OperatorUiNode(Node):
         return {
             'state': state,
             'message': message,
-            'chat_message': message,
+            'chat_message': chat_message,
             'log_message': log_message,
             'panel_status': panel_status,
             'stage_text': stage_text,
@@ -987,6 +999,33 @@ class OperatorUiNode(Node):
             'show_chat': show_chat,
             'show_log': show_log,
         }
+
+    @staticmethod
+    def _status_action(status):
+        action = str(status.get('action') or '').strip().lower()
+        if action and action != 'unknown':
+            return action
+        command = status.get('command') or {}
+        if isinstance(command, dict):
+            command_action = str(command.get('action') or '').strip().lower()
+            if command_action and command_action != 'unknown':
+                return command_action
+        return action or 'unknown'
+
+    @staticmethod
+    def _status_command_key(status, action, tool_name):
+        command = status.get('command') or {}
+        if isinstance(command, dict):
+            raw_text = str(command.get('raw_text') or '').strip()
+            command_tool = str(command.get('tool_name') or '').strip()
+            command_action = str(command.get('action') or '').strip()
+            if raw_text or command_tool or command_action:
+                return (
+                    command_action or action,
+                    command_tool or str(tool_name or ''),
+                    raw_text,
+                )
+        return (action, str(tool_name or ''), '')
 
     def _robot_status_message(self, state, target_label, raw_message, reason):
         if reason in {'handoff_search_failed', 'hand_target_not_found'}:
@@ -1141,42 +1180,17 @@ class OperatorUiNode(Node):
 
     @staticmethod
     def _chat_robot_statuses():
+        return set()
+
+    @staticmethod
+    def _operational_chat_statuses():
         return {
-            'accepted',
-            'searching_drawer',
-            'moving_to_drawer',
-            'searching_drawer_handle',
-            'opening_drawer',
-            'closing_drawer',
-            'searching',
-            'picking',
-            'approaching_tool',
-            'grasping',
-            'grasp_success',
-            'lifting_tool',
-            'moving_to_handoff',
-            'searching_hand',
-            'waiting_handoff',
-            'handoff_inspection_pending',
-            'handoff_complete',
-            'waiting_return_handoff',
-            'moving_return_grasp_pose',
-            'checking_return_target',
-            'return_hand_detected',
-            'placing_return_tool',
-            'returning_home',
-            'done',
-            'completed',
-            'success',
             'failed',
             'error',
             'busy',
-            'paused',
-            'resumed',
-            'cancelled',
             'rejected',
+            'cancelled',
             'tool_dropped',
-            'returned',
             'vlm_loading',
             'vlm_inferencing',
             'vlm_ready',

@@ -11,6 +11,13 @@ import re
 
 HAND_NOT_FOUND_MESSAGE = "손이 인식되지 않았습니다. 움직여서 카메라에 나오게 하세요!"
 HAND_DETECTED_MESSAGE = "손이 인식되었습니다."
+BRING_SEARCH_HAND_MESSAGE = "손 위치를 탐색합니다."
+BRING_WAIT_HANDOFF_MESSAGE = "공구를 받아주세요."
+BRING_DONE_MESSAGE = "공구 전달을 완료했습니다."
+RETURN_SEARCH_HAND_MESSAGE = "손 위치를 탐색합니다."
+RETURN_WAIT_TOOL_MESSAGE = "공구를 그리퍼 위치에 둬주세요."
+RETURN_STORE_START_MESSAGE = "정리를 시작합니다."
+RETURN_DONE_MESSAGE = "정리를 완료했습니다."
 PARSE_FAILED_MESSAGE = "명령을 이해하지 못했습니다. 다시 말씀해주세요."
 TOOL_DROPPED_MESSAGE = "공구를 떨어트렸습니다. inspection하여 다시 찾습니다."
 GRASP_RETRY_MESSAGE = "공구를 잡지 못했습니다. 다시 시도합니다."
@@ -57,14 +64,49 @@ def robot_status_chat(status, reason="", message=""):
 
     if normalized_status == "tool_dropped":
         return TOOL_DROPPED_MESSAGE
-    if normalized_status == "waiting_handoff":
-        return HAND_DETECTED_MESSAGE
     if normalized_reason in _HAND_NOT_FOUND_REASONS:
         return HAND_NOT_FOUND_MESSAGE
     if normalized_reason in _GRASP_FAILURE_REASONS:
         return GRASP_FAILED_MESSAGE
     if normalized_status == "grasping" and _is_retry_attempt(raw_message):
         return GRASP_RETRY_MESSAGE
+    return ""
+
+
+def normal_robot_status_chat(status, action="", reason=""):
+    """Return minimal user-facing chat for ordinary task progress."""
+    normalized_status = _normalize(status)
+    normalized_action = _normalize(action)
+    normalized_reason = _normalize(reason)
+
+    if normalized_status == "handoff_inspection_pending":
+        return (
+            "사용자의 손을 인식하지 못했습니다. "
+            "다시 인식할까요, 복귀할까요?"
+        )
+
+    if normalized_action == "bring":
+        if normalized_status == "searching_hand":
+            return BRING_SEARCH_HAND_MESSAGE
+        if normalized_status == "waiting_handoff":
+            return BRING_WAIT_HANDOFF_MESSAGE
+        if normalized_status in {"done", "completed", "success"}:
+            return BRING_DONE_MESSAGE
+        return ""
+
+    if normalized_action == "return":
+        if normalized_status == "moving_return_grasp_pose":
+            return RETURN_SEARCH_HAND_MESSAGE
+        if normalized_status == "checking_return_target":
+            if normalized_reason in _HAND_NOT_FOUND_REASONS:
+                return ""
+            return RETURN_WAIT_TOOL_MESSAGE
+        if normalized_status == "grasp_success":
+            return RETURN_STORE_START_MESSAGE
+        if normalized_status in {"done", "returned", "completed", "success"}:
+            return RETURN_DONE_MESSAGE
+        return ""
+
     return ""
 
 

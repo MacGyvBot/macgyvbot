@@ -4,13 +4,20 @@
 import unittest
 
 from macgyvbot_ui.event_chat import (
+    BRING_DONE_MESSAGE,
+    BRING_SEARCH_HAND_MESSAGE,
+    BRING_WAIT_HANDOFF_MESSAGE,
     GRASP_RETRY_MESSAGE,
-    HAND_DETECTED_MESSAGE,
     HAND_NOT_FOUND_MESSAGE,
     PARSE_FAILED_MESSAGE,
+    RETURN_DONE_MESSAGE,
+    RETURN_SEARCH_HAND_MESSAGE,
+    RETURN_STORE_START_MESSAGE,
+    RETURN_WAIT_TOOL_MESSAGE,
     TOOL_DROPPED_MESSAGE,
     command_feedback_chat,
     hand_detection_chat,
+    normal_robot_status_chat,
     robot_status_chat,
     tool_drop_chat,
 )
@@ -35,7 +42,7 @@ class EventChatTest(unittest.TestCase):
     def test_robot_status_abnormal_messages(self):
         self.assertEqual(
             robot_status_chat("waiting_handoff"),
-            HAND_DETECTED_MESSAGE,
+            "",
         )
         self.assertEqual(
             robot_status_chat("failed", "handoff_search_failed"),
@@ -53,6 +60,40 @@ class EventChatTest(unittest.TestCase):
             robot_status_chat("tool_dropped"),
             TOOL_DROPPED_MESSAGE,
         )
+
+    def test_normal_bring_status_messages_are_minimal(self):
+        self.assertEqual(
+            normal_robot_status_chat("searching_hand", "bring"),
+            BRING_SEARCH_HAND_MESSAGE,
+        )
+        self.assertEqual(
+            normal_robot_status_chat("waiting_handoff", "bring"),
+            BRING_WAIT_HANDOFF_MESSAGE,
+        )
+        self.assertEqual(
+            normal_robot_status_chat("done", "bring"),
+            BRING_DONE_MESSAGE,
+        )
+        self.assertEqual(normal_robot_status_chat("moving_to_drawer", "bring"), "")
+
+    def test_normal_return_status_messages_are_minimal(self):
+        self.assertEqual(
+            normal_robot_status_chat("moving_return_grasp_pose", "return"),
+            RETURN_SEARCH_HAND_MESSAGE,
+        )
+        self.assertEqual(
+            normal_robot_status_chat("checking_return_target", "return"),
+            RETURN_WAIT_TOOL_MESSAGE,
+        )
+        self.assertEqual(
+            normal_robot_status_chat("grasp_success", "return"),
+            RETURN_STORE_START_MESSAGE,
+        )
+        self.assertEqual(
+            normal_robot_status_chat("done", "return"),
+            RETURN_DONE_MESSAGE,
+        )
+        self.assertEqual(normal_robot_status_chat("opening_drawer", "return"), "")
 
     def test_tool_drop_event_message(self):
         self.assertEqual(tool_drop_chat("tool_dropped"), TOOL_DROPPED_MESSAGE)
