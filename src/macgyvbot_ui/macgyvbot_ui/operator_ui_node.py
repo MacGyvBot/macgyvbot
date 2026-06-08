@@ -138,6 +138,7 @@ class OperatorUiNode(Node):
         self.declare_parameter('connection_check_period_sec', 1.0)
         self.declare_parameter('camera_timeout_sec', 3.0)
         self.declare_parameter('detector_timeout_sec', 3.0)
+        self.declare_parameter('chat_input_release_grace_sec', 1.5)
         self.declare_parameter(
             'robot_node_names',
             'macgyvbot_main_node,macgyvbot',
@@ -184,6 +185,8 @@ class OperatorUiNode(Node):
         self._last_gripper_reason = ''
         self._last_chat_input_enabled = None
         self._last_chat_input_reason = ''
+        self._chat_input_hold_until_ns = 0
+        self._chat_input_release_timer_active = False
         self._robot_status_topic = robot_status_topic
         self._manual_gripper_service = (
             str(manual_gripper_service).strip() or MANUAL_GRIPPER_SERVICE
@@ -200,6 +203,10 @@ class OperatorUiNode(Node):
         )
         self._detector_timeout_ns = int(
             float(self.get_parameter('detector_timeout_sec').value) * 1_000_000_000
+        )
+        self._chat_input_release_grace_ns = int(
+            float(self.get_parameter('chat_input_release_grace_sec').value)
+            * 1_000_000_000
         )
 
         self._stt_pub = self.create_publisher(CommandText, stt_text_topic, 10)
@@ -329,7 +336,27 @@ class OperatorUiNode(Node):
             event=event,
             detail=f'topic={TASK_CONTROL_TOPIC}, action={action}, source=operator_ui',
         )
+        if action == 'pause':
+            self._append_pause_followup()
         self._set_status(status)
+
+    def _append_pause_followup(self):
+        followup_message = '작업을 재개할까요, 아니면 이번 작업을 취소할까요?'
+        self._append_bot(followup_message)
+        if self.window is not None and hasattr(self.window, 'append_control_actions'):
+            self.window.append_control_actions(
+                (
+                    ('재개', '재개', 'resume'),
+                    ('취소', '취소', 'cancel'),
+                )
+            )
+        self._append_log(
+            'info',
+            followup_message,
+            source='ui.chat',
+            event='QUICK_ACTIONS',
+            detail='actions=resume,cancel',
+        )
 
     def _mark_self_published(self, text):
         with self._self_pub_lock:
@@ -1570,10 +1597,33 @@ class OperatorUiNode(Node):
     def _chat_input_state(self):
         state = str(self._last_robot_state or 'unknown').strip().lower()
         if state in {'unknown', 'initializing'}:
-            return True, '로봇 노드 실행 대기 중입니다. 실행 후 명령을 입력해주세요.'
+            return True, ''
         if state in self._CHAT_INPUT_DISABLED_STATES:
+            now_ns = self.get_clock().now().nanoseconds
+            self._chat_input_hold_until_ns = max(
+                self._chat_input_hold_until_ns,
+                now_ns + self._chat_input_release_grace_ns,
+            )
             return False, '동작 실행 중... 상태 버튼이나 음성 명령을 사용해주세요.'
+        if self._chat_input_hold_until_ns > self.get_clock().now().nanoseconds:
+            self._schedule_chat_input_release_refresh()
+            return False, '동작 정리 중... 잠시만 기다려주세요.'
         return True, ''
+
+    def _schedule_chat_input_release_refresh(self):
+        if self._chat_input_release_timer_active:
+            return
+
+        now_ns = self.get_clock().now().nanoseconds
+        delay_ns = max(0, self._chat_input_hold_until_ns - now_ns)
+        delay_ms = max(50, int(delay_ns / 1_000_000))
+        self._chat_input_release_timer_active = True
+
+        def refresh():
+            self._chat_input_release_timer_active = False
+            self._refresh_chat_input_state()
+
+        QTimer.singleShot(delay_ms, refresh)
 
 
 def main(args=None):

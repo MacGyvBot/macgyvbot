@@ -1,6 +1,7 @@
 """PyQt window components for the macgyvbot voice command GUI node."""
 
 from datetime import datetime
+from pathlib import Path
 
 try:
     from PyQt5.QtCore import Qt, QTimer
@@ -118,6 +119,8 @@ else:
             self._subtitle = QLabel('음성 명령 기반 공구 전달 로봇')
             self._avatar = QLabel('M')
             self._avatar.setAlignment(Qt.AlignCenter)
+            self._avatar.setFixedSize(44, 44)
+            self._apply_avatar_pixmap()
 
             input_layout = QHBoxLayout()
             input_layout.setContentsMargins(0, 12, 0, 0)
@@ -1142,11 +1145,11 @@ else:
                 background-color: #E7F1FF;
                 border: 1px solid #C7DBF5;
                 color: #2F6FDC;
-                border-radius: 18px;
-                min-width: 36px;
-                max-width: 36px;
-                min-height: 36px;
-                max-height: 36px;
+                border-radius: 22px;
+                min-width: 44px;
+                max-width: 44px;
+                min-height: 44px;
+                max-height: 44px;
                 font-size: 18px;
                 font-weight: 900;
                 '''
@@ -1192,6 +1195,26 @@ else:
             '''
             self._task_target_status.setStyleSheet(task_style)
             self._task_stage_status.setStyleSheet(task_style)
+
+        def _apply_avatar_pixmap(self):
+            asset_path = (
+                Path(__file__).resolve().parent
+                / 'assets'
+                / 'macgyvbot_avatar.png'
+            )
+            pixmap = QPixmap(str(asset_path))
+            if pixmap.isNull():
+                return
+
+            self._avatar.setText('')
+            self._avatar.setPixmap(
+                pixmap.scaled(
+                    40,
+                    40,
+                    Qt.KeepAspectRatio,
+                    Qt.SmoothTransformation,
+                )
+            )
 
         @staticmethod
         def _gripper_status_style(enabled):
