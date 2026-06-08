@@ -21,6 +21,7 @@ from macgyvbot_config.topics import (
     MANUAL_GRIPPER_SERVICE,
     ROBOT_STATUS_TOPIC,
     STT_TEXT_TOPIC,
+    TASK_CONTROL_TOPIC,
     TOOL_DROP_TOPIC,
     TOOL_COMMAND_TOPIC,
 )
@@ -30,6 +31,7 @@ from macgyvbot_interfaces.msg import (
     CommandShutdown,
     CommandText,
     HumanGraspResult,
+    RobotTaskControl,
     RobotTaskStatus,
     ToolCommand,
     ToolDropEvent,
@@ -110,11 +112,17 @@ class OperatorUiNode(Node):
         'waiting_return_handoff',
         'moving_return_grasp_pose',
         'checking_return_target',
+        'return_hand_detected',
         'placing_return_tool',
         'returning_home',
         'closing_drawer',
         'resumed',
+        'busy',
+        'tool_dropped',
+        'vlm_loading',
+        'vlm_inferencing',
     }
+    _CHAT_INPUT_DISABLED_STATES = _GRIPPER_ACTIVE_STATES
 
     def __init__(self):
         super().__init__('operator_ui_node')
@@ -171,6 +179,8 @@ class OperatorUiNode(Node):
         self._manual_gripper_request_pending = False
         self._last_gripper_enabled = None
         self._last_gripper_reason = ''
+        self._last_chat_input_enabled = None
+        self._last_chat_input_reason = ''
         self._robot_status_topic = robot_status_topic
         self._manual_gripper_service = (
             str(manual_gripper_service).strip() or MANUAL_GRIPPER_SERVICE
@@ -193,6 +203,11 @@ class OperatorUiNode(Node):
         self._command_shutdown_pub = self.create_publisher(
             CommandShutdown,
             COMMAND_SHUTDOWN_TOPIC,
+            10,
+        )
+        self._task_control_pub = self.create_publisher(
+            RobotTaskControl,
+            TASK_CONTROL_TOPIC,
             10,
         )
         self._manual_gripper_client = self.create_client(
@@ -235,6 +250,7 @@ class OperatorUiNode(Node):
         self._update_connection_status()
         self._update_manual_gripper_backend_availability()
         self._refresh_gripper_control_state()
+        self._refresh_chat_input_state()
         self._append_log(
             'info',
             'GUI 연결 완료',
@@ -266,6 +282,51 @@ class OperatorUiNode(Node):
         msg.text = text
         msg.source = 'operator_ui'
         self._stt_pub.publish(msg)
+
+    def publish_control_action(self, action, text=''):
+        action = str(action or '').strip()
+        if action not in {'pause', 'resume', 'retry', 'cancel'}:
+            self.publish_user_text(text)
+            return
+
+        label = str(text or '').strip() or action
+
+        msg = RobotTaskControl()
+        msg.action = action
+        msg.reason = label
+        msg.source = 'operator_ui'
+        self._task_control_pub.publish(msg)
+
+        if action == 'pause':
+            message = '정지 요청을 로봇에 전달했습니다.'
+            event = 'CONTROL_PAUSE'
+            level = 'warn'
+            status = '정지 요청 전달'
+        elif action == 'resume':
+            message = '재개 요청을 로봇에 전달했습니다.'
+            event = 'CONTROL_RESUME'
+            level = 'info'
+            status = '재개 요청 전달'
+        elif action == 'retry':
+            message = '사용자 손 인식을 다시 시도합니다.'
+            event = 'CONTROL_RETRY'
+            level = 'info'
+            status = '손 인식 재시도'
+        else:
+            message = '사용자 손 인식을 중단하고 복귀합니다.'
+            event = 'CONTROL_HANDOFF_FALLBACK'
+            level = 'warn'
+            status = '인스팩션 복귀 요청'
+
+        self._append_bot(message)
+        self._append_log(
+            level,
+            message,
+            source='ui.control',
+            event=event,
+            detail=f'topic={TASK_CONTROL_TOPIC}, action={action}, source=operator_ui',
+        )
+        self._set_status(status)
 
     def _mark_self_published(self, text):
         with self._self_pub_lock:
@@ -550,6 +611,7 @@ class OperatorUiNode(Node):
         self._set_task_status(view['target_label'], view['stage_text'])
         self._last_robot_state = view['state']
         self._refresh_gripper_control_state()
+        self._refresh_chat_input_state()
 
         if view['show_log']:
             self._append_log(
@@ -571,8 +633,8 @@ class OperatorUiNode(Node):
             ):
                 self.window.append_control_actions(
                     (
-                        ('재시도', '재시도'),
-                        ('복귀', '복귀'),
+                        ('재시도', '재시도', 'retry'),
+                        ('복귀', '복귀', 'cancel'),
                     )
                 )
 
@@ -1468,15 +1530,36 @@ class OperatorUiNode(Node):
             return False, '비활성화: 그리퍼 명령 처리 중'
         if not self._manual_gripper_backend_available:
             return False, '비활성화: 안전한 그리퍼 제어 인터페이스 없음'
-        if state in self._GRIPPER_SAFE_STATES:
-            return True, '활성화: 수동 조작 가능'
         if state in self._GRIPPER_ACTIVE_STATES:
             return False, '비활성화: 작업 실행 중'
-        return False, '비활성화: 로봇 상태 미확인'
+        return True, '활성화: 수동 조작 가능'
 
     def _gripper_state_is_safe(self, state):
         normalized = str(state or 'unknown').strip().lower()
-        return normalized in self._GRIPPER_SAFE_STATES
+        return normalized not in self._GRIPPER_ACTIVE_STATES
+
+    def _refresh_chat_input_state(self):
+        if self.window is None or not hasattr(self.window, 'set_chat_input_enabled'):
+            return
+
+        enabled, reason = self._chat_input_state()
+        if (
+            enabled == self._last_chat_input_enabled
+            and reason == self._last_chat_input_reason
+        ):
+            return
+
+        self._last_chat_input_enabled = enabled
+        self._last_chat_input_reason = reason
+        self.window.set_chat_input_enabled(enabled, reason)
+
+    def _chat_input_state(self):
+        state = str(self._last_robot_state or 'unknown').strip().lower()
+        if state in {'unknown', 'initializing'}:
+            return True, '로봇 노드 실행 대기 중입니다. 실행 후 명령을 입력해주세요.'
+        if state in self._CHAT_INPUT_DISABLED_STATES:
+            return False, '동작 실행 중... 상태 버튼이나 음성 명령을 사용해주세요.'
+        return True, ''
 
 
 def main(args=None):
@@ -1487,6 +1570,7 @@ def main(args=None):
     window = VoiceCommandGuiWindow(
         on_user_text=node.publish_user_text,
         on_gripper_width=node.request_manual_gripper_width,
+        on_control_action=node.publish_control_action,
     )
     node.attach_window(window)
     window.show()
