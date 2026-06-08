@@ -32,6 +32,7 @@ msg/
   ToolMaskLock.msg
 srv/
   SetGripper.srv
+  SAMYaw.srv
   VLMGrasp.srv
 
 future msg/
