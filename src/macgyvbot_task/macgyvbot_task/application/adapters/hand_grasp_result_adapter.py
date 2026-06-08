@@ -94,16 +94,6 @@ class HandGraspResultAdapter:
             depth_encoding=depth_encoding,
         )
         if depth_m is None:
-            log_warn(
-                self.logger,
-                "handover hand depth unavailable",
-                step="hand_position",
-                event="unavailable",
-                reason="invalid_depth",
-                u=u,
-                v=v,
-                radius_px=self.DEPTH_WINDOW_RADIUS_PX,
-            )
             return None
 
         cam_x = (u - intrinsics["ppx"]) * depth_m / intrinsics["fx"]
