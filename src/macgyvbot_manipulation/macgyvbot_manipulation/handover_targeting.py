@@ -17,6 +17,7 @@ from macgyvbot_config.handoff import (
     HANDOVER_OBSERVATION_MIN_SLEEP_SEC,
     HANDOVER_REPLAN_MAX_ATTEMPTS,
     HANDOVER_REPLAN_X_STEP_M,
+    HANDOVER_REPLAN_Z_MAX_ABOVE_SAFE_M,
     HANDOVER_SEARCH_TIMEOUT_SEC,
     HANDOVER_SEARCH_EXECUTOR_MAX_WORKERS,
     HANDOVER_TARGET_MIN_Z_CLEARANCE_M,
@@ -284,7 +285,8 @@ def move_to_candidate_with_offset(
         )
 
     target = build_offset_target(candidate, x_offset_m, z_offset_m)
-    attempts = build_replan_attempts(target.x, target.y, target.z)
+    retry_z = build_failed_replan_z(candidate, z_offset_m)
+    attempts = build_replan_attempts(target.x, target.y, target.z, retry_z=retry_z)
 
     last_pose = SearchStartPose(*attempts[0])
     total_attempts = len(attempts)
@@ -311,6 +313,7 @@ def move_to_candidate_with_offset(
             candidate_z=f"{candidate.z:.3f}",
             offset_x=f"{x_offset_m:.3f}",
             offset_z=f"{z_offset_m:.3f}",
+            target_xyz=f"({target_x:.3f},{target_y:.3f},{target_z:.3f})",
             target_x=f"{target_x:.3f}",
             target_y=f"{target_y:.3f}",
             target_z=f"{target_z:.3f}",
@@ -362,6 +365,7 @@ def build_replan_attempts(
     target_x: float,
     target_y: float,
     target_z: float,
+    retry_z: Optional[float] = None,
     max_attempts: int = HANDOVER_REPLAN_MAX_ATTEMPTS,
     x_step_m: float = HANDOVER_REPLAN_X_STEP_M,
     min_z: float = SAFE_Z_MIN + HANDOVER_TARGET_MIN_Z_CLEARANCE_M,
@@ -378,14 +382,31 @@ def build_replan_attempts(
         next_x = float(target_x) - float(x_step_m) * index
         if next_x < SAFE_X_MIN:
             continue
+        next_z = float(retry_z) if retry_z is not None else max(float(min_z), float(target_z))
         attempts.append(
             (
                 next_x,
                 float(target_y) * y_ratio,
-                max(float(min_z), float(target_z)),
+                next_z,
             )
         )
     return attempts
+
+
+def build_failed_replan_z(
+    candidate: TargetCandidate,
+    z_offset_m: float,
+    safe_z_min: float = SAFE_Z_MIN,
+    max_above_safe_m: float = HANDOVER_REPLAN_Z_MAX_ABOVE_SAFE_M,
+) -> float:
+    """Return retry z after the first handoff planning failure."""
+    return min(
+        float(safe_z_min) + float(max_above_safe_m),
+        max(
+            float(safe_z_min) + float(z_offset_m),
+            float(candidate.z) + float(z_offset_m),
+        ),
+    )
 
 
 def _unbounded_retry_count(target_x: float, target_y: float, x_step_m: float) -> int:

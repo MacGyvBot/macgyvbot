@@ -61,6 +61,7 @@ handover_targeting = import_module("macgyvbot_manipulation.handover_targeting")
 TargetCandidate = handover_targeting.TargetCandidate
 _observe_stable_candidate = handover_targeting._observe_stable_candidate
 build_offset_target = handover_targeting.build_offset_target
+build_failed_replan_z = handover_targeting.build_failed_replan_z
 candidate_from_grasp_result = handover_targeting.candidate_from_grasp_result
 move_to_candidate_with_offset = handover_targeting.move_to_candidate_with_offset
 
@@ -298,6 +299,70 @@ class TestHandoverTargeting(unittest.TestCase):
         self.assertEqual(reason, "")
         self.assertAlmostEqual(motion.targets[0][2], 0.50)
         self.assertAlmostEqual(final_pose.z, 0.50)
+
+    def test_failed_replan_z_caps_hand_height_above_safe_min(self):
+        candidate = TargetCandidate(
+            found=True,
+            x=0.5,
+            y=0.18,
+            z=0.40,
+            frame_id="base_link",
+            source="test",
+        )
+
+        z = build_failed_replan_z(
+            candidate,
+            z_offset_m=0.10,
+            safe_z_min=0.24,
+            max_above_safe_m=0.20,
+        )
+
+        self.assertAlmostEqual(z, 0.44)
+
+    def test_failed_replan_z_uses_safe_min_plus_offset_floor(self):
+        candidate = TargetCandidate(
+            found=True,
+            x=0.5,
+            y=0.18,
+            z=0.10,
+            frame_id="base_link",
+            source="test",
+        )
+
+        z = build_failed_replan_z(
+            candidate,
+            z_offset_m=0.10,
+            safe_z_min=0.24,
+            max_above_safe_m=0.20,
+        )
+
+        self.assertAlmostEqual(z, 0.34)
+
+    def test_failed_handoff_retries_use_capped_replan_z(self):
+        motion = FakeMotion([False, True])
+        candidate = TargetCandidate(
+            found=True,
+            x=0.5,
+            y=0.18,
+            z=0.40,
+            frame_id="base_link",
+            source="test",
+        )
+
+        ok, final_pose, reason = move_to_candidate_with_offset(
+            motion,
+            candidate,
+            {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+            FakeLogger(),
+            x_offset_m=0.0,
+            z_offset_m=0.10,
+        )
+
+        self.assertTrue(ok)
+        self.assertEqual(reason, "")
+        self.assertAlmostEqual(motion.targets[0][2], 0.50)
+        self.assertAlmostEqual(motion.targets[1][2], 0.44)
+        self.assertAlmostEqual(final_pose.z, 0.44)
 
 
 if __name__ == "__main__":
