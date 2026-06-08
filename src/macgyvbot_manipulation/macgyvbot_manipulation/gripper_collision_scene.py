@@ -302,31 +302,35 @@ def _wait_for_future(future, timeout_sec, logger, label):
 
 
 def _info(logger, message):
-    _emit_log(logger, "info", message)
+    if logger is None:
+        return
+    info = getattr(_raw_logger(logger), "info", None)
+    if info is not None:
+        info(_format_log("info", message))
 
 
 def _warn(logger, message):
-    _emit_log(logger, "warn", message)
-
-
-def _emit_log(logger, level, message):
     if logger is None:
         return
-    formatted = format_structured_log(
+    raw_logger = _raw_logger(logger)
+    warn = getattr(raw_logger, "warn", None) or getattr(
+        raw_logger,
+        "warning",
+        None,
+    )
+    if warn is not None:
+        warn(_format_log("warn", message))
+
+
+def _format_log(level, message):
+    return format_structured_log(
         svc=_LOG_SVC,
         pipe=_LOG_PIPE,
         step=_LOG_STEP,
         event=level,
         msg=message,
     )
-    raw_logger = getattr(logger, "_logger", logger)
-    if level == "warn":
-        emit = getattr(raw_logger, "warn", None) or getattr(
-            raw_logger,
-            "warning",
-            None,
-        )
-    else:
-        emit = getattr(raw_logger, "info", None)
-    if emit is not None:
-        emit(formatted)
+
+
+def _raw_logger(logger):
+    return getattr(logger, "_logger", logger)
