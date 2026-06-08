@@ -81,7 +81,7 @@ DRAWER_BODY_COLLISION_BOX = {
 DRAWER_OPENED_COLLISION_BOX = {
     "id": "drawer_opened_boundary",
     "frame_id": DRAWER_COLLISION_FRAME_ID,
-    "center_xyz": [0.5200, 0.2150, 0.1265],
+    "center_xyz": [0.5400, 0.2150, 0.1265],
     "size_xyz": [0.1800, 0.1700, 0.2530],
     "color_rgba": [0.12, 0.45, 0.85, 0.35],
 }
