@@ -27,6 +27,8 @@ class TaskRuntimeState:
     last_tool_mask_lock_result: dict | None = None
     grasp_detection_mask_images: list[Any] | None = None
     grasp_detection_mask_target: str | None = None
+    grasp_detection_yaw_deg: float | None = None
+    grasp_detection_yaw_target: str | None = None
     hand_grasp_image: Any = None
     latest_wrench: Any = None
     home_xyz: tuple | None = None

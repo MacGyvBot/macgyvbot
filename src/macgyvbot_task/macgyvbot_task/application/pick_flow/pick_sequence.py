@@ -80,6 +80,8 @@ class PickSequenceRunner:
         self.state.last_tool_mask_lock_result = None
         self.state.grasp_detection_mask_images = None
         self.state.grasp_detection_mask_target = None
+        self.state.grasp_detection_yaw_deg = None
+        self.state.grasp_detection_yaw_target = None
 
         log = self.state.logger()
         drawer_id = self._drawer_id_for_current_target()
