@@ -12,6 +12,9 @@ from launch.substitutions import LaunchConfiguration
 from launch.substitutions import PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+from macgyvbot_config.joint_velocity import (
+    apply_joint_velocity_limits_to_moveit_config,
+)
 from macgyvbot_config.models import HAND_GRASP_SAM_CHECKPOINT_NAME
 from macgyvbot_config.topics import (
     CAMERA_COLOR_TOPIC,
@@ -96,6 +99,9 @@ def generate_launch_description():
         .planning_scene_monitor()
         .sensors_3d()
         .to_moveit_configs()
+    )
+    moveit_config_dict = apply_joint_velocity_limits_to_moveit_config(
+        moveit_config.to_dict()
     )
 
     moveit_py_params = PathJoinSubstitution(
@@ -340,7 +346,7 @@ def generate_launch_description():
                     "moveit.pilz_industrial_motion_planner.trajectory_generator:=warn",
                 ],
                 parameters=[
-                    moveit_config.to_dict(),
+                    moveit_config_dict,
                     moveit_py_params,
                     {
                         "yolo_model": LaunchConfiguration("yolo_model"),

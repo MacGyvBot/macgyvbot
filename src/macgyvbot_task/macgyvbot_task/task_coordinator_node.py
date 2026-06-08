@@ -33,6 +33,7 @@ from macgyvbot_interfaces.msg import (
 from macgyvbot_interfaces.srv import SetGripper
 
 from macgyvbot_config.drawer import DRAWER_OBSERVATION_J6_DEG
+from macgyvbot_config.joint_velocity import MOTION_VELOCITY_SCALING_FACTOR
 from macgyvbot_config.structured_logging import (
     format_structured_log,
 )
@@ -372,7 +373,9 @@ class TaskCoordinatorNode(Node):
         self.pilz_params = PlanRequestParameters(self.robot)
         self.pilz_params.planning_pipeline = "pilz_industrial_motion_planner"
         self.pilz_params.planner_id = "PTP"
-        self.pilz_params.max_velocity_scaling_factor = 0.2
+        self.pilz_params.max_velocity_scaling_factor = (
+            MOTION_VELOCITY_SCALING_FACTOR
+        )
 
         self.motion = MoveItController(
             self.robot,
