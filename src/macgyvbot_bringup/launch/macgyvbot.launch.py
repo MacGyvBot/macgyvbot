@@ -52,7 +52,6 @@ def ensure_rrtconnect_planner_config(moveit_config_dict):
 
     group_config = ompl_config.setdefault(GROUP_NAME, {})
     group_config.setdefault("default_planner_config", PLANNER_ID)
-    group_config.setdefault("longest_valid_segment_fraction", 0.005)
     configured_planners = group_config.setdefault("planner_configs", [])
     if not isinstance(configured_planners, list):
         configured_planners = [configured_planners]
@@ -378,6 +377,8 @@ def generate_launch_description():
                     "moveit.ros.occupancy_map_monitor.middleware_handle:=error",
                     "--log-level",
                     "moveit.ros_planning.planning_pipeline:=warn",
+                    "--log-level",
+                    "moveit.ompl_planning.model_based_planning_context:=warn",
                     "--log-level",
                     "moveit_ros.add_time_optimal_parameterization:=warn",
                     "--log-level",

@@ -116,7 +116,7 @@ class DrawerCollisionSceneManager:
         if request_service:
             service_requested = self._request_apply_scene(scene, log)
 
-        _info(
+        _debug(
             log,
             "drawer collision scene update requested: "
             f"profile={profile_name}, "
@@ -386,6 +386,14 @@ def _info(logger, message):
     info = getattr(_raw_logger(logger), "info", None)
     if info is not None:
         info(_format_log("info", message))
+
+
+def _debug(logger, message):
+    if logger is None:
+        return
+    debug = getattr(_raw_logger(logger), "debug", None)
+    if debug is not None:
+        debug(_format_log("debug", message))
 
 
 def _warn(logger, message):
