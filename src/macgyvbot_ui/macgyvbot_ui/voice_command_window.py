@@ -636,7 +636,12 @@ else:
             row.setLayout(row_layout)
 
             buttons = []
-            for label, reply in actions:
+            for action in actions:
+                if len(action) == 3:
+                    label, reply, control_action = action
+                else:
+                    label, reply = action
+                    control_action = None
                 button = QPushButton(label)
                 button.setCursor(Qt.PointingHandCursor)
                 button.setStyleSheet(
@@ -655,9 +660,16 @@ else:
                     }
                     '''
                 )
-                button.clicked.connect(
-                    lambda _checked=False, text=reply: self._send_quick_reply(text)
-                )
+                if control_action:
+                    button.clicked.connect(
+                        lambda _checked=False, action=control_action, text=reply: (
+                            self._send_control_action(action, text)
+                        )
+                    )
+                else:
+                    button.clicked.connect(
+                        lambda _checked=False, text=reply: self._send_quick_reply(text)
+                    )
                 buttons.append(button)
 
             for button in buttons:

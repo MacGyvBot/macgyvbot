@@ -118,6 +118,20 @@ class GripperPanelSmokeTest(unittest.TestCase):
             [("pause", "멈춰"), ("resume", "재개")],
         )
 
+    def test_handoff_fallback_button_publishes_cancel_control_action(self):
+        self.window.append_control_actions((("복귀", "복귀", "cancel"),))
+        buttons = [
+            button
+            for button in self.window.findChildren(type(self.window._pause_button))
+            if button.text() == "복귀"
+        ]
+        self.assertTrue(buttons)
+
+        buttons[-1].click()
+
+        self.assertEqual(self.published_texts, [])
+        self.assertEqual(self.control_actions, [("cancel", "복귀")])
+
     def test_gripper_panel_has_room_for_controls(self):
         self.window.show()
         self.app.processEvents()

@@ -285,7 +285,7 @@ class OperatorUiNode(Node):
 
     def publish_control_action(self, action, text=''):
         action = str(action or '').strip()
-        if action not in {'pause', 'resume'}:
+        if action not in {'pause', 'resume', 'retry', 'cancel'}:
             self.publish_user_text(text)
             return
 
@@ -302,11 +302,21 @@ class OperatorUiNode(Node):
             event = 'CONTROL_PAUSE'
             level = 'warn'
             status = '정지 요청 전달'
-        else:
+        elif action == 'resume':
             message = '재개 요청을 로봇에 전달했습니다.'
             event = 'CONTROL_RESUME'
             level = 'info'
             status = '재개 요청 전달'
+        elif action == 'retry':
+            message = '사용자 손 인식을 다시 시도합니다.'
+            event = 'CONTROL_RETRY'
+            level = 'info'
+            status = '손 인식 재시도'
+        else:
+            message = '사용자 손 인식을 중단하고 복귀합니다.'
+            event = 'CONTROL_HANDOFF_FALLBACK'
+            level = 'warn'
+            status = '인스팩션 복귀 요청'
 
         self._append_bot(message)
         self._append_log(
@@ -623,8 +633,8 @@ class OperatorUiNode(Node):
             ):
                 self.window.append_control_actions(
                     (
-                        ('재시도', '재시도'),
-                        ('복귀', '복귀'),
+                        ('재시도', '재시도', 'retry'),
+                        ('복귀', '복귀', 'cancel'),
                     )
                 )
 
