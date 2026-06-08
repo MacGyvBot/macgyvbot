@@ -22,6 +22,7 @@ from macgyvbot_config.handoff import (
     HANDOVER_SEARCH_EXECUTOR_MAX_WORKERS,
     HANDOVER_TARGET_MIN_Z_CLEARANCE_M,
 )
+from macgyvbot_config.drawer import drawer_collision_scene_key
 from macgyvbot_config.structured_logging import format_structured_log
 from macgyvbot_config.robot import (
     BASE_FRAME,
@@ -269,6 +270,7 @@ def move_to_candidate_with_offset(
     x_offset_m: float,
     z_offset_m: float,
     should_interrupt=None,
+    drawer_id=None,
 ) -> tuple[bool, SearchStartPose, str]:
     """
     Move to the final handover pose derived from a candidate.
@@ -326,7 +328,10 @@ def move_to_candidate_with_offset(
         ok = motion.plan_and_execute(
             logger,
             pose_goal=pose_goal,
-            collision_scene_key="handoff/move_to_user",
+            collision_scene_key=drawer_collision_scene_key(
+                "handoff/move_to_user",
+                drawer_id,
+            ),
         )
         last_pose = SearchStartPose(
             float(pose_goal.pose.position.x),

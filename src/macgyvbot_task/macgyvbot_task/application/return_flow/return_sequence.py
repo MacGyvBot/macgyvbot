@@ -461,6 +461,7 @@ class ReturnSequenceRunner:
             target.hand_candidate,
             command,
             logger,
+            drawer_id=context.get("drawer_id"),
         )
         if not moved:
             return None, failure_reason

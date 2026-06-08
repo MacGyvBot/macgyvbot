@@ -16,6 +16,7 @@ from macgyvbot_config.drawer import (
     DRAWER_OBSERVE_OFFSET_XYZ_M,
     DRAWER_OPEN_OFFSET_XYZ_M,
     TOOL_DRAWER_IDS,
+    drawer_collision_scene_key,
 )
 from macgyvbot_config.robot import EE_LINK
 from macgyvbot_manipulation.robot_pose import (
@@ -118,7 +119,10 @@ class DrawerMotionFlow:
             opened["ori"],
             f"drawer {drawer_id} return_to_open_handle",
             logger,
-            collision_scene_key="drawer/approach_to_close",
+            collision_scene_key=drawer_collision_scene_key(
+                "drawer/approach_to_close",
+                drawer_id,
+            ),
         ):
             return False
 

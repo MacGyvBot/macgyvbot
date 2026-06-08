@@ -53,7 +53,14 @@ class ReturnHandoffFlow:
             interrupted=self.interrupted,
         )
 
-    def move_to_candidate(self, tool_name, candidate, command, logger):
+    def move_to_candidate(
+        self,
+        tool_name,
+        candidate,
+        command,
+        logger,
+        drawer_id=None,
+    ):
         if candidate.frame_id not in (WORLD_FRAME, BASE_FRAME):
             self.reporter.fail(
                 tool_name,
@@ -75,6 +82,7 @@ class ReturnHandoffFlow:
             x_offset_m=HANDOVER_HAND_X_OFFSET_M,
             z_offset_m=HANDOVER_HAND_Z_OFFSET_M,
             should_interrupt=self.interrupted,
+            drawer_id=drawer_id,
         )
         logger.info(
             "감지된 사용자 손 위치로 수령 이동: "

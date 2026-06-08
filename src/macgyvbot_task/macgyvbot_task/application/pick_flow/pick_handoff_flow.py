@@ -186,7 +186,7 @@ class PickHandoffFlow:
 
         return True
 
-    def move_to_handoff_pose(self, logger):
+    def move_to_handoff_pose(self, logger, drawer_id=None):
         self.last_failure_reason = ""
         if self.interrupted():
             logger.info(
@@ -216,7 +216,12 @@ class PickHandoffFlow:
         if not self._validate_candidate(candidate, logger):
             return None, None, None
 
-        return self._move_to_candidate(candidate, handoff_ori, logger)
+        return self._move_to_candidate(
+            candidate,
+            handoff_ori,
+            logger,
+            drawer_id=drawer_id,
+        )
 
     def _move_to_observation_pose(self, logger):
         ok, start_pose = move_to_observation_pose(self.motion, self.robot, logger)
@@ -297,7 +302,7 @@ class PickHandoffFlow:
         )
         return False
 
-    def _move_to_candidate(self, candidate, ori, logger):
+    def _move_to_candidate(self, candidate, ori, logger, drawer_id=None):
         ok, final_pose, reason = move_to_candidate_with_offset(
             self.motion,
             candidate,
@@ -306,6 +311,7 @@ class PickHandoffFlow:
             x_offset_m=HANDOVER_HAND_X_OFFSET_M,
             z_offset_m=HANDOVER_HAND_Z_OFFSET_M,
             should_interrupt=self.interrupted,
+            drawer_id=drawer_id,
         )
         if self.interrupted():
             logger.info(

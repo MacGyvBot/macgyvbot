@@ -69,6 +69,9 @@ DRAWER_COLLISION_SCENE_TOPICS = [
 ]
 DRAWER_COLLISION_PROFILE_DRAWER_ONLY = "drawer_only"
 DRAWER_COLLISION_PROFILE_DRAWER_OPENED = "drawer_opened"
+DRAWER_COLLISION_PROFILE_DRAWER_OPENED_FLOOR_1 = "drawer_opened_floor_1"
+DRAWER_COLLISION_PROFILE_DRAWER_OPENED_FLOOR_2 = "drawer_opened_floor_2"
+DRAWER_COLLISION_PROFILE_DRAWER_OPENED_FLOOR_3 = "drawer_opened_floor_3"
 DRAWER_COLLISION_DEFAULT_PROFILE = DRAWER_COLLISION_PROFILE_DRAWER_ONLY
 
 DRAWER_BODY_COLLISION_BOX = {
@@ -78,20 +81,51 @@ DRAWER_BODY_COLLISION_BOX = {
     "size_xyz": [0.2400, 0.1700, 0.2530],
     "color_rgba": [0.12, 0.45, 0.85, 0.35],
 }
-DRAWER_OPENED_COLLISION_BOX = {
-    "id": "drawer_opened_boundary",
+DRAWER_OPENED_COLLISION_BOX_1 = {
+    "id": "drawer_opened_boundary_floor_1",
+    "frame_id": DRAWER_COLLISION_FRAME_ID,
+    "center_xyz": [0.5400, 0.2150, 0.06325],
+    "size_xyz": [0.1800, 0.1700, 0.0843],
+    "color_rgba": [0.12, 0.45, 0.85, 0.30],
+}
+
+DRAWER_OPENED_COLLISION_BOX_2 = {
+    "id": "drawer_opened_boundary_floor_2",
     "frame_id": DRAWER_COLLISION_FRAME_ID,
     "center_xyz": [0.5400, 0.2150, 0.1265],
-    "size_xyz": [0.1800, 0.1700, 0.2530],
+    "size_xyz": [0.1800, 0.1700, 0.0843],
     "color_rgba": [0.12, 0.45, 0.85, 0.35],
 }
+
+DRAWER_OPENED_COLLISION_BOX_3 = {
+    "id": "drawer_opened_boundary_floor_3",
+    "frame_id": DRAWER_COLLISION_FRAME_ID,
+    "center_xyz": [0.5400, 0.2150, 0.18975],
+    "size_xyz": [0.1800, 0.1700, 0.0844],
+    "color_rgba": [0.12, 0.45, 0.85, 0.4],
+}
+
 DRAWER_COLLISION_BOX_PROFILES = {
     DRAWER_COLLISION_PROFILE_DRAWER_ONLY: [
         DRAWER_BODY_COLLISION_BOX,
     ],
     DRAWER_COLLISION_PROFILE_DRAWER_OPENED: [
         DRAWER_BODY_COLLISION_BOX,
-        DRAWER_OPENED_COLLISION_BOX,
+        DRAWER_OPENED_COLLISION_BOX_1,
+        DRAWER_OPENED_COLLISION_BOX_2,
+        DRAWER_OPENED_COLLISION_BOX_3,
+    ],
+    DRAWER_COLLISION_PROFILE_DRAWER_OPENED_FLOOR_1: [
+        DRAWER_BODY_COLLISION_BOX,
+        DRAWER_OPENED_COLLISION_BOX_1,
+    ],
+    DRAWER_COLLISION_PROFILE_DRAWER_OPENED_FLOOR_2: [
+        DRAWER_BODY_COLLISION_BOX,
+        DRAWER_OPENED_COLLISION_BOX_2,
+    ],
+    DRAWER_COLLISION_PROFILE_DRAWER_OPENED_FLOOR_3: [
+        DRAWER_BODY_COLLISION_BOX,
+        DRAWER_OPENED_COLLISION_BOX_3,
     ],
 }
 DRAWER_COLLISION_BOXES = DRAWER_COLLISION_BOX_PROFILES[
@@ -100,8 +134,43 @@ DRAWER_COLLISION_BOXES = DRAWER_COLLISION_BOX_PROFILES[
 DRAWER_COLLISION_SCENE_KEY_PROFILES = {
     # on pick
     "handoff/move_to_user": DRAWER_COLLISION_PROFILE_DRAWER_OPENED,
+    "handoff/move_to_user/floor_1": (
+        DRAWER_COLLISION_PROFILE_DRAWER_OPENED_FLOOR_1
+    ),
+    "handoff/move_to_user/floor_2": (
+        DRAWER_COLLISION_PROFILE_DRAWER_OPENED_FLOOR_2
+    ),
+    "handoff/move_to_user/floor_3": (
+        DRAWER_COLLISION_PROFILE_DRAWER_OPENED_FLOOR_3
+    ),
     "drawer/approach_to_close": DRAWER_COLLISION_PROFILE_DRAWER_OPENED,
+    "drawer/approach_to_close/floor_1": (
+        DRAWER_COLLISION_PROFILE_DRAWER_OPENED_FLOOR_1
+    ),
+    "drawer/approach_to_close/floor_2": (
+        DRAWER_COLLISION_PROFILE_DRAWER_OPENED_FLOOR_2
+    ),
+    "drawer/approach_to_close/floor_3": (
+        DRAWER_COLLISION_PROFILE_DRAWER_OPENED_FLOOR_3
+    ),
 
     # on return
     # considered not needed. but it is ready to be applied.
 }
+
+
+def drawer_collision_scene_key(base_key, drawer_id):
+    floor = drawer_floor_for_id(drawer_id)
+    if floor is None:
+        return base_key
+    return f"{base_key}/floor_{floor}"
+
+
+def drawer_floor_for_id(drawer_id):
+    try:
+        floor = int(drawer_id) + 1
+    except (TypeError, ValueError):
+        return None
+    if floor not in (1, 2, 3):
+        return None
+    return floor

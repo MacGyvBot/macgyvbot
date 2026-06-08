@@ -168,7 +168,7 @@ class FakeHandoff:
         assert not move_home
         return True
 
-    def move_to_handoff_pose(self, logger):
+    def move_to_handoff_pose(self, logger, drawer_id=None):
         self.last_failure_reason = "handoff_search_failed"
         return None, None, None
 
@@ -187,7 +187,7 @@ class RetryableHandoff(FakeHandoff):
         super().__init__()
         self.move_calls = 0
 
-    def move_to_handoff_pose(self, logger):
+    def move_to_handoff_pose(self, logger, drawer_id=None):
         self.move_calls += 1
         if self.move_calls == 1:
             self.last_failure_reason = "handoff_search_failed"

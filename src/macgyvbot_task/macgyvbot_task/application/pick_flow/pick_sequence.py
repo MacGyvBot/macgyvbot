@@ -511,7 +511,10 @@ class PickSequenceRunner:
     def _move_to_handoff(self, plan, context):
         log = self.state.logger()
         while True:
-            handoff_pose = self.handoff.move_to_handoff_pose(log)
+            handoff_pose = self.handoff.move_to_handoff_pose(
+                log,
+                drawer_id=context.get("drawer_id"),
+            )
             if handoff_pose[0] is not None:
                 return True
 
