@@ -1142,10 +1142,9 @@ else:
             )
             self._avatar.setStyleSheet(
                 '''
-                background-color: #E7F1FF;
-                border: 1px solid #C7DBF5;
+                background-color: transparent;
+                border: none;
                 color: #2F6FDC;
-                border-radius: 22px;
                 min-width: 44px;
                 max-width: 44px;
                 min-height: 44px;
