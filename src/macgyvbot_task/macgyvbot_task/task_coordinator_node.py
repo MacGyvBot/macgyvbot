@@ -61,6 +61,9 @@ from macgyvbot_config.vlm import (
     DEFAULT_GRASP_POINT_MODE,
     GRASP_POINT_MODE_CENTER,
     GRASP_POINT_MODE_VLM,
+    SAM_YAW_SERVICE_NAME,
+    SAM_YAW_SERVICE_RESPONSE_TIMEOUT_SEC,
+    SAM_YAW_SERVICE_WAIT_TIMEOUT_SEC,
     VLM_GRASP_SERVICE_NAME,
     VLM_ONLY_MODES,
 )
@@ -78,18 +81,6 @@ from macgyvbot_perception.grasp_point.grasp_point_selector import (
     GraspPointSelector,
     normalize_grasp_point_mode,
 )
-from macgyvbot_perception.grasp_point.grasp_method import (
-    estimate_yaw_from_binary_crop,
-)
-from macgyvbot_perception.grasp_point.mask_image_for_grasp_detection import (
-    generate_sam_depth_mask_image_for_grasp_detection,
-)
-from macgyvbot_perception.hand_tool_grasp.calculations import (
-    depth_to_mm,
-)
-from macgyvbot_perception.hand_tool_grasp.sam_tool_mask import (
-    BBoxPromptSegmenter,
-)
 from macgyvbot_perception.pick_target_resolver import PickTargetResolver
 from macgyvbot_perception.yolo_detector import YoloDetector
 from macgyvbot_resources.calibration import resolve_calibration_file
@@ -100,6 +91,9 @@ from macgyvbot_task.application import (
 )
 from macgyvbot_task.application.adapters.hand_grasp_result_adapter import (
     HandGraspResultAdapter,
+)
+from macgyvbot_task.application.adapters.sam_yaw_service_client import (
+    SAMYawServiceClient,
 )
 from macgyvbot_task.application.adapters.vlm_grasp_service_client import (
     VLMGraspServiceClient,
@@ -342,13 +336,15 @@ class TaskCoordinatorNode(Node):
             **self._read_grasp_point_api_config(),
             **self._read_vlm_sam_config(),
         )
-        self.grasp_detection_sam_config = self._read_grasp_detection_sam_config()
-        self.grasp_detection_sam_segmenter = None
-        self.grasp_detection_sam_init_attempted = False
         self.vlm_service_client = VLMGraspServiceClient(
             self,
             self.bridge,
             **self._read_vlm_service_config(),
+        )
+        self.sam_yaw_service_client = SAMYawServiceClient(
+            self,
+            self.bridge,
+            **self._read_sam_yaw_service_config(),
         )
         if self.grasp_point_mode not in (GRASP_POINT_MODE_VLM, *VLM_ONLY_MODES):
             self.grasp_point_selector.preload_vlm_if_needed()
@@ -547,66 +543,6 @@ class TaskCoordinatorNode(Node):
             "sam_device": str(self.get_parameter("sam_device").value).strip(),
         }
 
-    def _read_grasp_detection_sam_config(self):
-        self.declare_parameter("sam_depth_tolerance_mm", 30.0)
-        self.declare_parameter("sam_depth_min_valid_ratio", 0.03)
-        self.declare_parameter("sam_depth_expand_iterations", 1)
-        return {
-            "sam_enabled": self._read_bool_parameter("sam_enabled", True),
-            "sam_checkpoint": str(self.get_parameter("sam_checkpoint").value).strip(),
-            "sam_backend": str(self.get_parameter("sam_backend").value).strip(),
-            "sam_model_type": str(self.get_parameter("sam_model_type").value).strip(),
-            "sam_device": str(self.get_parameter("sam_device").value).strip(),
-            "sam_depth_tolerance_mm": float(
-                self.get_parameter("sam_depth_tolerance_mm").value
-            ),
-            "sam_depth_min_valid_ratio": float(
-                self.get_parameter("sam_depth_min_valid_ratio").value
-            ),
-            "sam_depth_expand_iterations": int(
-                self.get_parameter("sam_depth_expand_iterations").value
-            ),
-        }
-
-    def _create_grasp_detection_sam_segmenter(self, config):
-        if not bool(config["sam_enabled"]):
-            self._task_log("perception", quiet_info=True).info(
-                "grasp detection SAM mask disabled",
-                step="sam_mask",
-                event="disabled",
-            )
-            return None
-
-        try:
-            return BBoxPromptSegmenter(
-                backend=config["sam_backend"],
-                checkpoint_path=config["sam_checkpoint"],
-                model_type=config["sam_model_type"],
-                device=config["sam_device"],
-            )
-        except Exception as exc:
-            self._task_log("perception").warn(
-                "grasp detection SAM init failed",
-                step="sam_mask",
-                event="fail",
-                reason=str(exc) or type(exc).__name__,
-            )
-            return None
-
-    def _grasp_detection_sam(self):
-        if self.grasp_detection_sam_segmenter is not None:
-            return self.grasp_detection_sam_segmenter
-        if self.grasp_detection_sam_init_attempted:
-            return None
-
-        self.grasp_detection_sam_init_attempted = True
-        self.grasp_detection_sam_segmenter = (
-            self._create_grasp_detection_sam_segmenter(
-                self.grasp_detection_sam_config,
-            )
-        )
-        return self.grasp_detection_sam_segmenter
-
     def _read_vlm_service_config(self):
         self.declare_parameter("vlm_service_name", VLM_GRASP_SERVICE_NAME)
         self.declare_parameter("vlm_service_wait_timeout_sec", 2.0)
@@ -618,6 +554,28 @@ class TaskCoordinatorNode(Node):
             ),
             "response_timeout_sec": float(
                 self.get_parameter("vlm_service_response_timeout_sec").value
+            ),
+        }
+
+    def _read_sam_yaw_service_config(self):
+        self.declare_parameter("sam_yaw_service_name", SAM_YAW_SERVICE_NAME)
+        self.declare_parameter(
+            "sam_yaw_service_wait_timeout_sec",
+            SAM_YAW_SERVICE_WAIT_TIMEOUT_SEC,
+        )
+        self.declare_parameter(
+            "sam_yaw_service_response_timeout_sec",
+            SAM_YAW_SERVICE_RESPONSE_TIMEOUT_SEC,
+        )
+        return {
+            "service_name": str(
+                self.get_parameter("sam_yaw_service_name").value
+            ).strip(),
+            "wait_timeout_sec": float(
+                self.get_parameter("sam_yaw_service_wait_timeout_sec").value
+            ),
+            "response_timeout_sec": float(
+                self.get_parameter("sam_yaw_service_response_timeout_sec").value
             ),
         }
 
@@ -1554,6 +1512,8 @@ class TaskCoordinatorNode(Node):
         self.state.drawer_preparing_tool = None
         self.state.grasp_detection_mask_images = None
         self.state.grasp_detection_mask_target = None
+        self.state.grasp_detection_yaw_deg = None
+        self.state.grasp_detection_yaw_target = None
         self.handoff_retry_req.clear()
         self.handoff_fallback_req.clear()
         self.handoff_decision_pending.clear()
@@ -1767,21 +1727,10 @@ class TaskCoordinatorNode(Node):
         return replace(target, yaw_deg=float(pca_yaw_deg))
 
     def _mask_pca_yaw_for_target(self, target_label):
-        if self.state.grasp_detection_mask_target != target_label:
+        if self.state.grasp_detection_yaw_target != target_label:
             return None
-        images = self.state.grasp_detection_mask_images or []
-        if not images:
-            return None
-
-        yaw_deg, debug = estimate_yaw_from_binary_crop(images[0])
+        yaw_deg = self.state.grasp_detection_yaw_deg
         if yaw_deg is None:
-            self._task_log("perception").warn(
-                "grasp detection binary crop PCA yaw failed",
-                step="pca_yaw",
-                event="fail",
-                reason=debug.get("reason"),
-                pixels=debug.get("num_pixels"),
-            )
             return None
 
         adjusted_yaw_deg = float(yaw_deg) + PICK_GRASP_YAW_OFFSET_DEG
@@ -1793,7 +1742,6 @@ class TaskCoordinatorNode(Node):
             yaw_deg=f"{yaw_deg:.1f}",
             offset_deg=f"{PICK_GRASP_YAW_OFFSET_DEG:.1f}",
             adjusted_yaw_deg=f"{adjusted_yaw_deg:.1f}",
-            pixels=debug.get("num_pixels"),
         )
         return adjusted_yaw_deg
 
@@ -1825,46 +1773,40 @@ class TaskCoordinatorNode(Node):
 
         box, _label = matched_box
         bbox_xyxy = box.xyxy[0].cpu().numpy().tolist()
-        depth_mm = depth_to_mm(self.state.depth_image.copy(), "passthrough")
-        images = generate_sam_depth_mask_image_for_grasp_detection(
+        response = self.sam_yaw_service_client.estimate_yaw(
             color_image=color_image,
-            depth_mm=depth_mm,
+            depth_image=self.state.depth_image.copy(),
             bbox_xyxy=bbox_xyxy,
-            sam_segmenter=self._grasp_detection_sam(),
-            data_root=Path("src/macgyvbot_perception/data"),
-            filename_prefix=f"pick_vlm_observe_{target_label}",
-            sam_depth_tolerance_mm=(
-                self.grasp_detection_sam_config["sam_depth_tolerance_mm"]
-            ),
-            sam_depth_min_valid_ratio=(
-                self.grasp_detection_sam_config["sam_depth_min_valid_ratio"]
-            ),
-            sam_depth_expand_iterations=(
-                self.grasp_detection_sam_config["sam_depth_expand_iterations"]
-            ),
+            target_label=target_label,
+            interrupted=self._motion_interrupted,
         )
-        if images is None:
+        if response is None:
             self._task_log("perception").warn(
-                "SAM depth mask generation failed at VLM observe pose",
+                "SAM yaw service failed at VLM observe pose",
                 step="grasp_mask",
                 event="fail",
                 target=target_label,
-                reason="sam_depth_mask_failed",
+                reason="sam_yaw_service_failed",
             )
             self.state.grasp_detection_mask_images = None
             self.state.grasp_detection_mask_target = None
+            self.state.grasp_detection_yaw_deg = None
+            self.state.grasp_detection_yaw_target = None
             return None
 
-        self.state.grasp_detection_mask_images = images
-        self.state.grasp_detection_mask_target = target_label
+        self.state.grasp_detection_mask_images = None
+        self.state.grasp_detection_mask_target = None
+        self.state.grasp_detection_yaw_deg = float(response.yaw_deg)
+        self.state.grasp_detection_yaw_target = target_label
         self._task_log("perception", quiet_info=True).info(
-            "SAM depth grasp detection mask images saved",
+            "SAM yaw service result saved",
             step="grasp_mask",
             event="done",
             target=target_label,
-            path="src/macgyvbot_perception/data/yaw_pca",
+            yaw_deg=f"{response.yaw_deg:.1f}",
+            path=response.debug_image_path,
         )
-        return images
+        return response
 
     def _motion_interrupted(self):
         return self.exit_req.is_set() or self.pause_req.is_set()

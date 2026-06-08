@@ -20,6 +20,7 @@ setup(
     entry_points={
         "console_scripts": [
             "hand_grasp_detection = macgyvbot_perception.hand_grasp_detection_node:main",
+            "sam_yaw_service_node = macgyvbot_perception.sam_yaw_service_node:main",
             "vlm_grasp_service_node = macgyvbot_perception.vlm_grasp_service_node:main",
         ],
     },

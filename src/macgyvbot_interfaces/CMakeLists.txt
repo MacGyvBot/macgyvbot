@@ -17,6 +17,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/HumanGraspResult.msg"
   "msg/ToolMaskLock.msg"
   "srv/SetGripper.srv"
+  "srv/SAMYaw.srv"
   "srv/VLMGrasp.srv"
   DEPENDENCIES sensor_msgs
 )

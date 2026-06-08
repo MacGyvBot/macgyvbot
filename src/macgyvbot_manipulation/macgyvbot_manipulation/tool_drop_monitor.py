@@ -4,14 +4,24 @@ from __future__ import annotations
 
 import threading
 import time
+from dataclasses import dataclass
 
 from macgyvbot_config.grasp import (
     DROP_MONITOR_GRACE_SEC,
     DROP_MONITOR_POLL_SEC,
     DROP_MONITOR_STABLE_COUNT,
     DROP_MONITOR_STOP_TIMEOUT_SEC,
+    DROP_MONITOR_WIDTH_RELEASE_DELTA_MM,
+    GRIPPER_EMPTY_CLOSED_WIDTH_THRESHOLD_MM,
 )
-from macgyvbot_manipulation.grasp_verifier import read_grasp_confirmation
+
+
+@dataclass(frozen=True)
+class GripperHoldState:
+    busy: bool
+    grip_detected: bool
+    status: list
+    width_mm: float | None
 
 
 class ToolDropMonitor:
@@ -60,7 +70,9 @@ class ToolDropMonitor:
     def _run(self, session_id, stop_event, tool_name, action, command):
         logger = _EventLogger()
         start_time = time.monotonic()
+        baseline_width_mm = _read_width_mm(self.gripper, logger)
         lost_count = 0
+        loss_reason = "grip_lost_after_grasp_success"
         width_error_reported = False
 
         while self.ok_fn() and not stop_event.is_set():
@@ -69,10 +81,9 @@ class ToolDropMonitor:
                 continue
 
             try:
-                confirmed, busy, status, width_mm = read_grasp_confirmation(
+                state = read_gripper_hold_state(
                     self.gripper,
                     logger,
-                    log_success=False,
                 )
             except Exception as exc:
                 if self._is_current_session(session_id, stop_event):
@@ -88,7 +99,7 @@ class ToolDropMonitor:
                     )
                 return
 
-            if width_mm is None:
+            if state.width_mm is None:
                 lost_count = 0
                 if not width_error_reported:
                     width_error_reported = True
@@ -106,9 +117,14 @@ class ToolDropMonitor:
 
             width_error_reported = False
 
-            if busy or confirmed:
+            current_loss_reason = classify_tool_drop_sample(
+                state,
+                baseline_width_mm,
+            )
+            if current_loss_reason is None:
                 lost_count = 0
             else:
+                loss_reason = current_loss_reason
                 lost_count += 1
 
             if lost_count >= DROP_MONITOR_STABLE_COUNT:
@@ -118,9 +134,13 @@ class ToolDropMonitor:
                             "event": "tool_dropped",
                             "tool_name": tool_name or "unknown",
                             "action": action or "unknown",
-                            "reason": "grip_lost_after_grasp_success",
-                            "width_mm": width_mm,
-                            "status": status,
+                            "reason": loss_reason,
+                            "width_mm": state.width_mm,
+                            "baseline_width_mm": baseline_width_mm,
+                            "empty_closed_width_threshold_mm": (
+                                GRIPPER_EMPTY_CLOSED_WIDTH_THRESHOLD_MM
+                            ),
+                            "status": state.status,
                             "command": command,
                         }
                     )
@@ -167,6 +187,56 @@ class _EventLogger:
 
     def warn(self, message):
         pass
+
+
+def read_gripper_hold_state(gripper, logger):
+    """Return the raw gripper state needed for hold/drop monitoring."""
+    status = gripper.get_status()
+    grip_detected = len(status) > 1 and bool(status[1])
+    busy = bool(status[0]) if status else False
+    width_mm = _read_width_mm(gripper, logger)
+    return GripperHoldState(
+        busy=busy,
+        grip_detected=grip_detected,
+        status=status,
+        width_mm=width_mm,
+    )
+
+
+def classify_tool_drop_sample(
+    state,
+    baseline_width_mm,
+    empty_closed_width_threshold_mm=GRIPPER_EMPTY_CLOSED_WIDTH_THRESHOLD_MM,
+    release_delta_mm=DROP_MONITOR_WIDTH_RELEASE_DELTA_MM,
+):
+    """Return a drop reason for one monitor sample, or None while held."""
+    if state.busy:
+        return None
+
+    if not state.grip_detected:
+        return "grip_detected_signal_lost"
+
+    width_mm = state.width_mm
+    if width_mm is None or baseline_width_mm is None:
+        return None
+
+    if width_mm <= empty_closed_width_threshold_mm:
+        if baseline_width_mm > empty_closed_width_threshold_mm:
+            return "width_reached_empty_closed_threshold"
+        return None
+
+    if baseline_width_mm - width_mm >= release_delta_mm:
+        return "width_reduced_from_held_baseline"
+
+    return None
+
+
+def _read_width_mm(gripper, logger):
+    try:
+        return float(gripper.get_width())
+    except Exception as exc:
+        logger.warn(f"그리퍼 폭 읽기 실패: {exc}")
+        return None
 
 
 def _sleep_wait(duration_sec):
