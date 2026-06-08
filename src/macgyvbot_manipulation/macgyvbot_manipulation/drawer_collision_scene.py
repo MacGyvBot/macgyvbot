@@ -244,7 +244,7 @@ class DrawerCollisionSceneManager:
         return collision_objects, colors, object_ids
 
     def _build_removal_objects(self, active_object_ids):
-        inactive_object_ids = self._known_object_ids - set(active_object_ids)
+        inactive_object_ids = self._applied_object_ids - set(active_object_ids)
         return [
             _make_remove_collision_object(
                 object_id,

@@ -16,6 +16,7 @@ from launch.substitutions import PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 from macgyvbot_config.models import HAND_GRASP_SAM_CHECKPOINT_NAME
+from macgyvbot_config.robot import GROUP_NAME
 from macgyvbot_config.topics import (
     CAMERA_COLOR_TOPIC,
     CAMERA_DEPTH_TOPIC,
@@ -33,12 +34,31 @@ SCREEN_OUTPUT_FORMAT = "{line}"
 
 
 COMBINED_ROBOT_URDF = "m0609_onrobot_rg2_combined.urdf"
+PLANNER_ID = "RRTConnectkConfigDefault"
 
 
 def load_combined_robot_description():
     resources_share = Path(get_package_share_directory("macgyvbot_resources"))
     urdf_path = resources_share / "urdf" / COMBINED_ROBOT_URDF
     return urdf_path.read_text(encoding="utf-8")
+
+
+def ensure_rrtconnect_planner_config(moveit_config_dict):
+    ompl_config = moveit_config_dict.setdefault("ompl", {})
+    planner_configs = ompl_config.setdefault("planner_configs", {})
+    rrtconnect_config = planner_configs.setdefault(PLANNER_ID, {})
+    rrtconnect_config.setdefault("type", "geometric::RRTConnect")
+    rrtconnect_config.setdefault("range", 0.0)
+
+    group_config = ompl_config.setdefault(GROUP_NAME, {})
+    group_config.setdefault("default_planner_config", PLANNER_ID)
+    group_config.setdefault("longest_valid_segment_fraction", 0.005)
+    configured_planners = group_config.setdefault("planner_configs", [])
+    if not isinstance(configured_planners, list):
+        configured_planners = [configured_planners]
+        group_config["planner_configs"] = configured_planners
+    if PLANNER_ID not in configured_planners:
+        configured_planners.append(PLANNER_ID)
 
 
 def generate_launch_description():
@@ -117,6 +137,7 @@ def generate_launch_description():
     )
     moveit_config_dict = moveit_config.to_dict()
     moveit_config_dict["robot_description"] = load_combined_robot_description()
+    ensure_rrtconnect_planner_config(moveit_config_dict)
 
     moveit_py_params = PathJoinSubstitution(
         [bringup_share, "config", "moveit_py.yaml"]
