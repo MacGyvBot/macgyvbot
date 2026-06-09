@@ -16,6 +16,7 @@ class TaskRuntimeState:
 
     color_image: Any = None
     depth_image: Any = None
+    depth_encoding: str | None = None
     intrinsics: dict | None = None
     picking: bool = False
     target_label: str | None = None

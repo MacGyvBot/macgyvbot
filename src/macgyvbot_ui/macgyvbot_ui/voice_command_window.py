@@ -23,16 +23,26 @@ try:
     )
 except ImportError:  # pragma: no cover - runtime environment guidance
     QApplication = None
+    QFrame = None
     Qt = None
     QTimer = None
     VoiceCommandGuiWindow = None
 else:
 
     class VoiceCommandGuiWindow(QMainWindow):
-        def __init__(self, on_user_text=None, on_gripper_width=None):
+        _INPUT_READY_PLACEHOLDER = '메시지를 입력하거나 음성으로 말해주세요.'
+        _INPUT_BUSY_PLACEHOLDER = '동작 실행 중... 상태 버튼이나 음성 명령을 사용해주세요.'
+
+        def __init__(
+            self,
+            on_user_text=None,
+            on_gripper_width=None,
+            on_control_action=None,
+        ):
             super().__init__()
             self._on_user_text = on_user_text
             self._on_gripper_width = on_gripper_width
+            self._on_control_action = on_control_action
             self.setWindowTitle('MacGyvBot Assistant')
             self.setFixedSize(1420, 900)
             self._detector_pixmap = None
@@ -53,11 +63,12 @@ else:
             )
 
             self._input = QLineEdit()
-            self._input.setPlaceholderText('메시지를 입력하거나 음성으로 말해주세요.')
+            self._input.setPlaceholderText(self._INPUT_READY_PLACEHOLDER)
             self._input.returnPressed.connect(self._send_text)
 
             self._send_button = QPushButton('전송  >')
             self._send_button.clicked.connect(self._send_text)
+            self._chat_input_enabled = True
 
             self._robot_connection_status = QLabel('로봇 노드: 미확인')
             self._camera_connection_status = QLabel('카메라 노드: 미확인')
@@ -66,6 +77,22 @@ else:
             self._current_status = QLabel('현재 상태: 명령 대기')
             self._task_target_status = QLabel('작업 대상: 없음')
             self._task_stage_status = QLabel('작업 단계: 대기')
+            self._pause_button = QPushButton('멈춤')
+            self._pause_button.setObjectName('pauseControlButton')
+            self._pause_button.clicked.connect(
+                lambda _checked=False: self._send_control_action(
+                    action='pause',
+                    text='멈춰',
+                )
+            )
+            self._resume_button = QPushButton('재개')
+            self._resume_button.setObjectName('resumeControlButton')
+            self._resume_button.clicked.connect(
+                lambda _checked=False: self._send_control_action(
+                    action='resume',
+                    text='재개',
+                )
+            )
             self._home_button = QPushButton('복귀')
             self._home_button.setObjectName('homeControlButton')
             self._home_button.clicked.connect(
@@ -76,6 +103,11 @@ else:
             self._exit_button.clicked.connect(
                 lambda _checked=False: self._send_control_text('종료')
             )
+            pause_resume_button_layout = QHBoxLayout()
+            pause_resume_button_layout.setContentsMargins(0, 0, 0, 0)
+            pause_resume_button_layout.setSpacing(8)
+            pause_resume_button_layout.addWidget(self._pause_button)
+            pause_resume_button_layout.addWidget(self._resume_button)
             control_button_layout = QHBoxLayout()
             control_button_layout.setContentsMargins(0, 0, 0, 0)
             control_button_layout.setSpacing(8)
@@ -126,6 +158,7 @@ else:
             status_panel_layout.addWidget(self._task_target_status)
             status_panel_layout.addWidget(self._task_stage_status)
             status_panel_layout.addStretch(1)
+            status_panel_layout.addLayout(pause_resume_button_layout)
             status_panel_layout.addLayout(control_button_layout)
 
             gripper_title = QLabel('Gripper Control')
@@ -179,7 +212,7 @@ else:
             gripper_panel = QFrame()
             gripper_panel.setObjectName('gripperPanel')
             gripper_panel.setFixedWidth(290)
-            gripper_panel.setMinimumHeight(210)
+            gripper_panel.setMinimumHeight(245)
             gripper_panel.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
             gripper_panel_layout = QVBoxLayout()
             gripper_panel_layout.setContentsMargins(16, 14, 16, 14)
@@ -299,6 +332,9 @@ else:
             )
 
         def _send_text(self):
+            if not self._chat_input_enabled:
+                return
+
             text = self._input.text().strip()
             if not text:
                 return
@@ -360,6 +396,22 @@ else:
         def set_task_status(self, target_text, stage_text):
             self._task_target_status.setText(f'작업 대상: {target_text}')
             self._task_stage_status.setText(f'작업 단계: {stage_text}')
+
+        def set_chat_input_enabled(self, enabled, reason=''):
+            enabled = bool(enabled)
+            placeholder = str(reason or '').strip()
+            self._chat_input_enabled = enabled
+            self._input.setEnabled(enabled)
+            self._send_button.setEnabled(enabled)
+            if enabled:
+                self._input.setPlaceholderText(
+                    placeholder or self._INPUT_READY_PLACEHOLDER
+                )
+            else:
+                self._input.clear()
+                self._input.setPlaceholderText(
+                    placeholder or self._INPUT_BUSY_PLACEHOLDER
+                )
 
         def set_gripper_control_state(self, enabled, reason):
             reason = str(reason or '').strip()
@@ -584,7 +636,12 @@ else:
             row.setLayout(row_layout)
 
             buttons = []
-            for label, reply in actions:
+            for action in actions:
+                if len(action) == 3:
+                    label, reply, control_action = action
+                else:
+                    label, reply = action
+                    control_action = None
                 button = QPushButton(label)
                 button.setCursor(Qt.PointingHandCursor)
                 button.setStyleSheet(
@@ -603,9 +660,16 @@ else:
                     }
                     '''
                 )
-                button.clicked.connect(
-                    lambda _checked=False, text=reply: self._send_quick_reply(text)
-                )
+                if control_action:
+                    button.clicked.connect(
+                        lambda _checked=False, action=control_action, text=reply: (
+                            self._send_control_action(action, text)
+                        )
+                    )
+                else:
+                    button.clicked.connect(
+                        lambda _checked=False, text=reply: self._send_quick_reply(text)
+                    )
                 buttons.append(button)
 
             for button in buttons:
@@ -620,6 +684,14 @@ else:
 
         def _send_control_text(self, text):
             self.append_user(text)
+            if self._on_user_text is not None:
+                self._on_user_text(text)
+
+        def _send_control_action(self, action, text):
+            self.append_user(text)
+            if self._on_control_action is not None:
+                self._on_control_action(action, text)
+                return
             if self._on_user_text is not None:
                 self._on_user_text(text)
 
@@ -1037,27 +1109,31 @@ else:
                 QPushButton:hover {
                     background-color: #245FC4;
                 }
-                QPushButton#homeControlButton {
-                    background-color: #FFFFFF;
-                    color: #2563B8;
-                    border: 1px solid #BFD4EE;
-                    border-radius: 12px;
-                    padding: 10px 12px;
-                    font-weight: 800;
+                QPushButton:disabled {
+                    background-color: #E5EDF6;
+                    color: #8A9AAA;
                 }
-                QPushButton#homeControlButton:hover {
-                    background-color: #EEF6FF;
+                QLineEdit:disabled {
+                    background-color: #EFF4F9;
+                    color: #8A9AAA;
+                    border: 1px solid #D3DFEA;
                 }
+                QPushButton#pauseControlButton,
+                QPushButton#resumeControlButton,
+                QPushButton#homeControlButton,
                 QPushButton#exitControlButton {
-                    background-color: #FFF5F5;
-                    color: #C24141;
-                    border: 1px solid #F2C6C6;
+                    background-color: #FFFFFF;
+                    color: #223B5C;
+                    border: 1px solid #D3DFEA;
                     border-radius: 12px;
                     padding: 10px 12px;
                     font-weight: 800;
                 }
+                QPushButton#pauseControlButton:hover,
+                QPushButton#resumeControlButton:hover,
+                QPushButton#homeControlButton:hover,
                 QPushButton#exitControlButton:hover {
-                    background-color: #FFECEC;
+                    background-color: #F5F8FC;
                 }
                 '''
             )

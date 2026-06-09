@@ -68,7 +68,13 @@ class FakeMotion:
         self.results = list(results)
         self.targets = []
 
-    def plan_and_execute(self, logger, pose_goal=None, state_goal=None):
+    def plan_and_execute(
+        self,
+        logger,
+        pose_goal=None,
+        state_goal=None,
+        collision_scene_key=None,
+    ):
         self.targets.append(pose_goal)
         return self.results.pop(0)
 

@@ -69,7 +69,13 @@ from macgyvbot_config.vlm import (
     VLM_ONLY_MODES,
 )
 from macgyvbot_domain.target_models import PickTarget
+from macgyvbot_manipulation.drawer_collision_scene import (
+    DrawerCollisionSceneManager,
+)
 from macgyvbot_manipulation.drawer_motion import DrawerMotionFlow
+from macgyvbot_manipulation.gripper_collision_scene import (
+    GripperSelfCollisionManager,
+)
 from macgyvbot_manipulation.moveit_controller import MoveItController
 from macgyvbot_manipulation.onrobot_gripper import RG
 from macgyvbot_manipulation.robot_pose import (
@@ -283,10 +289,20 @@ class TaskCoordinatorNode(Node):
 
         self.declare_parameter("display_debug_windows", False)
         self.declare_parameter("manual_gripper_service", MANUAL_GRIPPER_SERVICE)
+        self.declare_parameter("enable_drawer_collision_scene", True)
+        self.declare_parameter("enable_gripper_self_collision_acm", True)
         self.bridge = CvBridge()
         self.display_debug_windows = self._read_bool_parameter(
             "display_debug_windows",
             False,
+        )
+        self.enable_drawer_collision_scene = self._read_bool_parameter(
+            "enable_drawer_collision_scene",
+            True,
+        )
+        self.enable_gripper_self_collision_acm = self._read_bool_parameter(
+            "enable_gripper_self_collision_acm",
+            True,
         )
         self.display = DebugDisplay(enabled=self.display_debug_windows)
         self.exit_req = threading.Event()
@@ -357,6 +373,25 @@ class TaskCoordinatorNode(Node):
         self.gripper = RG("rg2", "192.168.1.1", 502)
         self.robot = MoveItPy(node_name="task_coordinator_moveit_py")
         self.arm = self.robot.get_planning_component(GROUP_NAME)
+        self.gripper_self_collision_scene = None
+        if self.enable_gripper_self_collision_acm:
+            self.gripper_self_collision_scene = GripperSelfCollisionManager(
+                self,
+                moveit_robot=self.robot,
+            )
+        self.drawer_collision_scene = DrawerCollisionSceneManager(
+            self,
+            moveit_robot=self.robot,
+        )
+        self._drawer_collision_scene_retries_remaining = 0
+        self._drawer_collision_scene_timer = None
+        if self.enable_drawer_collision_scene:
+            self._apply_drawer_collision_scene()
+            self._drawer_collision_scene_retries_remaining = 3
+            self._drawer_collision_scene_timer = self.create_timer(
+                1.0,
+                self._retry_drawer_collision_scene,
+            )
         self.depth_projector = DepthProjector(self._base_to_camera_matrix)
         self.hand_grasp_adapter = HandGraspResultAdapter(
             self.state,
@@ -370,19 +405,25 @@ class TaskCoordinatorNode(Node):
             self._task_log("perception", quiet_info=True),
         )
 
-        self.pilz_params = PlanRequestParameters(self.robot)
-        self.pilz_params.planning_pipeline = "pilz_industrial_motion_planner"
-        self.pilz_params.planner_id = "PTP"
-        self.pilz_params.max_velocity_scaling_factor = (
+        self.planning_params = PlanRequestParameters(self.robot)
+        self.planning_params.planning_pipeline = "ompl"
+        self.planning_params.planner_id = "RRTConnectkConfigDefault"
+        self.planning_params.max_velocity_scaling_factor = (
             MOTION_VELOCITY_SCALING_FACTOR
         )
 
         self.motion = MoveItController(
             self.robot,
             self.arm,
-            self.pilz_params,
+            self.planning_params,
             should_interrupt=self._motion_interrupted,
             node=self,
+            drawer_collision_scene=self.drawer_collision_scene,
+            gripper_self_collision_scene=self.gripper_self_collision_scene,
+            enable_drawer_collision_scene=self.enable_drawer_collision_scene,
+            enable_gripper_self_collision_acm=(
+                self.enable_gripper_self_collision_acm
+            ),
         )
         self.drawer_flow = DrawerMotionFlow(
             self.robot,
@@ -475,6 +516,19 @@ class TaskCoordinatorNode(Node):
 
     def _base_to_camera_matrix(self):
         return get_ee_matrix(self.robot) @ self.gripper2cam
+
+    def _apply_drawer_collision_scene(self):
+        return self.drawer_collision_scene.apply(self.get_logger())
+
+    def _retry_drawer_collision_scene(self):
+        if self._drawer_collision_scene_retries_remaining <= 0:
+            if self._drawer_collision_scene_timer is not None:
+                self.destroy_timer(self._drawer_collision_scene_timer)
+                self._drawer_collision_scene_timer = None
+            return
+
+        self._apply_drawer_collision_scene()
+        self._drawer_collision_scene_retries_remaining -= 1
 
     def _preload_vlm_after_startup(self):
         if self._vlm_preload_timer is not None:
@@ -971,6 +1025,21 @@ class TaskCoordinatorNode(Node):
             )
             return
 
+        if not self.motion.ensure_gripper_self_collision_acm(
+            self.get_logger(),
+            attempts=3,
+            retry_delay_sec=0.3,
+        ):
+            self._publish_robot_status(
+                "failed",
+                tool_name=tool_name,
+                action="home",
+                message="그리퍼 self-collision 허용 설정 적용에 실패했습니다.",
+                reason="gripper_self_collision_acm_failed",
+                command=command,
+            )
+            return
+
         self._publish_robot_status(
             "returning_home",
             tool_name=tool_name,
@@ -1223,6 +1292,20 @@ class TaskCoordinatorNode(Node):
             reason=reason or "exit_requested",
             command=command,
         )
+
+        if not self.motion.ensure_gripper_self_collision_acm(
+            log,
+            attempts=3,
+            retry_delay_sec=0.3,
+        ):
+            self._publish_robot_status(
+                "failed",
+                action="exit",
+                message="그리퍼 self-collision 허용 설정 적용에 실패했습니다.",
+                reason="gripper_self_collision_acm_failed",
+                command=command,
+            )
+            return
 
         ok = self.motion.move_to_home_joints(log)
         if not ok:
@@ -1850,11 +1933,18 @@ class TaskCoordinatorNode(Node):
 
     def _depth_cb(self, msg):
         self.state.depth_image = self.bridge.imgmsg_to_cv2(msg, "passthrough")
+        self.state.depth_encoding = msg.encoding
 
     def _wrench_cb(self, msg):
         self.state.latest_wrench = msg.wrench
 
     def run(self):
+        if not self.motion.ensure_gripper_self_collision_acm(
+            self.get_logger(),
+            attempts=5,
+            retry_delay_sec=0.5,
+        ):
+            return
         self.home_initializer.initialize()
         self._process_frames()
 

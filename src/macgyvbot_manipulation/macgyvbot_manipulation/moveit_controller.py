@@ -20,6 +20,7 @@ from macgyvbot_config.robot import (
     HOME_JOINTS,
     WRIST_JOINT_NAME,
 )
+from macgyvbot_config.structured_logging import format_structured_log
 from macgyvbot_manipulation.robot_pose import normalize_angle_deg
 
 
@@ -40,6 +41,45 @@ def _nearest_equivalent_value(current, target):
         for k in range(nearest_k - 1, nearest_k + 2)
     ]
     return min(candidates, key=lambda value: abs(value - float(current)))
+
+
+def _negative_first_equivalent_values(current, target, tolerance_rad=1e-9):
+    current = float(current)
+    target = float(target)
+    nearest_k = int(round((current - target) / _TWO_PI))
+    candidates = []
+    seen = set()
+    for k in range(nearest_k - 2, nearest_k + 3):
+        value = target + _TWO_PI * k
+        key = round(value, 9)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append(value)
+
+    zero = [
+        value
+        for value in candidates
+        if abs(value - current) <= tolerance_rad
+    ]
+    negative = sorted(
+        [
+            value
+            for value in candidates
+            if value - current < -tolerance_rad
+        ],
+        key=lambda value: abs(value - current),
+    )
+    positive = sorted(
+        [
+            value
+            for value in candidates
+            if value - current > tolerance_rad
+        ],
+        key=lambda value: abs(value - current),
+    )
+
+    return zero + negative + positive
 
 
 def _nearest_equivalent_positions(current_positions, target_positions):
@@ -131,6 +171,18 @@ def _format_joint_deltas(joint_names, current_positions, raw_positions, goal_pos
 def _joint_delta_limit_mask(joint_names):
     #return np.array([name != WRIST_JOINT_NAME for name in joint_names], dtype=bool)
     return np.array([False, False, False, False, False, False], dtype=bool)
+
+
+def _current_joint_group_state(robot):
+    robot_model = robot.get_robot_model()
+    jmg = robot_model.get_joint_model_group(GROUP_NAME)
+    joint_names = list(jmg.active_joint_model_names)
+    with robot.get_planning_scene_monitor().read_only() as scene:
+        current_positions = np.array(
+            scene.current_state.get_joint_group_positions(GROUP_NAME),
+            dtype=float,
+        )
+    return robot_model, joint_names, current_positions
 
 def _pose_goal_to_near_current_state_goal(robot, pose_goal, logger):
     robot_model = robot.get_robot_model()
@@ -293,13 +345,28 @@ def plan_and_execute(
     params=None,
     should_interrupt=None,
     execute_trajectory=None,
+    planning_precondition=None,
     min_z=None,
 ):
     if should_interrupt is not None and should_interrupt():
         logger.info("중단 요청으로 planning/execution을 시작하지 않습니다.")
         return False
 
+    if planning_precondition is not None:
+        try:
+            planning_ready = bool(planning_precondition(logger))
+        except Exception as exc:
+            logger.error(f"planning precondition 확인 중 예외 발생: {exc}")
+            return False
+        if not planning_ready:
+            logger.error("planning precondition을 만족하지 않아 planning을 중단합니다.")
+            return False
+
     arm.set_start_state_to_current_state()
+
+    if should_interrupt is not None and should_interrupt():
+        logger.info("중단 요청으로 planning/execution을 시작하지 않습니다.")
+        return False
 
     if pose_goal:
         x = pose_goal.pose.position.x
@@ -361,16 +428,27 @@ class MoveItController:
         node=None,
         trajectory_action_name=DEFAULT_TRAJECTORY_ACTION_NAME,
         poll_interval_sec=0.02,
+        planning_precondition=None,
+        drawer_collision_scene=None,
+        gripper_self_collision_scene=None,
+        enable_drawer_collision_scene=True,
+        enable_gripper_self_collision_acm=True,
     ):
         self.robot = robot
         self.arm = arm
         self.params = params
         self.should_interrupt = should_interrupt
+        self.planning_precondition = planning_precondition
+        self.drawer_collision_scene = drawer_collision_scene
+        self.gripper_self_collision_scene = gripper_self_collision_scene
+        self.enable_drawer_collision_scene = enable_drawer_collision_scene
+        self.enable_gripper_self_collision_acm = enable_gripper_self_collision_acm
         self.node = node
         self.trajectory_action_name = trajectory_action_name
         self.poll_interval_sec = poll_interval_sec
         self._current_goal_handle = None
         self._goal_lock = threading.Lock()
+        self._gripper_self_collision_acm_applied = False
         self._trajectory_client = None
         if self.node is not None:
             self._trajectory_client = ActionClient(
@@ -379,7 +457,20 @@ class MoveItController:
                 self.trajectory_action_name,
             )
 
-    def plan_and_execute(self, logger, pose_goal=None, state_goal=None, min_z=None):
+    def plan_and_execute(
+        self,
+        logger,
+        pose_goal=None,
+        state_goal=None,
+        min_z=None,
+        collision_scene_key=None,
+    ):
+        if not self._ensure_collision_planning_scene_ready(
+            logger,
+            collision_scene_key=collision_scene_key,
+        ):
+            return False
+
         return plan_and_execute(
             self.robot,
             self.arm,
@@ -391,8 +482,68 @@ class MoveItController:
             execute_trajectory=self._execute_trajectory_action
             if self._trajectory_client is not None
             else None,
+            planning_precondition=self.planning_precondition,
             min_z=min_z,
         )
+
+    def _ensure_collision_planning_scene_ready(
+        self,
+        logger,
+        collision_scene_key=None,
+    ):
+        if not self.ensure_gripper_self_collision_acm(logger):
+            return False
+        return self._ensure_drawer_collision_scene_ready(
+            logger,
+            collision_scene_key=collision_scene_key,
+        )
+
+    def _ensure_drawer_collision_scene_ready(
+        self,
+        logger,
+        collision_scene_key=None,
+    ):
+        if not self.enable_drawer_collision_scene:
+            return True
+        if self.drawer_collision_scene is None:
+            logger.error("drawer collision scene manager is not initialized")
+            return False
+
+        return self.drawer_collision_scene.ensure_ready_for_scene_key(
+            collision_scene_key,
+            logger=logger,
+            attempts=2,
+            retry_delay_sec=0.1,
+            refresh=True,
+        )
+
+    def ensure_gripper_self_collision_acm(
+        self,
+        logger,
+        attempts=1,
+        retry_delay_sec=0.0,
+    ):
+        if not self.enable_gripper_self_collision_acm:
+            return True
+        if self._gripper_self_collision_acm_applied:
+            return True
+        if self.gripper_self_collision_scene is None:
+            logger.error("RG2 self-collision ACM manager is not initialized")
+            return False
+
+        attempts = max(1, int(attempts))
+        for attempt_index in range(attempts):
+            if self.gripper_self_collision_scene.apply(logger):
+                self._gripper_self_collision_acm_applied = True
+                return True
+            if attempt_index + 1 < attempts and retry_delay_sec > 0.0:
+                time.sleep(float(retry_delay_sec))
+
+        logger.error(
+            "RG2 self-collision ACM patch failed; planning may start in "
+            "gripper self-collision"
+        )
+        return False
 
     def cancel_current_goal(self, logger=None, reason=""):
         """Cancel the active controller goal if this controller owns one."""
@@ -566,7 +717,7 @@ class MoveItController:
         )
         return None
 
-    def move_to_home_joints(self, logger):
+    def move_to_home_joints(self, logger, collision_scene_key="robot/home"):
         """Move to the configured Home joint pose."""
         if self._is_at_joint_goal(
             HOME_JOINTS,
@@ -581,7 +732,11 @@ class MoveItController:
         state_goal.update()
 
         logger.info("Home joint pose로 복귀합니다.")
-        ok = self.plan_and_execute(logger, state_goal=state_goal)
+        ok = self.plan_and_execute(
+            logger,
+            state_goal=state_goal,
+            collision_scene_key=collision_scene_key,
+        )
         if ok:
             return True
 
@@ -647,7 +802,12 @@ class MoveItController:
 
         return True
 
-    def rotate_wrist_by_yaw_deg(self, yaw_deg, logger):
+    def rotate_wrist_by_yaw_deg(
+        self,
+        yaw_deg,
+        logger,
+        collision_scene_key="robot/rotate_wrist",
+    ):
         if yaw_deg is None:
             return True
 
@@ -666,9 +826,9 @@ class MoveItController:
             logger.info("VLM yaw가 매우 작아 J6 회전을 생략합니다.")
             return True
 
-        robot_model = self.robot.get_robot_model()
-        jmg = robot_model.get_joint_model_group(GROUP_NAME)
-        joint_names = list(jmg.active_joint_model_names)
+        robot_model, joint_names, current_positions = _current_joint_group_state(
+            self.robot
+        )
         if WRIST_JOINT_NAME not in joint_names:
             logger.error(
                 f"{GROUP_NAME} 그룹에 {WRIST_JOINT_NAME}이 없어 J6 회전을 수행할 수 없습니다. "
@@ -677,12 +837,6 @@ class MoveItController:
             return False
 
         j6_idx = joint_names.index(WRIST_JOINT_NAME)
-        psm = self.robot.get_planning_scene_monitor()
-        with psm.read_only() as scene:
-            current_positions = np.array(
-                scene.current_state.get_joint_group_positions(GROUP_NAME),
-                dtype=float,
-            )
 
         if j6_idx >= len(current_positions):
             logger.error(
@@ -693,20 +847,228 @@ class MoveItController:
 
         current_j6 = float(current_positions[j6_idx])
         target_j6 = current_j6 + math.radians(yaw_deg)
-        target_j6 = math.atan2(math.sin(target_j6), math.cos(target_j6))
-
-        target_positions = np.array(current_positions, copy=True)
-        target_positions[j6_idx] = target_j6
-
-        logger.info(
-            "2-1단계: VLM yaw를 J6에 적용 "
-            f"(yaw_offset={yaw_deg:.2f}deg, "
-            f"j6={math.degrees(current_j6):.2f}deg -> "
-            f"{math.degrees(target_j6):.2f}deg)"
+        return self._plan_wrist_equivalent_targets(
+            robot_model,
+            current_positions,
+            j6_idx,
+            target_j6,
+            logger,
+            collision_scene_key,
+            "2-1단계: VLM yaw를 J6에 적용",
+            yaw_offset_deg=yaw_deg,
         )
 
-        state_goal = RobotState(robot_model)
-        state_goal.set_joint_group_positions(GROUP_NAME, target_positions)
-        state_goal.update()
+    def current_wrist_joint_rad(self, logger):
+        try:
+            _robot_model, joint_names, current_positions = _current_joint_group_state(
+                self.robot
+            )
+        except Exception as exc:
+            logger.warn(
+                format_structured_log(
+                    pkg="manipulation",
+                    pipe="moveit",
+                    msg="current wrist joint read failed",
+                    joint=WRIST_JOINT_NAME,
+                    reason=exc,
+                )
+            )
+            return None
 
-        return self.plan_and_execute(logger, state_goal=state_goal)
+        if WRIST_JOINT_NAME not in joint_names:
+            logger.warn(
+                format_structured_log(
+                    pkg="manipulation",
+                    pipe="moveit",
+                    msg="current wrist joint unavailable",
+                    group=GROUP_NAME,
+                    joint=WRIST_JOINT_NAME,
+                    active_joints=joint_names,
+                )
+            )
+            return None
+
+        j6_idx = joint_names.index(WRIST_JOINT_NAME)
+        if j6_idx >= len(current_positions):
+            logger.warn(
+                format_structured_log(
+                    pkg="manipulation",
+                    pipe="moveit",
+                    msg="current wrist joint index invalid",
+                    joint=WRIST_JOINT_NAME,
+                    index=j6_idx,
+                    positions=len(current_positions),
+                )
+            )
+            return None
+
+        return float(current_positions[j6_idx])
+
+    def move_wrist_to_joint_rad(
+        self,
+        target_j6_rad,
+        logger,
+        collision_scene_key="robot/move_wrist_to_joint",
+    ):
+        if target_j6_rad is None:
+            return True
+
+        try:
+            target_j6_rad = float(target_j6_rad)
+        except (TypeError, ValueError):
+            logger.warn(
+                format_structured_log(
+                    pkg="manipulation",
+                    pipe="moveit",
+                    msg="wrist joint target invalid",
+                    joint=WRIST_JOINT_NAME,
+                    target=target_j6_rad,
+                )
+            )
+            return False
+
+        if not math.isfinite(target_j6_rad):
+            logger.warn(
+                format_structured_log(
+                    pkg="manipulation",
+                    pipe="moveit",
+                    msg="wrist joint target nonfinite",
+                    joint=WRIST_JOINT_NAME,
+                    target=target_j6_rad,
+                )
+            )
+            return False
+
+        robot_model, joint_names, current_positions = _current_joint_group_state(
+            self.robot
+        )
+        if WRIST_JOINT_NAME not in joint_names:
+            logger.error(
+                format_structured_log(
+                    pkg="manipulation",
+                    pipe="moveit",
+                    msg="wrist joint restore unavailable",
+                    group=GROUP_NAME,
+                    joint=WRIST_JOINT_NAME,
+                    active_joints=joint_names,
+                )
+            )
+            return False
+
+        j6_idx = joint_names.index(WRIST_JOINT_NAME)
+        if j6_idx >= len(current_positions):
+            logger.error(
+                format_structured_log(
+                    pkg="manipulation",
+                    pipe="moveit",
+                    msg="wrist joint restore index invalid",
+                    joint=WRIST_JOINT_NAME,
+                    index=j6_idx,
+                    positions=len(current_positions),
+                )
+            )
+            return False
+
+        return self._plan_wrist_equivalent_targets(
+            robot_model,
+            current_positions,
+            j6_idx,
+            target_j6_rad,
+            logger,
+            collision_scene_key,
+            "J6를 저장된 파지 각도로 복원",
+        )
+
+    def _plan_wrist_equivalent_targets(
+        self,
+        robot_model,
+        current_positions,
+        j6_idx,
+        target_j6_rad,
+        logger,
+        collision_scene_key,
+        log_prefix,
+        yaw_offset_deg=None,
+    ):
+        current_j6 = float(current_positions[j6_idx])
+        target_candidates = _negative_first_equivalent_values(
+            current_j6,
+            target_j6_rad,
+        )
+        if not target_candidates:
+            logger.warn(
+                format_structured_log(
+                    pkg="manipulation",
+                    pipe="moveit",
+                    msg="wrist joint target candidates unavailable",
+                    joint=WRIST_JOINT_NAME,
+                )
+            )
+            return False
+
+        if abs(target_candidates[0] - current_j6) < math.radians(0.1):
+            logger.info(
+                format_structured_log(
+                    pkg="manipulation",
+                    pipe="moveit",
+                    msg="wrist joint already at target",
+                    joint=WRIST_JOINT_NAME,
+                    current_deg=math.degrees(current_j6),
+                )
+            )
+            return True
+
+        for attempt, target_j6 in enumerate(target_candidates, start=1):
+            delta_deg = math.degrees(target_j6 - current_j6)
+            direction = "negative" if delta_deg < 0.0 else "positive"
+            target_positions = np.array(current_positions, copy=True)
+            target_positions[j6_idx] = target_j6
+            logger.info(
+                format_structured_log(
+                    pkg="manipulation",
+                    pipe="moveit",
+                    msg="wrist joint target attempt",
+                    joint=WRIST_JOINT_NAME,
+                    action=log_prefix,
+                    yaw_offset_deg=yaw_offset_deg,
+                    attempt=attempt,
+                    direction=direction,
+                    current_deg=math.degrees(current_j6),
+                    target_deg=math.degrees(target_j6),
+                    delta_deg=delta_deg,
+                )
+            )
+
+            state_goal = RobotState(robot_model)
+            state_goal.set_joint_group_positions(GROUP_NAME, target_positions)
+            state_goal.update()
+
+            if self.plan_and_execute(
+                logger,
+                state_goal=state_goal,
+                collision_scene_key=collision_scene_key,
+            ):
+                return True
+
+            logger.warn(
+                format_structured_log(
+                    pkg="manipulation",
+                    pipe="moveit",
+                    msg="wrist joint target attempt failed",
+                    joint=WRIST_JOINT_NAME,
+                    attempt=attempt,
+                    direction=direction,
+                    target_deg=math.degrees(target_j6),
+                )
+            )
+
+        logger.error(
+            format_structured_log(
+                pkg="manipulation",
+                pipe="moveit",
+                msg="wrist joint target attempts failed",
+                joint=WRIST_JOINT_NAME,
+                attempts=len(target_candidates),
+            )
+        )
+        return False

@@ -89,14 +89,31 @@ class FakeMotion:
         self.targets = []
         self.min_z_values = []
         self.home_calls = 0
+        self.wrist_targets = []
 
-    def plan_and_execute(self, logger, pose_goal=None, state_goal=None, min_z=None):
+    def plan_and_execute(
+        self,
+        logger,
+        pose_goal=None,
+        state_goal=None,
+        min_z=None,
+        collision_scene_key=None,
+    ):
         self.targets.append(pose_goal)
         self.min_z_values.append(min_z)
         return self.results.pop(0)
 
-    def move_to_home_joints(self, logger):
+    def move_to_home_joints(self, logger, collision_scene_key=None):
         self.home_calls += 1
+        return True
+
+    def move_wrist_to_joint_rad(
+        self,
+        target_j6_rad,
+        logger,
+        collision_scene_key=None,
+    ):
+        self.wrist_targets.append((target_j6_rad, collision_scene_key))
         return True
 
 
@@ -154,9 +171,11 @@ class FakeHandoff:
         drawer_id=None,
         move_home=True,
         lift_from_current=True,
+        grasp_wrist_joint_rad=None,
     ):
         self.returned_drawer_id = drawer_id
         self.lift_from_current = lift_from_current
+        self.grasp_wrist_joint_rad = grasp_wrist_joint_rad
         self.events.append("return")
         assert not move_home
         return True
@@ -165,7 +184,12 @@ class FakeHandoff:
         self.last_failure_reason = "handoff_search_failed"
         return None, None, None
 
-    def move_home_after_handoff(self, logger, publish_on_failure=True):
+    def move_home_after_handoff(
+        self,
+        logger,
+        publish_on_failure=True,
+        collision_scene_key=None,
+    ):
         self.events.append("home")
         return True
 
@@ -258,6 +282,40 @@ def test_return_tool_to_original_position_uses_drawer_clearance(monkeypatch):
     assert motion.home_calls == 1
 
 
+def test_return_tool_to_original_position_restores_grasp_wrist_before_xy_move(
+    monkeypatch,
+):
+    monkeypatch.setattr(pick_handoff_flow, "get_ee_matrix", lambda _robot: FakeMatrix())
+    motion = FakeMotion()
+    gripper = FakeGripper()
+    flow = PickHandoffFlow(
+        robot=object(),
+        motion_controller=motion,
+        gripper=gripper,
+        state=FakeState(),
+        wait_fn=lambda _duration: None,
+    )
+    ori = {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
+    grasp_wrist_joint_rad = math.radians(67.19)
+
+    assert flow.return_tool_to_original_position(
+        0.30,
+        0.10,
+        0.40,
+        0.35,
+        ori,
+        FakeLogger(),
+        safe_z_min=safe_z_min_for_drawer(1),
+        drawer_id=1,
+        grasp_wrist_joint_rad=grasp_wrist_joint_rad,
+    )
+
+    assert motion.wrist_targets == [
+        (grasp_wrist_joint_rad, "handoff/return_restore_grasp_wrist")
+    ]
+    assert len(motion.targets) == 5
+
+
 def test_handoff_timeout_return_closes_drawer():
     runner = PickSequenceRunner.__new__(PickSequenceRunner)
     runner.handoff = FakeHandoff()
@@ -280,6 +338,7 @@ def test_handoff_timeout_return_closes_drawer():
 
     assert runner.handoff.returned_drawer_id == 1
     assert runner.handoff.lift_from_current is True
+    assert runner.handoff.grasp_wrist_joint_rad is None
     assert runner.drawer_flow.closed == [1]
     assert runner.handoff.events == ["return", "close", "home"]
     assert runner.state.statuses[-1][0] == "returned"
@@ -335,6 +394,7 @@ def test_handoff_search_failure_returns_directly_to_target_clearance():
 
     assert runner.handoff.returned_drawer_id == 1
     assert runner.handoff.lift_from_current is False
+    assert runner.handoff.grasp_wrist_joint_rad is None
     assert runner.drawer_flow.closed == [1]
     assert runner.handoff.events == ["return", "close", "home"]
     assert runner.state.statuses[-1][0] == "returned"

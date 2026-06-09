@@ -7,17 +7,18 @@ import cv2
 import numpy as np
 import rclpy
 from cv_bridge import CvBridge
-from moveit.planning import MoveItPy
+from rclpy.duration import Duration
 from rclpy.node import Node
+from rclpy.time import Time
 from sensor_msgs.msg import CameraInfo, Image
+from tf2_ros import Buffer, TransformException, TransformListener
 
-from macgyvbot_config.robot import GROUP_NAME
+from macgyvbot_config.robot import BASE_FRAME, EE_LINK
 from macgyvbot_config.topics import (
     CAMERA_COLOR_TOPIC,
     CAMERA_DEPTH_TOPIC,
     CAMERA_INFO_TOPIC,
 )
-from macgyvbot_manipulation.robot_pose import get_ee_matrix
 from macgyvbot_perception.depth_projection import (
     pixel_to_camera_point,
     transform_point_to_base,
@@ -40,8 +41,8 @@ class ClickBasePointNode(Node):
         self.intrinsics = None
         self.last_click = None
 
-        self.robot = MoveItPy(node_name="click_base_point_moveit_py")
-        self.robot.get_planning_component(GROUP_NAME)
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
         self.gripper2cam = self._load_gripper_to_camera()
 
         self.create_subscription(
@@ -68,6 +69,10 @@ class ClickBasePointNode(Node):
         self.get_logger().info(
             "Click a point in the RGB window to print camera/base coordinates. "
             "Press ESC to exit."
+        )
+        self.get_logger().info(
+            f"Using TF transform {BASE_FRAME} <- {EE_LINK} "
+            f"and calibration {CALIBRATION_FILE}."
         )
 
     def spin_ui_once(self):
@@ -115,6 +120,9 @@ class ClickBasePointNode(Node):
             return
 
         base_to_camera = self._base_to_camera_matrix()
+        if base_to_camera is None:
+            return
+
         base_point = transform_point_to_base(camera_point, base_to_camera)
         cam_x, cam_y, cam_z = camera_point
         bx, by, bz = [float(value) for value in base_point]
@@ -126,7 +134,20 @@ class ClickBasePointNode(Node):
         )
 
     def _base_to_camera_matrix(self):
-        return get_ee_matrix(self.robot) @ self.gripper2cam
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                BASE_FRAME,
+                EE_LINK,
+                Time(),
+                timeout=Duration(seconds=1.0),
+            )
+        except TransformException as exc:
+            self.get_logger().warn(
+                f"TF transform {BASE_FRAME} <- {EE_LINK} is not ready: {exc}"
+            )
+            return None
+
+        return _transform_msg_to_matrix(transform.transform) @ self.gripper2cam
 
     def _color_cb(self, msg):
         self.color_image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
@@ -148,6 +169,43 @@ class ClickBasePointNode(Node):
         transform[:3, 3] /= 1000.0
         self.get_logger().info(f"Loaded calibration: {calib_file}")
         return transform
+
+
+def _transform_msg_to_matrix(transform):
+    matrix = np.eye(4, dtype=float)
+    matrix[:3, :3] = _quaternion_to_matrix(
+        transform.rotation.x,
+        transform.rotation.y,
+        transform.rotation.z,
+        transform.rotation.w,
+    )
+    matrix[:3, 3] = [
+        float(transform.translation.x),
+        float(transform.translation.y),
+        float(transform.translation.z),
+    ]
+    return matrix
+
+
+def _quaternion_to_matrix(x, y, z, w):
+    q = np.array([x, y, z, w], dtype=float)
+    norm = float(np.dot(q, q))
+    if norm <= 0.0:
+        return np.eye(3, dtype=float)
+
+    x, y, z, w = q * np.sqrt(2.0 / norm)
+    xx, yy, zz = x * x, y * y, z * z
+    xy, xz, yz = x * y, x * z, y * z
+    wx, wy, wz = w * x, w * y, w * z
+
+    return np.array(
+        [
+            [1.0 - yy - zz, xy - wz, xz + wy],
+            [xy + wz, 1.0 - xx - zz, yz - wx],
+            [xz - wy, yz + wx, 1.0 - xx - yy],
+        ],
+        dtype=float,
+    )
 
 
 def main():

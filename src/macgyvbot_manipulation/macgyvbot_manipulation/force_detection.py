@@ -54,6 +54,7 @@ class ForceReactionDetector:
             ok = self.motion.plan_and_execute(
                 logger,
                 pose_goal=make_safe_pose(target_x, target_y, next_z, ori, logger),
+                collision_scene_key="force/descent_step",
             )
             if not ok:
                 if self.interrupted():

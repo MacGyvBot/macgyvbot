@@ -60,6 +60,7 @@ def move_to_drawer_store_exit(
             ori,
             logger,
         ),
+        collision_scene_key="drawer/store_exit",
     )
     if not ok:
         log_error(
