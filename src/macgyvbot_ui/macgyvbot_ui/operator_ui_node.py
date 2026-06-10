@@ -485,8 +485,8 @@ class OperatorUiNode(Node):
                 if self.window is not None and hasattr(self.window, 'append_control_actions'):
                     self.window.append_control_actions(
                         (
-                            ('재개', '재개'),
-                            ('취소', '취소'),
+                            ('재개', '재개', 'resume'),
+                            ('취소', '취소', 'cancel'),
                         )
                     )
                 self._append_log(
