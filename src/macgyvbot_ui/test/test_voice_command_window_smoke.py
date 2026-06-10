@@ -76,6 +76,11 @@ class VoiceCommandWindowSmokeTest(unittest.TestCase):
     def test_chat_timestamp_includes_seconds(self):
         self.assertRegex(self.window._timestamp(), r"^\d{2}:\d{2}:\d{2}$")
 
+    def test_header_avatar_uses_packaged_logo(self):
+        pixmap = self.window._avatar.pixmap()
+        self.assertIsNotNone(pixmap)
+        self.assertFalse(pixmap.isNull())
+
 
 if __name__ == "__main__":
     unittest.main()

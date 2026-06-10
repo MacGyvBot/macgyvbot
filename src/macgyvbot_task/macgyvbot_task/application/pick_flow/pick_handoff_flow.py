@@ -283,6 +283,12 @@ class PickHandoffFlow:
             return False
 
         if ok:
+            self.state._publish_robot_status(
+                "searching_hand",
+                action="bring",
+                message="사용자 손 위치를 확인합니다.",
+                command=self.state.current_command,
+            )
             return True
 
         logger.error("사용자 전달 위치 이동 실패. Pick 시퀀스 중단")

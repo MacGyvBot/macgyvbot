@@ -1,6 +1,7 @@
 """PyQt window components for the macgyvbot voice command GUI node."""
 
 from datetime import datetime
+from pathlib import Path
 
 try:
     from PyQt5.QtCore import Qt, QTimer
@@ -76,7 +77,6 @@ else:
             self._gui_connection_status = QLabel('GUI 노드: 연결됨')
             self._current_status = QLabel('현재 상태: 명령 대기')
             self._task_target_status = QLabel('작업 대상: 없음')
-            self._task_stage_status = QLabel('작업 단계: 대기')
             self._pause_button = QPushButton('멈춤')
             self._pause_button.setObjectName('pauseControlButton')
             self._pause_button.clicked.connect(
@@ -118,6 +118,8 @@ else:
             self._subtitle = QLabel('음성 명령 기반 공구 전달 로봇')
             self._avatar = QLabel('M')
             self._avatar.setAlignment(Qt.AlignCenter)
+            self._avatar.setFixedSize(44, 44)
+            self._apply_avatar_pixmap()
 
             input_layout = QHBoxLayout()
             input_layout.setContentsMargins(0, 12, 0, 0)
@@ -156,7 +158,6 @@ else:
             status_panel_layout.addSpacing(12)
             status_panel_layout.addWidget(self._current_status)
             status_panel_layout.addWidget(self._task_target_status)
-            status_panel_layout.addWidget(self._task_stage_status)
             status_panel_layout.addStretch(1)
             status_panel_layout.addLayout(pause_resume_button_layout)
             status_panel_layout.addLayout(control_button_layout)
@@ -394,8 +395,8 @@ else:
             self.set_detector_status(detector_text)
 
         def set_task_status(self, target_text, stage_text):
+            _ = stage_text
             self._task_target_status.setText(f'작업 대상: {target_text}')
-            self._task_stage_status.setText(f'작업 단계: {stage_text}')
 
         def set_chat_input_enabled(self, enabled, reason=''):
             enabled = bool(enabled)
@@ -1139,14 +1140,13 @@ else:
             )
             self._avatar.setStyleSheet(
                 '''
-                background-color: #E7F1FF;
-                border: 1px solid #C7DBF5;
+                background-color: transparent;
+                border: none;
                 color: #2F6FDC;
-                border-radius: 18px;
-                min-width: 36px;
-                max-width: 36px;
-                min-height: 36px;
-                max-height: 36px;
+                min-width: 44px;
+                max-width: 44px;
+                min-height: 44px;
+                max-height: 44px;
                 font-size: 18px;
                 font-weight: 900;
                 '''
@@ -1191,7 +1191,26 @@ else:
                 font-weight: 600;
             '''
             self._task_target_status.setStyleSheet(task_style)
-            self._task_stage_status.setStyleSheet(task_style)
+
+        def _apply_avatar_pixmap(self):
+            asset_path = (
+                Path(__file__).resolve().parent
+                / 'assets'
+                / 'macgyvbot_avatar.png'
+            )
+            pixmap = QPixmap(str(asset_path))
+            if pixmap.isNull():
+                return
+
+            self._avatar.setText('')
+            self._avatar.setPixmap(
+                pixmap.scaled(
+                    40,
+                    40,
+                    Qt.KeepAspectRatio,
+                    Qt.SmoothTransformation,
+                )
+            )
 
         @staticmethod
         def _gripper_status_style(enabled):

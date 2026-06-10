@@ -682,7 +682,7 @@ class CommandLlmParser:
         if action == 'exit':
             return '종료 요청을 전달했습니다. 작업을 정리하고 Home 위치로 복귀한 뒤 종료합니다.'
         if action == 'home':
-            return 'Home 위치로 복귀하라는 뜻으로 이해했습니다.'
+            return 'Home으로 복귀합니다.'
         return '명령을 올바른 입력으로 판단했습니다.'
 
     def _build_confirmation_question(self, command):
@@ -1638,7 +1638,7 @@ class CommandLlmParser:
             )
         )
 
-        if has_deictic_target and not has_tool_clue and tool_name == 'unknown':
+        if has_deictic_target and not has_tool_clue:
             return 'unknown', 'deictic', confidence
 
         inferred_tool = self._infer_tool_from_function_words(

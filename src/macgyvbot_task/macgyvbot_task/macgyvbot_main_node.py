@@ -80,6 +80,7 @@ class MacGyvBotNode(Node):
         "cancelled",
         "rejected",
         "busy",
+        "returned",
     }
     _ROUTED_ACTIONS = {
         "bring",
