@@ -13,6 +13,8 @@ ROS 패키지가 아니라 colcon workspace root이며, 실행 entrypoint는
   - `macgyvbot.launch.py`는 `macgyvbot_task`, `macgyvbot_perception`,
     `macgyvbot_command` executable을 함께 실행합니다.
   - `moveit_py.yaml` 같은 launch/runtime YAML을 설치합니다.
+  - `joint_velocity_config.py`는 launch 시점에 combined URDF와 MoveIt config dict에
+    joint velocity 설정을 반영하는 patch helper를 소유합니다.
 
 - `src/macgyvbot_task`
   - `macgyvbot_main_node.py`는 `/tool_command`를 typed `/task_request`로 넘기는
@@ -68,8 +70,7 @@ ROS 패키지가 아니라 colcon workspace root이며, 실행 entrypoint는
   - `drawer.py`는 drawer handle pose, drawer/tool mapping, drawer collision
     box 좌표, collision profile, motion key별 opened-scene 매핑을 소유합니다.
   - `joint_velocity.py`는 M0609 `joint_1`~`joint_6`의 사용자 조절용
-    velocity limit과 전역 MoveIt velocity scaling 값을 소유합니다. 이 값은
-    launch 시점에 combined URDF와 MoveIt planning joint limit에 함께 반영됩니다.
+    velocity limit과 전역 MoveIt velocity scaling 값을 소유합니다.
 
 - `src/macgyvbot_domain`
   - package 간 공유되는 in-process Python dataclass를 소유합니다.
@@ -155,8 +156,9 @@ macgyvbot_perception.hand_grasp_detection_node
   `self.planning_params`입니다.
 - robot description은 `macgyvbot.launch.py`에서 `macgyvbot_resources`의
   `m0609_onrobot_rg2_combined.urdf`를 읽어 `robot_description`에 주입합니다.
-  그 직후 `macgyvbot_config.joint_velocity.apply_joint_velocity_limits_to_moveit_config()`
-  가 `joint_velocity.py`의 값을 URDF `<limit velocity="...">`와
+  그 직후 `macgyvbot_bringup.joint_velocity_config`의
+  `apply_joint_velocity_limits_to_moveit_config()`가
+  `macgyvbot_config.joint_velocity`의 값을 URDF `<limit velocity="...">`와
   `robot_description_planning.joint_limits.*.max_velocity`에 함께 적용합니다.
   따라서 source URDF 파일 자체의 velocity 값은 기본 모델 값으로 남아 있고,
   MacGyvBot runtime에서 쓰는 조인트 속도 제한은 launch-time patch 결과입니다.

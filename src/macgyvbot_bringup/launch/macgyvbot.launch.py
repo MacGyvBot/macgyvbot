@@ -15,7 +15,7 @@ from launch.substitutions import LaunchConfiguration
 from launch.substitutions import PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
-from macgyvbot_config.joint_velocity import (
+from macgyvbot_bringup.joint_velocity_config import (
     apply_joint_velocity_limits_to_moveit_config,
 )
 from macgyvbot_config.models import HAND_GRASP_SAM_CHECKPOINT_NAME

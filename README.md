@@ -270,7 +270,7 @@ Task coordinator는 전역 MoveIt planner로 OMPL `RRTConnectkConfigDefault`를
 `src/macgyvbot_config/macgyvbot_config/joint_velocity.py`에서 관리합니다.
 기본값은 `joint_1`/`joint_2` 30 deg/s, `joint_3` 36 deg/s,
 `joint_4`/`joint_5` 45 deg/s, `joint_6` 90 deg/s입니다.
-이 값은 `macgyvbot.launch.py`가 combined URDF를 로드한 뒤
+`macgyvbot_bringup`은 launch 시점에 combined URDF를 로드한 뒤 이 값을
 `robot_description`과 MoveIt planning joint limit에 함께 적용합니다.
 
 전역 planning velocity scaling은 같은 `joint_velocity.py`의
