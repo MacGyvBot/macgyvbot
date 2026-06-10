@@ -104,8 +104,11 @@ class PickTargetResolver:
             source=source,
         )
 
+    def should_refine_grasp_point_at_top_view(self):
+        return self.grasp_point_selector.should_refine_grasp_point_at_top_view()
+
     def should_defer_vlm_until_top_view(self):
-        return self.grasp_point_selector.should_defer_vlm_until_top_view()
+        return self.should_refine_grasp_point_at_top_view()
 
     @staticmethod
     def _not_found(label, reason) -> PickTarget:

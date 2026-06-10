@@ -24,7 +24,7 @@ from datetime import datetime
 from pathlib import Path
 
 
-DEFAULT_MODEL_NAME = "yolov11_best.pt"
+DEFAULT_MODEL_NAME = "yolo_v11_merge_v2.pt"
 DEFAULT_WIDTH = 640
 DEFAULT_HEIGHT = 480
 DEFAULT_FPS = 30

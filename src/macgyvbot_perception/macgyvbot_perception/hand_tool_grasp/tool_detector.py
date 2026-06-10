@@ -10,7 +10,7 @@ from macgyvbot_perception.model_paths import (
 
 Rect = Tuple[int, int, int, int]
 
-DEFAULT_MODEL_PATH = "yolov11_best.pt"
+DEFAULT_MODEL_PATH = "yolo_v11_merge_v2.pt"
 DEFAULT_TOOL_CLASSES = (
     "drill",
     "hammer",
@@ -18,6 +18,12 @@ DEFAULT_TOOL_CLASSES = (
     "screwdriver",
     "tape_measure",
     "wrench",
+)
+DEFAULT_GRASP_POINT_CLASSES = (
+    "grasp_point",
+    "grasp-point",
+    "grasp point",
+    "grasp",
 )
 
 
@@ -35,6 +41,7 @@ class ToolDetector:
         self,
         model_path: str = DEFAULT_MODEL_PATH,
         target_classes: Iterable[str] = DEFAULT_TOOL_CLASSES,
+        grasp_point_classes: Iterable[str] = DEFAULT_GRASP_POINT_CLASSES,
         confidence_threshold: float = 0.20,
         image_size: int = 640,
     ) -> None:
@@ -43,16 +50,23 @@ class ToolDetector:
         resolved_model_path = self._resolve_model_path(model_path)
         self.model_path = str(resolved_model_path)
         self.target_classes = {
-            name.strip().lower()
+            self._normalize_label(name)
             for name in target_classes
+            if name.strip()
+        }
+        self.grasp_point_classes = {
+            self._normalize_label(name)
+            for name in grasp_point_classes
             if name.strip()
         }
         self.confidence_threshold = confidence_threshold
         self.image_size = image_size
+        self.last_grasp_point_detection: Optional[ToolDetection] = None
         self.model = YOLO(str(resolved_model_path))
 
     def detect(self, frame, target_label: str | None = None) -> Optional[ToolDetection]:
         """Return highest-confidence matching tool detection, or None."""
+        self.last_grasp_point_detection = None
         results = self.model.predict(
             source=frame,
             imgsz=self.image_size,
@@ -68,6 +82,7 @@ class ToolDetector:
 
         best_detection: Optional[ToolDetection] = None
         best_confidence = -1.0
+        best_grasp_point_confidence = -1.0
         names = result.names
 
         requested_label = self._normalize_label(target_label)
@@ -76,6 +91,17 @@ class ToolDetector:
             confidence = float(box.conf[0])
             class_id = int(box.cls[0])
             label = self._normalize_label(names.get(class_id, class_id))
+            x1, y1, x2, y2 = box.xyxy[0].tolist()
+
+            if label in self.grasp_point_classes:
+                if confidence > best_grasp_point_confidence:
+                    self.last_grasp_point_detection = ToolDetection(
+                        roi=(int(x1), int(y1), int(x2), int(y2)),
+                        label=label,
+                        confidence=confidence,
+                    )
+                    best_grasp_point_confidence = confidence
+                continue
 
             if self.target_classes and label not in self.target_classes:
                 continue
@@ -86,7 +112,6 @@ class ToolDetector:
             if confidence <= best_confidence:
                 continue
 
-            x1, y1, x2, y2 = box.xyxy[0].tolist()
             best_detection = ToolDetection(
                 roi=(int(x1), int(y1), int(x2), int(y2)),
                 label=label,
@@ -102,7 +127,7 @@ class ToolDetector:
 
     @staticmethod
     def _normalize_label(label) -> str:
-        return str(label or "").strip().lower()
+        return str(label or "").strip().lower().replace(" ", "_").replace("-", "_")
 
     @staticmethod
     def _resolve_model_path(model_path: str) -> Path | str:

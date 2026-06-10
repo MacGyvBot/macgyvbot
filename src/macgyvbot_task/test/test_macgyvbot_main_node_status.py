@@ -45,6 +45,7 @@ class DummyTaskRequest:
 rclpy_module = types.ModuleType("rclpy")
 rclpy_node_module = types.ModuleType("rclpy.node")
 rclpy_node_module.Node = DummyNode
+rclpy_module.ok = lambda: True
 rclpy_module.node = rclpy_node_module
 sys.modules.setdefault("rclpy", rclpy_module)
 sys.modules.setdefault("rclpy.node", rclpy_node_module)
