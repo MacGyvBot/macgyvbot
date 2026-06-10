@@ -123,6 +123,7 @@ class ReturnHandoffFlow:
             "사용자 손 위치에 접근했습니다. "
             "반납 공구 grasp를 시도합니다."
         )
+        tool_name = self._record_pregrasp_tool_tracking(tool_name, logger)
         if not self.try_robot_grasp(tool_name, command, logger):
             self.reporter.fail(
                 tool_name,
@@ -142,6 +143,29 @@ class ReturnHandoffFlow:
         if self.tool_hold_monitor is not None:
             self.tool_hold_monitor.start(tool_name, "return", command)
         return tool_name, ""
+
+    def _record_pregrasp_tool_tracking(self, fallback_tool_name, logger):
+        """Store the currently observed hand-held tool before gripper close."""
+        result = self.state.last_grasp_result or {}
+        detected_tool = result.get("tool_label")
+        detected_tool = str(detected_tool).strip() if detected_tool else ""
+        if not detected_tool:
+            detected_tool = str(fallback_tool_name or "").strip()
+        if not detected_tool:
+            detected_tool = "unknown"
+
+        self.state.held_tool = detected_tool
+        self.state.last_known_tool_bbox = result.get("tool_roi")
+        self.state.last_known_tool_confidence = result.get("tool_confidence")
+        logger.info(
+            "return pregrasp tool tracking saved: "
+            f"tool={detected_tool}, "
+            f"confidence={self.state.last_known_tool_confidence}, "
+            f"bbox={self.state.last_known_tool_bbox}"
+        )
+        # TODO: interrupt/resume recovery에서는 여러 frame의 tool_label/confidence를
+        # 누적해 가장 안정적인 held_tool을 선택합니다.
+        return detected_tool
 
     def wait_for_tool_in_close_roi(self, logger):
         start_time = time.monotonic()

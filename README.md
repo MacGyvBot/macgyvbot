@@ -254,6 +254,21 @@ MoveIt/RG2 실행 리소스, pick/return workflow, 내부 `TaskStep` queue,
 순차 실행됩니다. 자세한 흐름과 topic ownership은
 [EXPLAIN.md](./EXPLAIN.md)를 참고합니다.
 
+## Drop Recovery
+
+Gripper grasp 이후 `/tool_drop_detected`에서 `event=tool_dropped`가 들어오면
+`task_coordinator_node`는 현재 MoveIt goal을 cancel하고 남은 `TaskStep` queue를
+비운 뒤 recovery mode를 켭니다. 이후 pick/drop은
+`macgyvbot_task.application.recovery.pick_recovery.run_pick_recovery()`,
+return/drop은
+`macgyvbot_task.application.recovery.return_recovery.run_return_recovery()`가 처리합니다.
+
+Recovery는 새 grasp, detection, drawer, motion 알고리즘을 만들지 않고 기존
+`PickTargetResolver`, `PickTargetPlanner`, `GraspVerifier`, `DrawerMotionFlow`,
+`ReturnDrawerPlacementFlow`, home motion을 orchestration합니다. 자세한 동작,
+실패 reason, 후속 interrupt/resume TODO는
+[docs/drop_recovery.md](./docs/drop_recovery.md)를 참고합니다.
+
 ## Motion Safety
 
 MoveIt pose goal 이동은 `macgyvbot_manipulation.moveit_controller`에서

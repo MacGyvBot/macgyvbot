@@ -16,3 +16,6 @@
 - 작업자/에이전트 공통 지침은 루트 `AGENTS.md`에 둔다.
 - topic publisher/subscriber 또는 payload 계약이 바뀌면
   `architecture/topics.md`를 함께 수정한다.
+## Drop Recovery
+
+- `drop_recovery.md`: gripper drop 감지 후 pick/return 1차 복구 흐름, 기존 모듈 재사용 지점, 실패 처리, 후속 interrupt/resume TODO를 정리합니다.
