@@ -8,6 +8,10 @@ from PIL import Image
 
 from macgyvbot_config.vlm import (
     GRASP_POINT_MODE_VLM_ONLY_QWEN3B,
+    SAM_BACKEND_DEFAULT,
+    SAM_DEVICE_DEFAULT,
+    SAM_ENABLED_DEFAULT,
+    SAM_MODEL_TYPE_DEFAULT,
     VLM_INFERENCE_HISTORY_DIR,
     VLM_INFERENCE_HISTORY_ENABLED,
     VLM_MODEL_QWEN3B,
@@ -27,11 +31,11 @@ class VLMOnlyGraspPointSelector:
     def __init__(
         self,
         logger,
-        sam_enabled=True,
+        sam_enabled=SAM_ENABLED_DEFAULT,
         sam_checkpoint="",
-        sam_backend="mobile_sam",
-        sam_model_type="vit_t",
-        sam_device="cuda",
+        sam_backend=SAM_BACKEND_DEFAULT,
+        sam_model_type=SAM_MODEL_TYPE_DEFAULT,
+        sam_device=SAM_DEVICE_DEFAULT,
         model_id=VLM_MODEL_QWEN3B,
         mode=GRASP_POINT_MODE_VLM_ONLY_QWEN3B,
         history_enabled=VLM_INFERENCE_HISTORY_ENABLED,

@@ -32,7 +32,11 @@ from macgyvbot_interfaces.msg import (
 )
 from macgyvbot_interfaces.srv import SetGripper
 
-from macgyvbot_config.drawer import DRAWER_OBSERVATION_J6_DEG
+from macgyvbot_config.drawer import (
+    DRAWER_OBSERVATION_J6_DEG,
+    ENABLE_DRAWER_COLLISION_SCENE_DEFAULT,
+)
+from macgyvbot_config.gripper import ENABLE_GRIPPER_SELF_COLLISION_ACM_DEFAULT
 from macgyvbot_config.joint_velocity import MOTION_VELOCITY_SCALING_FACTOR
 from macgyvbot_config.structured_logging import (
     format_structured_log,
@@ -47,6 +51,7 @@ from macgyvbot_config.robot import GROUP_NAME, HOME_JOINTS, WRIST_JOINT_NAME
 from macgyvbot_config.timing import (
     CAMERA_LOOP_IDLE_SLEEP_SEC,
     TASK_QUEUE_STOP_POLL_SEC,
+    TASK_QUEUE_STOP_TIMEOUT_SEC,
 )
 from macgyvbot_config.topics import (
     CAMERA_COLOR_TOPIC,
@@ -64,15 +69,24 @@ from macgyvbot_config.topics import (
 )
 from macgyvbot_config.vlm import (
     DEFAULT_GRASP_POINT_MODE,
+    GRASP_POINT_API_MODEL,
+    GRASP_POINT_API_TIMEOUT_SEC,
     GRASP_POINT_MODE_CENTER,
     GRASP_POINT_MODE_YOLO,
     GRASP_POINT_MODE_VLM,
+    SAM_BACKEND_DEFAULT,
+    SAM_DEVICE_DEFAULT,
+    SAM_ENABLED_DEFAULT,
+    SAM_MODEL_TYPE_DEFAULT,
     SAM_YAW_SERVICE_NAME,
     SAM_YAW_SERVICE_RESPONSE_TIMEOUT_SEC,
     SAM_YAW_SERVICE_WAIT_TIMEOUT_SEC,
     VLM_GRASP_SERVICE_NAME,
     VLM_ONLY_MODES,
+    VLM_SERVICE_RESPONSE_TIMEOUT_SEC,
+    VLM_SERVICE_WAIT_TIMEOUT_SEC,
 )
+from macgyvbot_config.ui import DISPLAY_DEBUG_WINDOWS_DEFAULT
 from macgyvbot_domain.target_models import PickTarget
 from macgyvbot_manipulation.drawer_collision_scene import (
     DrawerCollisionSceneManager,
@@ -292,22 +306,31 @@ class TaskCoordinatorNode(Node):
     def __init__(self):
         super().__init__("task_coordinator_node")
 
-        self.declare_parameter("display_debug_windows", False)
+        self.declare_parameter(
+            "display_debug_windows",
+            DISPLAY_DEBUG_WINDOWS_DEFAULT,
+        )
         self.declare_parameter("manual_gripper_service", MANUAL_GRIPPER_SERVICE)
-        self.declare_parameter("enable_drawer_collision_scene", True)
-        self.declare_parameter("enable_gripper_self_collision_acm", True)
+        self.declare_parameter(
+            "enable_drawer_collision_scene",
+            ENABLE_DRAWER_COLLISION_SCENE_DEFAULT,
+        )
+        self.declare_parameter(
+            "enable_gripper_self_collision_acm",
+            ENABLE_GRIPPER_SELF_COLLISION_ACM_DEFAULT,
+        )
         self.bridge = CvBridge()
         self.display_debug_windows = self._read_bool_parameter(
             "display_debug_windows",
-            False,
+            DISPLAY_DEBUG_WINDOWS_DEFAULT,
         )
         self.enable_drawer_collision_scene = self._read_bool_parameter(
             "enable_drawer_collision_scene",
-            True,
+            ENABLE_DRAWER_COLLISION_SCENE_DEFAULT,
         )
         self.enable_gripper_self_collision_acm = self._read_bool_parameter(
             "enable_gripper_self_collision_acm",
-            True,
+            ENABLE_GRIPPER_SELF_COLLISION_ACM_DEFAULT,
         )
         self.display = DebugDisplay(enabled=self.display_debug_windows)
         self.exit_req = threading.Event()
@@ -578,10 +601,13 @@ class TaskCoordinatorNode(Node):
         return float(self.get_parameter("yolo_conf").value)
 
     def _read_grasp_point_api_config(self):
-        self.declare_parameter("grasp_point_api_model", "gemini-2.5-flash")
+        self.declare_parameter("grasp_point_api_model", GRASP_POINT_API_MODEL)
         self.declare_parameter("grasp_point_api_env_file", "")
         self.declare_parameter("grasp_point_api_base_url", "")
-        self.declare_parameter("grasp_point_api_timeout_sec", 30.0)
+        self.declare_parameter(
+            "grasp_point_api_timeout_sec",
+            GRASP_POINT_API_TIMEOUT_SEC,
+        )
         return {
             "api_model": str(
                 self.get_parameter("grasp_point_api_model").value
@@ -598,14 +624,14 @@ class TaskCoordinatorNode(Node):
         }
 
     def _read_vlm_sam_config(self):
-        self.declare_parameter("sam_enabled", True)
+        self.declare_parameter("sam_enabled", SAM_ENABLED_DEFAULT)
         self.declare_parameter(
             "sam_checkpoint",
             str(Path("weights") / HAND_GRASP_SAM_CHECKPOINT_NAME),
         )
-        self.declare_parameter("sam_backend", "mobile_sam")
-        self.declare_parameter("sam_model_type", "vit_t")
-        self.declare_parameter("sam_device", "cuda")
+        self.declare_parameter("sam_backend", SAM_BACKEND_DEFAULT)
+        self.declare_parameter("sam_model_type", SAM_MODEL_TYPE_DEFAULT)
+        self.declare_parameter("sam_device", SAM_DEVICE_DEFAULT)
         return {
             "sam_enabled": self._read_bool_parameter("sam_enabled", True),
             "sam_checkpoint": str(self.get_parameter("sam_checkpoint").value).strip(),
@@ -616,8 +642,14 @@ class TaskCoordinatorNode(Node):
 
     def _read_vlm_service_config(self):
         self.declare_parameter("vlm_service_name", VLM_GRASP_SERVICE_NAME)
-        self.declare_parameter("vlm_service_wait_timeout_sec", 2.0)
-        self.declare_parameter("vlm_service_response_timeout_sec", 30.0)
+        self.declare_parameter(
+            "vlm_service_wait_timeout_sec",
+            VLM_SERVICE_WAIT_TIMEOUT_SEC,
+        )
+        self.declare_parameter(
+            "vlm_service_response_timeout_sec",
+            VLM_SERVICE_RESPONSE_TIMEOUT_SEC,
+        )
         return {
             "service_name": str(self.get_parameter("vlm_service_name").value).strip(),
             "wait_timeout_sec": float(
@@ -1359,7 +1391,11 @@ class TaskCoordinatorNode(Node):
             command=command,
         )
 
-    def _wait_for_task_queue_to_stop(self, logger, timeout_sec=3.0):
+    def _wait_for_task_queue_to_stop(
+        self,
+        logger,
+        timeout_sec=TASK_QUEUE_STOP_TIMEOUT_SEC,
+    ):
         deadline = time.monotonic() + timeout_sec
         while self.is_running() and time.monotonic() < deadline:
             time.sleep(TASK_QUEUE_STOP_POLL_SEC)

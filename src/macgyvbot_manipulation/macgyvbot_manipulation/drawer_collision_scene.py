@@ -17,6 +17,7 @@ from macgyvbot_config.drawer import (
     DRAWER_COLLISION_DEFAULT_PROFILE,
     DRAWER_COLLISION_SCENE_TOPICS,
     DRAWER_COLLISION_SCENE_KEY_PROFILES,
+    DRAWER_COLLISION_SERVICE_WAIT_TIMEOUT_SEC,
 )
 from macgyvbot_config.structured_logging import format_structured_log
 
@@ -294,7 +295,9 @@ class DrawerCollisionSceneManager:
 
     def _request_apply_scene(self, scene, logger):
         try:
-            if not self._apply_client.wait_for_service(timeout_sec=0.2):
+            if not self._apply_client.wait_for_service(
+                timeout_sec=DRAWER_COLLISION_SERVICE_WAIT_TIMEOUT_SEC,
+            ):
                 _warn(
                     logger,
                     "MoveIt apply planning scene service is not ready: "

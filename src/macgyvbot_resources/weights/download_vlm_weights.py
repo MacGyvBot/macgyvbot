@@ -2,11 +2,16 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 
 from huggingface_hub import snapshot_download
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "macgyvbot_config"))
 
-MODEL_ID = "HuggingFaceTB/SmolVLM2-2.2B-Instruct"
+from macgyvbot_config.vlm import VLM_MODEL_SMOL
+
+
+MODEL_ID = VLM_MODEL_SMOL.replace("__", "/")
 DEST_ROOT = Path(__file__).resolve().parent / "vlm"
 
 

@@ -10,19 +10,32 @@ import subprocess
 import threading
 import tempfile
 
+from macgyvbot_config.command import (
+    DEFAULT_ENABLE_TTS,
+    DEFAULT_TTS_EDGE_RATE,
+    DEFAULT_TTS_ENGINE,
+    DEFAULT_TTS_VOICE,
+    DEFAULT_TTS_RATE,
+    TTS_SERVICE_DEFAULT_EDGE_RATE,
+    TTS_SERVICE_DEFAULT_ENABLED,
+    TTS_SERVICE_DEFAULT_PITCH,
+    TTS_SERVICE_DEFAULT_TIMEOUT_SEC,
+    TTS_SERVICE_DEFAULT_VOICE,
+)
+
 
 class TtsService:
     """Asynchronous system-command based TTS service."""
 
     def __init__(
         self,
-        enabled=False,
-        engine='auto',
-        voice='ko',
-        rate=165,
-        edge_rate='+10%',
-        pitch='+8Hz',
-        timeout_sec=8.0,
+        enabled=TTS_SERVICE_DEFAULT_ENABLED,
+        engine=DEFAULT_TTS_ENGINE,
+        voice=TTS_SERVICE_DEFAULT_VOICE,
+        rate=DEFAULT_TTS_RATE,
+        edge_rate=TTS_SERVICE_DEFAULT_EDGE_RATE,
+        pitch=TTS_SERVICE_DEFAULT_PITCH,
+        timeout_sec=TTS_SERVICE_DEFAULT_TIMEOUT_SEC,
         logger=None,
     ):
         self._enabled = bool(enabled)
@@ -201,7 +214,7 @@ class TtsService:
 
     def _edge_voice(self):
         if self._voice in ('ko', 'ko-KR', 'korean'):
-            return 'ko-KR-SunHiNeural'
+            return DEFAULT_TTS_VOICE
         return self._voice
 
     def _espeak_voice(self):

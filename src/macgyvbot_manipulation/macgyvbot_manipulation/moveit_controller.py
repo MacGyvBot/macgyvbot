@@ -15,22 +15,29 @@ from macgyvbot_manipulation.robot_safezone import (
 )
 
 from macgyvbot_config.robot import (
+    DEFAULT_TRAJECTORY_ACTION_NAME,
     EE_LINK,
     GROUP_NAME,
+    HOME_JOINT_GOAL_TOLERANCE_RAD,
+    HOME_JOINT_POSITION_CONFIRM_TIMEOUT_SEC,
     HOME_JOINTS,
+    HOME_JOINT_SETTLE_TIMEOUT_SEC,
+    MOVEIT_ACTION_SERVER_WAIT_TIMEOUT_SEC,
+    MOVEIT_EXECUTION_POLL_INTERVAL_SEC,
+    MOVEIT_GOAL_ACCEPTANCE_TIMEOUT_SEC,
+    MOVEIT_JOINT_GOAL_SETTLE_TIMEOUT_SEC,
+    MOVEIT_JOINT_GOAL_TOLERANCE_RAD,
+    MOVEIT_SEND_GOAL_TIMEOUT_SEC,
+    POSE_GOAL_IK_MAX_SEEDS,
+    POSE_GOAL_IK_SEED_PERTURB_RAD,
+    POSE_GOAL_IK_TIMEOUT_SEC,
+    POSE_GOAL_MAX_JOINT_DELTA_RAD,
     WRIST_JOINT_NAME,
 )
 from macgyvbot_config.structured_logging import format_structured_log
 from macgyvbot_manipulation.robot_pose import normalize_angle_deg
 
 
-DEFAULT_TRAJECTORY_ACTION_NAME = "/dsr_moveit_controller/follow_joint_trajectory"
-POSE_GOAL_IK_TIMEOUT_SEC = 0.1
-POSE_GOAL_IK_MAX_SEEDS = 10
-POSE_GOAL_IK_SEED_PERTURB_RAD = math.radians(10.0)
-POSE_GOAL_MAX_JOINT_DELTA_RAD = math.radians(120.0)
-HOME_JOINT_GOAL_TOLERANCE_RAD = math.radians(2.0)
-HOME_JOINT_POSITION_CONFIRM_TIMEOUT_SEC = 30.0
 _TWO_PI = 2.0 * math.pi
 
 
@@ -427,7 +434,7 @@ class MoveItController:
         should_interrupt=None,
         node=None,
         trajectory_action_name=DEFAULT_TRAJECTORY_ACTION_NAME,
-        poll_interval_sec=0.02,
+        poll_interval_sec=MOVEIT_EXECUTION_POLL_INTERVAL_SEC,
         planning_precondition=None,
         drawer_collision_scene=None,
         gripper_self_collision_scene=None,
@@ -590,7 +597,9 @@ class MoveItController:
             logger.info("중단 요청으로 trajectory action goal을 전송하지 않습니다.")
             return False
 
-        if not self._trajectory_client.wait_for_server(timeout_sec=1.0):
+        if not self._trajectory_client.wait_for_server(
+            timeout_sec=MOVEIT_ACTION_SERVER_WAIT_TIMEOUT_SEC,
+        ):
             logger.error(
                 "FollowJointTrajectory action server를 찾지 못했습니다: "
                 f"{self.trajectory_action_name}"
@@ -629,7 +638,7 @@ class MoveItController:
                     self.cancel_current_goal(logger, reason="exit/pause")
                     self._wait_for_future(
                         result_future,
-                        timeout_sec=1.0,
+                        timeout_sec=MOVEIT_SEND_GOAL_TIMEOUT_SEC,
                     )
                     break
                 time.sleep(self.poll_interval_sec)
@@ -661,7 +670,12 @@ class MoveItController:
                 if self._current_goal_handle is goal_handle:
                     self._current_goal_handle = None
 
-    def _wait_for_goal_acceptance(self, send_future, logger, timeout_sec=5.0):
+    def _wait_for_goal_acceptance(
+        self,
+        send_future,
+        logger,
+        timeout_sec=MOVEIT_GOAL_ACCEPTANCE_TIMEOUT_SEC,
+    ):
         deadline = time.monotonic() + timeout_sec
         interrupted = False
         while not send_future.done():
@@ -766,8 +780,8 @@ class MoveItController:
         self,
         goal_joints,
         logger,
-        timeout_sec=0.5,
-        tolerance_rad=0.02,
+        timeout_sec=MOVEIT_JOINT_GOAL_SETTLE_TIMEOUT_SEC,
+        tolerance_rad=MOVEIT_JOINT_GOAL_TOLERANCE_RAD,
     ):
         deadline = time.monotonic() + timeout_sec
         while time.monotonic() <= deadline:
@@ -781,7 +795,12 @@ class MoveItController:
 
         return False
 
-    def _is_at_joint_goal(self, goal_joints, logger, tolerance_rad=0.02):
+    def _is_at_joint_goal(
+        self,
+        goal_joints,
+        logger,
+        tolerance_rad=MOVEIT_JOINT_GOAL_TOLERANCE_RAD,
+    ):
         try:
             robot_model = self.robot.get_robot_model()
             jmg = robot_model.get_joint_model_group(GROUP_NAME)

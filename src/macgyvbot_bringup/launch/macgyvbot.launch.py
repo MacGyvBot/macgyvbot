@@ -18,7 +18,42 @@ from launch_ros.substitutions import FindPackageShare
 from macgyvbot_bringup.joint_velocity_config import (
     apply_joint_velocity_limits_to_moveit_config,
 )
-from macgyvbot_config.models import HAND_GRASP_SAM_CHECKPOINT_NAME
+from macgyvbot_config.command import (
+    DEFAULT_COMMAND_MIN_CONFIDENCE,
+    DEFAULT_LLM_MODEL,
+    DEFAULT_LLM_TIMEOUT_SEC,
+    DEFAULT_PARSER_MODE,
+    DEFAULT_STT_AMBIENT_DURATION_SEC,
+    DEFAULT_STT_NON_SPEAKING_DURATION_SEC,
+    DEFAULT_STT_PAUSE_THRESHOLD,
+    DEFAULT_STT_PHRASE_THRESHOLD,
+    DEFAULT_STT_PHRASE_TIME_LIMIT_SEC,
+    DEFAULT_TTS_EDGE_RATE,
+    DEFAULT_TTS_ENGINE,
+    DEFAULT_TTS_PITCH,
+    DEFAULT_TTS_TIMEOUT_SEC,
+    DEFAULT_TTS_VOICE,
+)
+from macgyvbot_config.models import (
+    HAND_GRASP_MODEL_NAME,
+    HAND_GRASP_SAM_CHECKPOINT_NAME,
+    YOLO_MODEL_NAME,
+)
+from macgyvbot_config.robot import BASE_FRAME
+from macgyvbot_config.hand_grasp import (
+    HAND_GRASP_ALLOW_BBOX_LOCK,
+    HAND_GRASP_LAUNCH_DEPTH_DIFF_THRESHOLD_MM,
+    HAND_GRASP_LAUNCH_DEPTH_MIN_CONTACT_LANDMARKS,
+    HAND_GRASP_MAX_HANDS,
+    HAND_GRASP_SAM_RESEED_FROM_YOLO,
+    HAND_GRASP_SAM_TRACK_INTERVAL,
+    HAND_GRASP_SAM_TRACK_MARGIN,
+    HAND_GRASP_SAM_TRACK_MAX_AREA_RATIO,
+    HAND_GRASP_SAM_TRACK_MAX_CENTER_SHIFT_PX,
+    HAND_GRASP_SAM_TRACK_MIN_AREA_RATIO,
+    HAND_GRASP_YOLO_CONFIDENCE,
+    HAND_GRASP_YOLO_IMAGE_SIZE,
+)
 from macgyvbot_config.topics import (
     CAMERA_COLOR_TOPIC,
     CAMERA_DEPTH_TOPIC,
@@ -29,7 +64,22 @@ from macgyvbot_config.topics import (
     HAND_GRASP_TOPIC,
     ROBOT_STATUS_TOPIC,
 )
-from macgyvbot_config.vlm import SAM_YAW_SERVICE_NAME, VLM_GRASP_SERVICE_NAME
+from macgyvbot_config.vlm import (
+    DEFAULT_GRASP_POINT_MODE,
+    GRASP_POINT_API_MODEL,
+    SAM_YAW_SERVICE_NAME,
+    SAM_YAW_SERVICE_RESPONSE_TIMEOUT_SEC,
+    SAM_YAW_SERVICE_WAIT_TIMEOUT_SEC,
+    SAM_BACKEND_DEFAULT,
+    SAM_DEPTH_EXPAND_ITERATIONS,
+    SAM_DEPTH_MIN_VALID_RATIO,
+    SAM_DEPTH_TOLERANCE_MM,
+    SAM_DEVICE_DEFAULT,
+    SAM_MODEL_TYPE_DEFAULT,
+    VLM_GRASP_SERVICE_NAME,
+    VLM_SERVICE_RESPONSE_TIMEOUT_SEC,
+    VLM_SERVICE_WAIT_TIMEOUT_SEC,
+)
 from moveit_configs_utils import MoveItConfigsBuilder
 
 SCREEN_OUTPUT_FORMAT = "{line}"
@@ -48,10 +98,10 @@ def generate_launch_description():
     bringup_share = FindPackageShare("macgyvbot_bringup")
     resources_share = FindPackageShare("macgyvbot_resources")
     default_yolo_model = PathJoinSubstitution(
-        [resources_share, "weights", "yolo_v11_merge_v2.pt"]
+        [resources_share, "weights", YOLO_MODEL_NAME]
     )
     default_grasp_model = PathJoinSubstitution(
-        [resources_share, "weights", "hand_grasp_model.pkl"]
+        [resources_share, "weights", HAND_GRASP_MODEL_NAME]
     )
     default_sam_checkpoint = PathJoinSubstitution(
         [resources_share, "weights", HAND_GRASP_SAM_CHECKPOINT_NAME]
@@ -154,7 +204,7 @@ def generate_launch_description():
                 "use_llm_fallback": True,
                 "parser_mode": parser_mode,
                 "timeout_sec": llm_timeout_sec,
-                "min_confidence": 0.55,
+                "min_confidence": DEFAULT_COMMAND_MIN_CONFIDENCE,
             },
         ],
         condition=IfCondition(use_voice_command),
@@ -203,27 +253,27 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "stt_pause_threshold",
-                default_value="0.45",
+                default_value=str(DEFAULT_STT_PAUSE_THRESHOLD),
                 description="Seconds of silence before STT finalizes a phrase.",
             ),
             DeclareLaunchArgument(
                 "stt_phrase_threshold",
-                default_value="0.15",
+                default_value=str(DEFAULT_STT_PHRASE_THRESHOLD),
                 description="Minimum speaking duration accepted as a phrase.",
             ),
             DeclareLaunchArgument(
                 "stt_non_speaking_duration",
-                default_value="0.25",
+                default_value=str(DEFAULT_STT_NON_SPEAKING_DURATION_SEC),
                 description="Silence retained around each STT phrase.",
             ),
             DeclareLaunchArgument(
                 "stt_phrase_time_limit",
-                default_value="3.0",
+                default_value=str(DEFAULT_STT_PHRASE_TIME_LIMIT_SEC),
                 description="Maximum seconds captured for one STT phrase.",
             ),
             DeclareLaunchArgument(
                 "stt_ambient_duration",
-                default_value="0.5",
+                default_value=str(DEFAULT_STT_AMBIENT_DURATION_SEC),
                 description="Seconds used for microphone ambient-noise calibration.",
             ),
             DeclareLaunchArgument(
@@ -231,14 +281,20 @@ def generate_launch_description():
                 default_value="true",
                 description="Enable TTS feedback.",
             ),
-            DeclareLaunchArgument("tts_engine", default_value="auto"),
-            DeclareLaunchArgument("tts_voice", default_value="ko-KR-SunHiNeural"),
-            DeclareLaunchArgument("tts_edge_rate", default_value="+25%"),
-            DeclareLaunchArgument("tts_pitch", default_value="+35Hz"),
-            DeclareLaunchArgument("tts_timeout_sec", default_value="20.0"),
-            DeclareLaunchArgument("llm_model", default_value="gemma3:1b"),
-            DeclareLaunchArgument("llm_timeout_sec", default_value="25.0"),
-            DeclareLaunchArgument("parser_mode", default_value="llm_primary"),
+            DeclareLaunchArgument("tts_engine", default_value=DEFAULT_TTS_ENGINE),
+            DeclareLaunchArgument("tts_voice", default_value=DEFAULT_TTS_VOICE),
+            DeclareLaunchArgument("tts_edge_rate", default_value=DEFAULT_TTS_EDGE_RATE),
+            DeclareLaunchArgument("tts_pitch", default_value=DEFAULT_TTS_PITCH),
+            DeclareLaunchArgument(
+                "tts_timeout_sec",
+                default_value=str(DEFAULT_TTS_TIMEOUT_SEC),
+            ),
+            DeclareLaunchArgument("llm_model", default_value=DEFAULT_LLM_MODEL),
+            DeclareLaunchArgument(
+                "llm_timeout_sec",
+                default_value=str(DEFAULT_LLM_TIMEOUT_SEC),
+            ),
+            DeclareLaunchArgument("parser_mode", default_value=DEFAULT_PARSER_MODE),
             DeclareLaunchArgument(
                 "detector_image_topic",
                 default_value=HAND_GRASP_IMAGE_TOPIC,
@@ -266,7 +322,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "grasp_point_mode",
-                default_value="yolo",
+                default_value=DEFAULT_GRASP_POINT_MODE,
                 description=(
                     "Grasp point selection mode: center, yolo, vlm, "
                     "vlm_only_smol, vlm_only_qwen3b, vlm_only_qwen7b, or api"
@@ -274,7 +330,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "grasp_point_api_model",
-                default_value="gemini-2.5-flash",
+                default_value=GRASP_POINT_API_MODEL,
             ),
             DeclareLaunchArgument("grasp_point_api_env_file", default_value=""),
             DeclareLaunchArgument("grasp_point_api_base_url", default_value=""),
@@ -288,11 +344,11 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "vlm_service_wait_timeout_sec",
-                default_value="2.0",
+                default_value=str(VLM_SERVICE_WAIT_TIMEOUT_SEC),
             ),
             DeclareLaunchArgument(
                 "vlm_service_response_timeout_sec",
-                default_value="30.0",
+                default_value=str(VLM_SERVICE_RESPONSE_TIMEOUT_SEC),
             ),
             DeclareLaunchArgument(
                 "sam_yaw_service_name",
@@ -300,11 +356,11 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "sam_yaw_service_wait_timeout_sec",
-                default_value="2.0",
+                default_value=str(SAM_YAW_SERVICE_WAIT_TIMEOUT_SEC),
             ),
             DeclareLaunchArgument(
                 "sam_yaw_service_response_timeout_sec",
-                default_value="5.0",
+                default_value=str(SAM_YAW_SERVICE_RESPONSE_TIMEOUT_SEC),
             ),
             DeclareLaunchArgument(
                 "force_torque_topic",
@@ -421,9 +477,9 @@ def generate_launch_description():
                         ),
                         "sam_enabled": sam_enabled,
                         "sam_checkpoint": sam_checkpoint,
-                        "sam_backend": "mobile_sam",
-                        "sam_model_type": "vit_t",
-                        "sam_device": "cuda",
+                        "sam_backend": SAM_BACKEND_DEFAULT,
+                        "sam_model_type": SAM_MODEL_TYPE_DEFAULT,
+                        "sam_device": SAM_DEVICE_DEFAULT,
                     },
                 ],
             ),
@@ -439,9 +495,9 @@ def generate_launch_description():
                         "grasp_point_mode": LaunchConfiguration("grasp_point_mode"),
                         "sam_enabled": sam_enabled,
                         "sam_checkpoint": sam_checkpoint,
-                        "sam_backend": "mobile_sam",
-                        "sam_model_type": "vit_t",
-                        "sam_device": "cuda",
+                        "sam_backend": SAM_BACKEND_DEFAULT,
+                        "sam_model_type": SAM_MODEL_TYPE_DEFAULT,
+                        "sam_device": SAM_DEVICE_DEFAULT,
                     },
                 ],
             ),
@@ -456,12 +512,12 @@ def generate_launch_description():
                         "sam_yaw_service_name": sam_yaw_service_name,
                         "sam_enabled": sam_enabled,
                         "sam_checkpoint": sam_checkpoint,
-                        "sam_backend": "mobile_sam",
-                        "sam_model_type": "vit_t",
-                        "sam_device": "cuda",
-                        "sam_depth_tolerance_mm": 30.0,
-                        "sam_depth_min_valid_ratio": 0.03,
-                        "sam_depth_expand_iterations": 1,
+                        "sam_backend": SAM_BACKEND_DEFAULT,
+                        "sam_model_type": SAM_MODEL_TYPE_DEFAULT,
+                        "sam_device": SAM_DEVICE_DEFAULT,
+                        "sam_depth_tolerance_mm": SAM_DEPTH_TOLERANCE_MM,
+                        "sam_depth_min_valid_ratio": SAM_DEPTH_MIN_VALID_RATIO,
+                        "sam_depth_expand_iterations": SAM_DEPTH_EXPAND_ITERATIONS,
                     },
                 ],
             ),
@@ -481,31 +537,41 @@ def generate_launch_description():
                         "mask_lock_topic": HAND_GRASP_MASK_LOCK_TOPIC,
                         "use_depth": True,
                         "publish_base_position": False,
-                        "position_frame_id": "base_link",
+                        "position_frame_id": BASE_FRAME,
                         "publish_annotated": True,
                         "display": False,
                         "show_return_close_roi": False,
                         "yolo_model": LaunchConfiguration("yolo_model"),
-                        "yolo_conf": yolo_conf,
                         "tool_classes": "drill,hammer,pliers,screwdriver,tape_measure,wrench",
-                        "yolo_imgsz": 640,
-                        "max_hands": 2,
-                        "depth_diff_threshold_mm": 35.0,
-                        "depth_min_contact_landmarks": 4,
+                        "yolo_conf": HAND_GRASP_YOLO_CONFIDENCE,
+                        "yolo_imgsz": HAND_GRASP_YOLO_IMAGE_SIZE,
+                        "max_hands": HAND_GRASP_MAX_HANDS,
+                        "depth_diff_threshold_mm": (
+                            HAND_GRASP_LAUNCH_DEPTH_DIFF_THRESHOLD_MM
+                        ),
+                        "depth_min_contact_landmarks": (
+                            HAND_GRASP_LAUNCH_DEPTH_MIN_CONTACT_LANDMARKS
+                        ),
                         "robot_status_topic": ROBOT_STATUS_TOPIC,
                         "grasp_model": LaunchConfiguration("grasp_model"),
                         "sam_enabled": sam_enabled,
                         "sam_checkpoint": sam_checkpoint,
-                        "sam_backend": "mobile_sam",
-                        "sam_model_type": "vit_t",
-                        "sam_device": "cuda",
-                        "sam_track_interval": 10,
-                        "sam_track_margin": 12,
-                        "sam_reseed_from_yolo": False,
-                        "sam_track_max_center_shift_px": 80.0,
-                        "sam_track_min_area_ratio": 0.35,
-                        "sam_track_max_area_ratio": 2.5,
-                        "allow_bbox_lock": True,
+                        "sam_backend": SAM_BACKEND_DEFAULT,
+                        "sam_model_type": SAM_MODEL_TYPE_DEFAULT,
+                        "sam_device": SAM_DEVICE_DEFAULT,
+                        "sam_track_interval": HAND_GRASP_SAM_TRACK_INTERVAL,
+                        "sam_track_margin": HAND_GRASP_SAM_TRACK_MARGIN,
+                        "sam_reseed_from_yolo": HAND_GRASP_SAM_RESEED_FROM_YOLO,
+                        "sam_track_max_center_shift_px": (
+                            HAND_GRASP_SAM_TRACK_MAX_CENTER_SHIFT_PX
+                        ),
+                        "sam_track_min_area_ratio": (
+                            HAND_GRASP_SAM_TRACK_MIN_AREA_RATIO
+                        ),
+                        "sam_track_max_area_ratio": (
+                            HAND_GRASP_SAM_TRACK_MAX_AREA_RATIO
+                        ),
+                        "allow_bbox_lock": HAND_GRASP_ALLOW_BBOX_LOCK,
                         "require_ml_grasp": True,
                         "require_locked_tool": True,
                         "require_depth_grasp": True,

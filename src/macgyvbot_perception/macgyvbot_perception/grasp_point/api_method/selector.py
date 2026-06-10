@@ -7,6 +7,7 @@ import math
 from PIL import Image
 
 from macgyvbot_config.vlm import (
+    GRASP_POINT_API_TIMEOUT_SEC,
     GRASP_POINT_MODE_API,
     VLM_INFERENCE_HISTORY_DIR,
     VLM_INFERENCE_HISTORY_ENABLED,
@@ -27,7 +28,7 @@ class APIGraspPointSelector:
         model: str | None = None,
         env_file: str | None = None,
         base_url: str | None = None,
-        timeout_sec: float = 30.0,
+        timeout_sec: float = GRASP_POINT_API_TIMEOUT_SEC,
         history_enabled=VLM_INFERENCE_HISTORY_ENABLED,
         history_dir=VLM_INFERENCE_HISTORY_DIR,
     ):

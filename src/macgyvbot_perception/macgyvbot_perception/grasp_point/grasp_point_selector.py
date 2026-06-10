@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from macgyvbot_config.vlm import (
     DEFAULT_GRASP_POINT_MODE,
+    GRASP_POINT_API_TIMEOUT_SEC,
     GRASP_POINT_MODE_API,
     GRASP_POINT_MODE_CENTER,
     GRASP_POINT_MODE_YOLO,
@@ -11,6 +12,10 @@ from macgyvbot_config.vlm import (
     GRASP_POINT_MODE_VLM_ONLY_QWEN3B,
     GRASP_POINT_MODE_VLM_ONLY_QWEN7B,
     GRASP_POINT_MODE_VLM_ONLY_SMOL,
+    SAM_BACKEND_DEFAULT,
+    SAM_DEVICE_DEFAULT,
+    SAM_ENABLED_DEFAULT,
+    SAM_MODEL_TYPE_DEFAULT,
     VLM_ONLY_MODEL_BY_MODE,
     VLM_ONLY_MODES,
 )
@@ -29,12 +34,12 @@ class GraspPointSelector:
         api_model="",
         api_env_file="",
         api_base_url="",
-        api_timeout_sec=30.0,
-        sam_enabled=True,
+        api_timeout_sec=GRASP_POINT_API_TIMEOUT_SEC,
+        sam_enabled=SAM_ENABLED_DEFAULT,
         sam_checkpoint="",
-        sam_backend="mobile_sam",
-        sam_model_type="vit_t",
-        sam_device="cuda",
+        sam_backend=SAM_BACKEND_DEFAULT,
+        sam_model_type=SAM_MODEL_TYPE_DEFAULT,
+        sam_device=SAM_DEVICE_DEFAULT,
     ):
         self.mode = mode
         self.logger = logger

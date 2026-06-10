@@ -20,8 +20,11 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "macgyvbot_config"))
 
-DEFAULT_MODEL_NAME = "yolo_v11_merge_v2.pt"
+from macgyvbot_config.models import YOLO_MODEL_NAME
+
+DEFAULT_MODEL_NAME = YOLO_MODEL_NAME
 DEFAULT_WIDTH = 640
 DEFAULT_HEIGHT = 480
 DEFAULT_FPS = 30

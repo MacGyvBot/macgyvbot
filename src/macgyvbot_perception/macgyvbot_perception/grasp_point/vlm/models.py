@@ -16,12 +16,20 @@ try:
 except ImportError:
     torch = None
 
-from macgyvbot_config.vlm import VLM_MODEL_SMOL
+from macgyvbot_config.vlm import (
+    VLM_DEFAULT_MAX_IMAGE_SIZE,
+    VLM_DEFAULT_MAX_NEW_TOKENS,
+    VLM_DEFAULT_USE_4BIT,
+    VLM_DEVICE_CPU,
+    VLM_DEVICE_CUDA,
+    VLM_DEVICE_MAP_AUTO,
+    VLM_MODEL_SMOL,
+)
 from macgyvbot_resources.resources import resolve_resource_file
 
 
 DEFAULT_VLM_MODEL = VLM_MODEL_SMOL
-DEFAULT_MAX_IMAGE_SIZE = 640
+DEFAULT_MAX_IMAGE_SIZE = VLM_DEFAULT_MAX_IMAGE_SIZE
 
 
 def _default_local_model_root():
@@ -131,8 +139,8 @@ class _BaseVLM:
         self,
         model_id: str = DEFAULT_VLM_MODEL,
         max_image_size: int = DEFAULT_MAX_IMAGE_SIZE,
-        max_new_tokens: int = 96,
-        use_4bit: bool = True,
+        max_new_tokens: int = VLM_DEFAULT_MAX_NEW_TOKENS,
+        use_4bit: bool = VLM_DEFAULT_USE_4BIT,
         logger=None,
     ):
         self.model_id = model_id
@@ -143,7 +151,11 @@ class _BaseVLM:
         self.local_model_root = DEFAULT_LOCAL_MODEL_ROOT
         self.processor = None
         self.model = None
-        self.device = "cuda" if torch is not None and torch.cuda.is_available() else "cpu"
+        self.device = (
+            VLM_DEVICE_CUDA
+            if torch is not None and torch.cuda.is_available()
+            else VLM_DEVICE_CPU
+        )
         self.torch_dtype = self._select_dtype()
 
     def load(self):
@@ -170,7 +182,11 @@ class _BaseVLM:
 
         has_accelerate = importlib.util.find_spec("accelerate") is not None
         has_bitsandbytes = importlib.util.find_spec("bitsandbytes") is not None
-        device_map = "auto" if self.device == "cuda" and has_accelerate else None
+        device_map = (
+            VLM_DEVICE_MAP_AUTO
+            if self.device == VLM_DEVICE_CUDA and has_accelerate
+            else None
+        )
         quant_config = self._make_quantization_config(has_bitsandbytes)
         if quant_config is not None:
             self._suppress_known_bitsandbytes_future_warning()
@@ -353,7 +369,7 @@ class _BaseVLM:
     def _select_dtype(self):
         if torch is None:
             return None
-        if self.device != "cuda":
+        if self.device != VLM_DEVICE_CUDA:
             return torch.float32
         if torch.cuda.is_bf16_supported():
             return torch.bfloat16
@@ -370,7 +386,11 @@ class _BaseVLM:
         return image.resize(new_size, Image.Resampling.LANCZOS)
 
     def _make_quantization_config(self, has_bitsandbytes: bool):
-        if not self.use_4bit or self.device != "cuda" or not has_bitsandbytes:
+        if (
+            not self.use_4bit
+            or self.device != VLM_DEVICE_CUDA
+            or not has_bitsandbytes
+        ):
             return None
         self._suppress_known_bitsandbytes_future_warning()
         from transformers import BitsAndBytesConfig
@@ -483,7 +503,7 @@ class _BaseVLM:
             counts[device_name] = counts.get(device_name, 0) + 1
 
         parts = [f"{device}:{count}" for device, count in sorted(counts.items())]
-        offload = any(device in ("cpu", "disk") for device in counts)
+        offload = any(device in (VLM_DEVICE_CPU, "disk") for device in counts)
         return f"hf_device_map({', '.join(parts)}; offload={offload})"
 
     @staticmethod
@@ -496,8 +516,8 @@ class _BaseVLM:
         if hasattr(self.model, "hf_device_map"):
             for device in self.model.hf_device_map.values():
                 if isinstance(device, int):
-                    return torch.device(f"cuda:{device}")
-                if isinstance(device, str) and device not in ("cpu", "disk"):
+                    return torch.device(f"{VLM_DEVICE_CUDA}:{device}")
+                if isinstance(device, str) and device not in (VLM_DEVICE_CPU, "disk"):
                     return torch.device(device)
         try:
             return next(self.model.parameters()).device

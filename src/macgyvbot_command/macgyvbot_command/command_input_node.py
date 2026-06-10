@@ -11,6 +11,32 @@ from macgyvbot_command.input_mapping.command_hard_parser import (
 from macgyvbot_command.input_mapping.command_llm_parser import CommandLlmParser
 from macgyvbot_command.stt.speech_to_text import SpeechToTextService
 from macgyvbot_command.tts import TtsService
+from macgyvbot_config.command import (
+    DEFAULT_COMMAND_MIN_CONFIDENCE,
+    DEFAULT_ENABLE_MICROPHONE,
+    DEFAULT_ENABLE_TTS,
+    DEFAULT_LLM_MODEL,
+    DEFAULT_LLM_TIMEOUT_SEC,
+    DEFAULT_OLLAMA_URL,
+    DEFAULT_PARSER_MODE,
+    DEFAULT_STT_AMBIENT_DURATION_SEC,
+    DEFAULT_STT_DEVICE_INDEX,
+    DEFAULT_STT_DYNAMIC_ENERGY,
+    DEFAULT_STT_ENERGY_THRESHOLD,
+    DEFAULT_STT_LANGUAGE,
+    DEFAULT_STT_NON_SPEAKING_DURATION_SEC,
+    DEFAULT_STT_PAUSE_THRESHOLD,
+    DEFAULT_STT_PHRASE_THRESHOLD,
+    DEFAULT_STT_PHRASE_TIME_LIMIT_SEC,
+    DEFAULT_TTS_EDGE_RATE,
+    DEFAULT_TTS_ENGINE,
+    DEFAULT_TTS_PITCH,
+    DEFAULT_TTS_RATE,
+    DEFAULT_TTS_TIMEOUT_SEC,
+    DEFAULT_TTS_VOICE,
+    DEFAULT_USE_LLM_FALLBACK,
+    DEFAULT_USE_LOCAL_PARSER,
+)
 from macgyvbot_config.topics import (
     COMMAND_FEEDBACK_TOPIC,
     COMMAND_SHUTDOWN_TOPIC,
@@ -71,36 +97,42 @@ class CommandInputNode(Node):
     def __init__(self):
         super().__init__("command_input_node")
 
-        self.declare_parameter("enable_microphone", False)
-        self.declare_parameter("language", "ko-KR")
-        self.declare_parameter("device_index", -1)
-        self.declare_parameter("energy_threshold", 300.0)
-        self.declare_parameter("pause_threshold", 0.45)
-        self.declare_parameter("phrase_threshold", 0.15)
-        self.declare_parameter("non_speaking_duration", 0.25)
-        self.declare_parameter("phrase_time_limit", 3.0)
-        self.declare_parameter("dynamic_energy", True)
-        self.declare_parameter("ambient_duration", 0.5)
+        self.declare_parameter("enable_microphone", DEFAULT_ENABLE_MICROPHONE)
+        self.declare_parameter("language", DEFAULT_STT_LANGUAGE)
+        self.declare_parameter("device_index", DEFAULT_STT_DEVICE_INDEX)
+        self.declare_parameter("energy_threshold", DEFAULT_STT_ENERGY_THRESHOLD)
+        self.declare_parameter("pause_threshold", DEFAULT_STT_PAUSE_THRESHOLD)
+        self.declare_parameter("phrase_threshold", DEFAULT_STT_PHRASE_THRESHOLD)
+        self.declare_parameter(
+            "non_speaking_duration",
+            DEFAULT_STT_NON_SPEAKING_DURATION_SEC,
+        )
+        self.declare_parameter(
+            "phrase_time_limit",
+            DEFAULT_STT_PHRASE_TIME_LIMIT_SEC,
+        )
+        self.declare_parameter("dynamic_energy", DEFAULT_STT_DYNAMIC_ENERGY)
+        self.declare_parameter("ambient_duration", DEFAULT_STT_AMBIENT_DURATION_SEC)
         self.declare_parameter("stt_text_topic", STT_TEXT_TOPIC)
 
         self.declare_parameter("tool_command_topic", TOOL_COMMAND_TOPIC)
         self.declare_parameter("command_feedback_topic", COMMAND_FEEDBACK_TOPIC)
         self.declare_parameter("robot_status_topic", ROBOT_STATUS_TOPIC)
 
-        self.declare_parameter("ollama_url", "http://localhost:11434/api/generate")
-        self.declare_parameter("model", "gemma3:1b")
-        self.declare_parameter("timeout_sec", 25.0)
-        self.declare_parameter("min_confidence", 0.55)
-        self.declare_parameter("use_local_parser", True)
-        self.declare_parameter("use_llm_fallback", True)
-        self.declare_parameter("parser_mode", "llm_primary")
-        self.declare_parameter("enable_tts", True)
-        self.declare_parameter("tts_engine", "auto")
-        self.declare_parameter("tts_voice", "ko-KR-SunHiNeural")
-        self.declare_parameter("tts_rate", 165)
-        self.declare_parameter("tts_edge_rate", "+25%")
-        self.declare_parameter("tts_pitch", "+35Hz")
-        self.declare_parameter("tts_timeout_sec", 20.0)
+        self.declare_parameter("ollama_url", DEFAULT_OLLAMA_URL)
+        self.declare_parameter("model", DEFAULT_LLM_MODEL)
+        self.declare_parameter("timeout_sec", DEFAULT_LLM_TIMEOUT_SEC)
+        self.declare_parameter("min_confidence", DEFAULT_COMMAND_MIN_CONFIDENCE)
+        self.declare_parameter("use_local_parser", DEFAULT_USE_LOCAL_PARSER)
+        self.declare_parameter("use_llm_fallback", DEFAULT_USE_LLM_FALLBACK)
+        self.declare_parameter("parser_mode", DEFAULT_PARSER_MODE)
+        self.declare_parameter("enable_tts", DEFAULT_ENABLE_TTS)
+        self.declare_parameter("tts_engine", DEFAULT_TTS_ENGINE)
+        self.declare_parameter("tts_voice", DEFAULT_TTS_VOICE)
+        self.declare_parameter("tts_rate", DEFAULT_TTS_RATE)
+        self.declare_parameter("tts_edge_rate", DEFAULT_TTS_EDGE_RATE)
+        self.declare_parameter("tts_pitch", DEFAULT_TTS_PITCH)
+        self.declare_parameter("tts_timeout_sec", DEFAULT_TTS_TIMEOUT_SEC)
 
         self._enable_microphone = bool(self.get_parameter("enable_microphone").value)
         self._language = self.get_parameter("language").value

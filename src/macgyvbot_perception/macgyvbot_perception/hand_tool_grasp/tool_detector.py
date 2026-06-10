@@ -4,13 +4,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional, Tuple
 
+from macgyvbot_config.models import YOLO_MODEL_NAME
 from macgyvbot_perception.model_paths import (
     resolve_weight_path,
 )
 
 Rect = Tuple[int, int, int, int]
 
-DEFAULT_MODEL_PATH = "yolo_v11_merge_v2.pt"
+DEFAULT_MODEL_PATH = YOLO_MODEL_NAME
 DEFAULT_TOOL_CLASSES = (
     "drill",
     "hammer",
