@@ -10,7 +10,7 @@ from macgyvbot_perception.model_paths import (
 
 Rect = Tuple[int, int, int, int]
 
-DEFAULT_MODEL_PATH = "yolov11_best.pt"
+DEFAULT_MODEL_PATH = "yolo_v11_merge_v2.pt"
 DEFAULT_TOOL_CLASSES = (
     "drill",
     "hammer",

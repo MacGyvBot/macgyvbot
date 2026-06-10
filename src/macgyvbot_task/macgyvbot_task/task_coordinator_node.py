@@ -60,6 +60,7 @@ from macgyvbot_config.topics import (
 from macgyvbot_config.vlm import (
     DEFAULT_GRASP_POINT_MODE,
     GRASP_POINT_MODE_CENTER,
+    GRASP_POINT_MODE_YOLO,
     GRASP_POINT_MODE_VLM,
     SAM_YAW_SERVICE_NAME,
     SAM_YAW_SERVICE_RESPONSE_TIMEOUT_SEC,
@@ -1728,6 +1729,9 @@ class TaskCoordinatorNode(Node):
         color_image = self.state.color_image.copy()
         depth_image = self.state.depth_image.copy()
         intrinsics = dict(self.state.intrinsics)
+        if self.grasp_point_mode == GRASP_POINT_MODE_YOLO:
+            return self._refine_yolo_pick_target_after_centering(target_label)
+
         results = self.detector.detect(color_image)
         if self.grasp_point_mode not in (GRASP_POINT_MODE_VLM, *VLM_ONLY_MODES):
             target = self.pick_target_resolver.target_from_boxes(
@@ -1800,6 +1804,66 @@ class TaskCoordinatorNode(Node):
             depth_image,
             intrinsics,
         )
+
+    def _refine_yolo_pick_target_after_centering(
+        self,
+        target_label,
+        timeout_sec=2.0,
+    ):
+        deadline = time.monotonic() + timeout_sec
+
+        while not self._motion_interrupted():
+            if not self.frame_processor.has_camera_state():
+                return None
+
+            color_image = self.state.color_image.copy()
+            depth_image = self.state.depth_image.copy()
+            intrinsics = dict(self.state.intrinsics)
+            results = self.detector.detect(color_image)
+
+            matched_box = self.pick_target_resolver.matching_box(
+                results[0].boxes,
+                target_label,
+            )
+            if matched_box is not None:
+                box, label = matched_box
+                selected = self.grasp_point_selector.select_yolo_grasp_point(
+                    results[0].boxes,
+                    self.detector.names,
+                    box,
+                )
+                if selected is not None:
+                    return self.pick_target_resolver.target_from_selected_grasp(
+                        label,
+                        target_label,
+                        selected,
+                        depth_image,
+                        intrinsics,
+                    )
+
+            if time.monotonic() >= deadline:
+                self._task_log("perception").warn(
+                    "YOLO grasp_point bbox unavailable; falling back to bbox center",
+                    step="pick_refine",
+                    event="fallback",
+                    reason="grasp_point_bbox_timeout",
+                    timeout_sec=timeout_sec,
+                )
+                return self._target_with_mask_pca_yaw(
+                    self.pick_target_resolver.target_from_boxes(
+                        results[0].boxes,
+                        target_label,
+                        color_image,
+                        depth_image,
+                        intrinsics,
+                        use_bbox_center=True,
+                    ),
+                    target_label,
+                )
+
+            time.sleep(0.05)
+
+        return None
 
     def _target_with_mask_pca_yaw(self, target, target_label):
         if target is None or not target.found:

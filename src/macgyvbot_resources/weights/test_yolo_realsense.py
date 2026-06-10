@@ -6,7 +6,7 @@ Run from the repository root:
 
 By default this script looks for:
 
-    src/macgyvbot_resources/weights/yolov11_best.pt
+    src/macgyvbot_resources/weights/yolo_v11_merge_v2.pt
 
 The RealSense profile defaults match the project README camera profile:
 640x480 color at 30 FPS.
@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 
 
-DEFAULT_MODEL_NAME = "yolov11_best.pt"
+DEFAULT_MODEL_NAME = "yolo_v11_merge_v2.pt"
 DEFAULT_WIDTH = 640
 DEFAULT_HEIGHT = 480
 DEFAULT_FPS = 30

@@ -58,12 +58,13 @@ def resolve_weight_file(model_name, default_model_name=None):
         if candidate.exists():
             return candidate
 
-    if default_model_name is not None and str(model_name) == "yolo11_best.pt":
+    legacy_yolo_names = ("yolo11_best.pt", "yolov11_best.pt")
+    if default_model_name is not None and str(model_name) in legacy_yolo_names:
         for base in [*shares, cwd, root]:
             corrected_path = base / "weights" / default_model_name
             if corrected_path.exists():
                 print(
-                    "WARNING: yolo11_best.pt not found. "
+                    f"WARNING: {model_name} not found. "
                     f"Using {default_model_name}."
                 )
                 return corrected_path

@@ -1,6 +1,7 @@
 """VLM grasp point selection constants."""
 
 GRASP_POINT_MODE_CENTER = "center"
+GRASP_POINT_MODE_YOLO = "yolo"
 GRASP_POINT_MODE_VLM = "vlm"
 GRASP_POINT_MODE_VLM_ONLY_QWEN3B = "vlm_only_qwen3b"
 GRASP_POINT_MODE_VLM_ONLY_QWEN7B = "vlm_only_qwen7b"

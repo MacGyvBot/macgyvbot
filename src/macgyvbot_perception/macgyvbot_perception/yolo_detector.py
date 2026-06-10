@@ -2,7 +2,7 @@
 
 from macgyvbot_perception.model_paths import resolve_weight_path
 
-DEFAULT_MODEL_PATH = "yolov11_best.pt"
+DEFAULT_MODEL_PATH = "yolo_v11_merge_v2.pt"
 
 
 def resolve_model_path(model_name):

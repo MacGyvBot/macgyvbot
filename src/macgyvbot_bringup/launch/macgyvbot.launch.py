@@ -45,7 +45,7 @@ def generate_launch_description():
     bringup_share = FindPackageShare("macgyvbot_bringup")
     resources_share = FindPackageShare("macgyvbot_resources")
     default_yolo_model = PathJoinSubstitution(
-        [resources_share, "weights", "yolov11_best.pt"]
+        [resources_share, "weights", "yolo_v11_merge_v2.pt"]
     )
     default_grasp_model = PathJoinSubstitution(
         [resources_share, "weights", "hand_grasp_model.pkl"]
@@ -256,8 +256,8 @@ def generate_launch_description():
                 "grasp_point_mode",
                 default_value="vlm_only_qwen3b",
                 description=(
-                    "Grasp point selection mode: center, vlm, vlm_only_smol, "
-                    "vlm_only_qwen3b, vlm_only_qwen7b, or api"
+                    "Grasp point selection mode: center, yolo, vlm, "
+                    "vlm_only_smol, vlm_only_qwen3b, vlm_only_qwen7b, or api"
                 ),
             ),
             DeclareLaunchArgument(

@@ -115,7 +115,7 @@ source합니다.
 
 ```text
 src/macgyvbot_resources/calibration/T_gripper2camera.npy
-src/macgyvbot_resources/weights/yolov11_best.pt
+src/macgyvbot_resources/weights/yolo_v11_merge_v2.pt
 src/macgyvbot_resources/weights/hand_grasp_model.pkl
 src/macgyvbot_resources/weights/mobile_sam.pt
 src/macgyvbot_resources/weights/vlm/
@@ -188,6 +188,7 @@ ros2 launch macgyvbot_bringup macgyvbot.launch.py grasp_point_mode:=vlm
 ros2 launch macgyvbot_bringup macgyvbot.launch.py grasp_point_mode:=vlm_only_smol
 ros2 launch macgyvbot_bringup macgyvbot.launch.py grasp_point_mode:=vlm_only_qwen3b
 ros2 launch macgyvbot_bringup macgyvbot.launch.py grasp_point_mode:=vlm_only_qwen7b
+ros2 launch macgyvbot_bringup macgyvbot.launch.py grasp_point_mode:=yolo
 ros2 launch macgyvbot_bringup macgyvbot.launch.py grasp_point_mode:=center
 ros2 launch macgyvbot_bringup macgyvbot.launch.py grasp_point_mode:=api
 ```

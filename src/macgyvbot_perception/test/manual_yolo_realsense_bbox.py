@@ -4,7 +4,7 @@
 Run from the repository root:
 
     python src/macgyvbot_perception/test/manual_yolo_realsense_bbox.py \
-        --model yolov11_best.pt
+        --model yolo_v11_merge_v2.pt
 
 This is a manual diagnostic helper, not a pytest test. It opens the RealSense
 color stream directly and displays YOLO annotations. Press q in the preview
@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 
 
-DEFAULT_MODEL_NAME = "yolov11_best.pt"
+DEFAULT_MODEL_NAME = "yolo_v11_merge_v2.pt"
 DEFAULT_WIDTH = 640
 DEFAULT_HEIGHT = 480
 DEFAULT_FPS = 30
