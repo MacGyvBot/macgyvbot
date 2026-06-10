@@ -15,7 +15,8 @@ class YoloDetector:
     def __init__(self, model_name):
         from ultralytics import YOLO
 
-        self.model = YOLO(resolve_model_path(model_name))
+        self.model_path = resolve_model_path(model_name)
+        self.model = YOLO(self.model_path)
 
     @property
     def names(self):

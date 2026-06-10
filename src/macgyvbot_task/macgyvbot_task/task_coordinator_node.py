@@ -723,6 +723,8 @@ class TaskCoordinatorNode(Node):
             event="status",
             name="yolo",
             model=Path(self.yolo_model).name,
+            resolved_model=Path(getattr(self.detector, "model_path", self.yolo_model)).name,
+            resolved_path=str(getattr(self.detector, "model_path", self.yolo_model)),
         )
         log.info("grasp point mode ready", step="grasp_point", event="status", mode=self.grasp_point_mode)
 
@@ -1833,12 +1835,15 @@ class TaskCoordinatorNode(Node):
                     box,
                 )
                 if selected is not None:
-                    return self.pick_target_resolver.target_from_selected_grasp(
-                        label,
+                    return self._target_with_mask_pca_yaw(
+                        self.pick_target_resolver.target_from_selected_grasp(
+                            label,
+                            target_label,
+                            selected,
+                            depth_image,
+                            intrinsics,
+                        ),
                         target_label,
-                        selected,
-                        depth_image,
-                        intrinsics,
                     )
 
             if time.monotonic() >= deadline:
