@@ -97,11 +97,8 @@ class PickHandoffFlow:
                 collision_scene_key="handoff/return_lift_to_clearance",
             )
             if not ok:
-                logger.error(
-                    "서랍 접근 안전 높이 상승 실패. "
-                    "공구를 잡은 상태로 중단합니다."
-                )
-                return False
+                if not self._recover_lift_from_home(drawer_wall_clearance_z, ori, logger):
+                    return False
         else:
             logger.info(
                 "반환 1단계: 관찰 위치 fallback으로 현재 위치 상승을 생략합니다."
@@ -190,6 +187,47 @@ class PickHandoffFlow:
             return False
 
         return True
+
+    def _recover_lift_from_home(self, drawer_wall_clearance_z, ori, logger):
+        logger.warn(
+            "서랍 접근 안전 높이 상승 실패. "
+            "Home joint pose 이동 후 다시 상승을 시도합니다."
+        )
+        ok = self.motion.move_to_home_joints(
+            logger,
+            collision_scene_key="handoff/return_home_before_lift",
+        )
+        if not ok:
+            logger.error(
+                "Home joint pose 이동 실패. "
+                "공구를 잡은 상태로 중단합니다."
+            )
+            return False
+
+        home_pose = get_ee_matrix(self.robot)
+        home_x = float(home_pose[0, 3])
+        home_y = float(home_pose[1, 3])
+
+        logger.info("반환 1단계 fallback: Home 위치에서 서랍 접근 안전 높이로 상승")
+        ok = self.motion.plan_and_execute(
+            logger,
+            pose_goal=make_safe_pose(
+                home_x,
+                home_y,
+                drawer_wall_clearance_z,
+                ori,
+                logger,
+            ),
+            collision_scene_key="handoff/return_lift_from_home_to_clearance",
+        )
+        if ok:
+            return True
+
+        logger.error(
+            "Home 위치에서 서랍 접근 안전 높이 상승 실패. "
+            "공구를 잡은 상태로 중단합니다."
+        )
+        return False
 
     def _restore_grasp_wrist_joint(self, grasp_wrist_joint_rad, logger):
         if grasp_wrist_joint_rad is None:
@@ -283,6 +321,12 @@ class PickHandoffFlow:
             return False
 
         if ok:
+            self.state._publish_robot_status(
+                "searching_hand",
+                action="bring",
+                message="사용자 손 위치를 확인합니다.",
+                command=self.state.current_command,
+            )
             return True
 
         logger.error("사용자 전달 위치 이동 실패. Pick 시퀀스 중단")

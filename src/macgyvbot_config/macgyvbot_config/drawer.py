@@ -99,8 +99,8 @@ DRAWER_COLLISION_BOXES = DRAWER_COLLISION_BOX_PROFILES[
 ]
 DRAWER_COLLISION_SCENE_KEY_PROFILES = {
     # on pick
-    "handoff/move_to_user": DRAWER_COLLISION_PROFILE_DRAWER_OPENED,
-    "drawer/approach_to_close": DRAWER_COLLISION_PROFILE_DRAWER_OPENED,
+    #"handoff/move_to_user": DRAWER_COLLISION_PROFILE_DRAWER_OPENED,
+    #"drawer/approach_to_close": DRAWER_COLLISION_PROFILE_DRAWER_OPENED,
 
     # on return
     # considered not needed. but it is ready to be applied.

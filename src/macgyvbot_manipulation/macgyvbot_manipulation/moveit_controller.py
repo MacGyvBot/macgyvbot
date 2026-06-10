@@ -30,7 +30,7 @@ POSE_GOAL_IK_MAX_SEEDS = 10
 POSE_GOAL_IK_SEED_PERTURB_RAD = math.radians(10.0)
 POSE_GOAL_MAX_JOINT_DELTA_RAD = math.radians(120.0)
 HOME_JOINT_GOAL_TOLERANCE_RAD = math.radians(2.0)
-HOME_JOINT_SETTLE_TIMEOUT_SEC = 1.5
+HOME_JOINT_POSITION_CONFIRM_TIMEOUT_SEC = 30.0
 _TWO_PI = 2.0 * math.pi
 
 
@@ -737,18 +737,26 @@ class MoveItController:
             state_goal=state_goal,
             collision_scene_key=collision_scene_key,
         )
-        if ok:
-            return True
 
         if self._wait_until_at_joint_goal(
             HOME_JOINTS,
             logger,
-            timeout_sec=HOME_JOINT_SETTLE_TIMEOUT_SEC,
+            timeout_sec=HOME_JOINT_POSITION_CONFIRM_TIMEOUT_SEC,
             tolerance_rad=HOME_JOINT_GOAL_TOLERANCE_RAD,
         ):
+            if ok:
+                logger.info("현재 joint pose가 Home 허용 오차 안에 있어 Home 복귀 성공으로 처리합니다.")
+            else:
+                logger.warn(
+                    "Home trajectory 결과는 실패로 보고되었지만 현재 joint pose가 "
+                    "Home 허용 오차 안에 있어 Home 복귀 성공으로 처리합니다."
+                )
+            return True
+
+        if ok:
             logger.warn(
-                "Home trajectory 결과는 실패로 보고되었지만 현재 joint pose가 "
-                "Home 허용 오차 안에 있어 Home 복귀 성공으로 처리합니다."
+                "Home trajectory는 성공으로 보고되었지만 현재 joint pose 확인이 "
+                "제한 시간 안에 완료되지 않았습니다. trajectory 성공 결과를 우선합니다."
             )
             return True
 

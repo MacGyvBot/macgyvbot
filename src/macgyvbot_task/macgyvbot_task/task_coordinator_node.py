@@ -33,6 +33,7 @@ from macgyvbot_interfaces.msg import (
 from macgyvbot_interfaces.srv import SetGripper
 
 from macgyvbot_config.drawer import DRAWER_OBSERVATION_J6_DEG
+from macgyvbot_config.joint_velocity import MOTION_VELOCITY_SCALING_FACTOR
 from macgyvbot_config.structured_logging import (
     format_structured_log,
 )
@@ -414,9 +415,11 @@ class TaskCoordinatorNode(Node):
         )
 
         self.planning_params = PlanRequestParameters(self.robot)
-        self.planning_params.planning_pipeline = "ompl"
-        self.planning_params.planner_id = "RRTConnectkConfigDefault"
-        self.planning_params.max_velocity_scaling_factor = 0.1
+        self.planning_params.planning_pipeline = "pilz_industrial_motion_planner"
+        self.planning_params.planner_id = "PTP"
+        self.planning_params.max_velocity_scaling_factor = (
+            MOTION_VELOCITY_SCALING_FACTOR
+        )
 
         self.motion = MoveItController(
             self.robot,
@@ -1183,15 +1186,14 @@ class TaskCoordinatorNode(Node):
             event="resume",
             reason=reason or "resume_requested",
         )
+        should_dispatch = False
         with self._queue_lock:
-            if self._suspended_step is not None:
-                self._queue.appendleft(
-                    (self._suspended_task_name, self._suspended_step)
-                )
-                self._suspended_step = None
-                self._suspended_task_name = None
-            self.pause_req.clear()
-            self.resume_req.clear()
+            if not self.pause_req.is_set() and self._suspended_step is None:
+                self.resume_req.clear()
+            else:
+                self.resume_req.set()
+                if self._current_step is None and not self._step_thread_alive():
+                    should_dispatch = self._resume_suspended_step_locked()
 
         self._publish_robot_status(
             "resumed",
@@ -1199,7 +1201,8 @@ class TaskCoordinatorNode(Node):
             reason=reason or "resume_requested",
             command=self.state.current_command,
         )
-        self._dispatch_next()
+        if should_dispatch:
+            self._dispatch_next()
         return True
 
     def _handle_cancel(self, reason, publish_status=True):
@@ -1534,7 +1537,10 @@ class TaskCoordinatorNode(Node):
                 if self._suspended_step is None:
                     self._suspended_step = step
                     self._suspended_task_name = task_name
-                return
+                if self.resume_req.is_set():
+                    self._resume_suspended_step_locked()
+                else:
+                    return
             elif self.exit_req.is_set():
                 self._task_log(task_name, quiet_info=True).info(
                     "task queue stopped by exit request",
@@ -1562,6 +1568,17 @@ class TaskCoordinatorNode(Node):
                 return
 
         self._dispatch_next()
+
+    def _resume_suspended_step_locked(self):
+        if self._suspended_step is not None:
+            self._queue.appendleft(
+                (self._suspended_task_name, self._suspended_step)
+            )
+            self._suspended_step = None
+            self._suspended_task_name = None
+        self.pause_req.clear()
+        self.resume_req.clear()
+        return True
 
     def _fail_queue(self, task_name):
         with self._queue_lock:
