@@ -77,6 +77,16 @@ def run_return_recovery(
 
     if config.target_observe_fn is not None:
         if not config.target_observe_fn(detection, target_tool, logger):
+            log_recovery_event(
+                logger,
+                "GRASPABILITY_CHECK_FAILED",
+                "복구 대상 공구를 잡을 수 없습니다. 관찰 자세 planning에 실패했습니다.",
+                {
+                    "task_type": "return",
+                    "target_tool": target_tool,
+                    "reason": "target_observe_move_failed",
+                },
+            )
             return _fail(
                 status,
                 drawer_controller,
@@ -189,6 +199,16 @@ def run_return_recovery(
 
     if config.target_observe_fn is not None:
         if not config.target_observe_fn(detection, target_tool, logger):
+            log_recovery_event(
+                logger,
+                "GRASPABILITY_CHECK_FAILED",
+                "복구 대상 공구를 잡을 수 없습니다. grasp 관찰 자세 planning에 실패했습니다.",
+                {
+                    "task_type": "return",
+                    "target_tool": target_tool,
+                    "reason": "target_observe_move_failed",
+                },
+            )
             return _fail(
                 status,
                 drawer_controller,
@@ -219,6 +239,16 @@ def run_return_recovery(
             "return recovery target not found at grasp observe pose",
         )
     if not is_graspable(detection, motion_controller, grasp_planner, config):
+        log_recovery_event(
+            logger,
+            "GRASPABILITY_CHECK_FAILED",
+            "복구 대상 공구를 잡을 수 없습니다. grasp planning이 실패했습니다.",
+            {
+                "task_type": "return",
+                "target_tool": target_tool,
+                "reason": "graspability_check_failed",
+            },
+        )
         return _fail(
             status,
             drawer_controller,

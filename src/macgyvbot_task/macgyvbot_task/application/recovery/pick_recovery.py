@@ -116,6 +116,16 @@ def run_pick_recovery(
             {"task_type": "pick", "target_tool": target_tool},
         )
         if not config.target_observe_fn(detection, target_tool, logger):
+            log_recovery_event(
+                logger,
+                "GRASPABILITY_CHECK_FAILED",
+                "복구 대상 공구를 잡을 수 없습니다. 관찰 자세 planning에 실패했습니다.",
+                {
+                    "task_type": "pick",
+                    "target_tool": target_tool,
+                    "reason": "target_observe_move_failed",
+                },
+            )
             return _fail(
                 status,
                 drawer_controller,
@@ -147,6 +157,16 @@ def run_pick_recovery(
                 "복구 대상 관찰 자세에서 공구를 다시 찾지 못했습니다.",
             )
     if not is_graspable(detection, motion_controller, grasp_planner, config):
+        log_recovery_event(
+            logger,
+            "GRASPABILITY_CHECK_FAILED",
+            "복구 대상 공구를 잡을 수 없습니다. grasp planning이 실패했습니다.",
+            {
+                "task_type": "pick",
+                "target_tool": target_tool,
+                "reason": "graspability_check_failed",
+            },
+        )
         return _fail(
             status,
             drawer_controller,

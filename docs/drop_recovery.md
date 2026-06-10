@@ -166,3 +166,17 @@ Recovery는 다음 실패를 별도 reason으로 기록합니다.
 - recovery 전용 retry limit parameter화
 - recovery timeout의 ROS parameter화
 - `"unknown"` 공구에 대한 operator confirmation 또는 staging fallback
+
+## 현재 제한
+
+이번 first-version recovery는 공구가 바닥이나 작업대처럼 비교적 평평한 표면 위에 떨어져 있고, YOLO bbox와 depth projection으로 안전한 pick target을 만들 수 있는 경우만 대상으로 합니다.
+
+Inspection pose에서 공구를 찾더라도 target observe pose 또는 grasp pose planning이 실패하면, recovery는 공구를 억지로 잡으려 하지 않습니다. `GRASPABILITY_CHECK_FAILED` 로그로 "잡을 수 없음"을 남기고, 열린 서랍 close와 home 복귀를 시도한 뒤 실패로 종료합니다.
+
+## 추후 작업
+
+- Interrupt/resume 방식: drop 직전 `TaskStep`, queue, drawer state, held tool, marker target을 snapshot으로 저장하고 recovery 성공 뒤 재개할지 종료할지 선택합니다.
+- 어려운 recovery case: 공구가 열린 서랍 턱에 걸쳐 있는 경우, 서랍 안쪽에 떨어진 경우, 서랍 벽/손잡이와 충돌 가능성이 높은 경우를 별도 recovery policy로 분리합니다.
+- 서랍 내부 recovery: drawer collision scene과 marker/depth를 함께 사용해 서랍 내부 공구를 안전하게 관찰하고, 서랍 벽 clearance를 보장하는 접근 pose를 추가합니다.
+- 충돌 위험 판단: 공구 bbox/depth가 drawer boundary, handle, wall clearance 영역과 겹치는지 확인하고, 위험하면 operator confirmation 또는 manual recovery 상태로 전환합니다.
+- Graspability 강화: 현재는 기존 planner 중심의 1차 check이며, 추후에는 VLM/SAM mask, force, depth quality, reachable workspace를 함께 사용해 "잡을 수 있음/없음"을 더 명확히 판단합니다.
