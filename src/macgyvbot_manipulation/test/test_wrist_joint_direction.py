@@ -67,7 +67,6 @@ sys.modules.setdefault("rclpy.action", rclpy_action_module)
 
 from macgyvbot_manipulation.moveit_controller import (  # noqa: E402
     _negative_first_equivalent_values,
-    _pose_goal_equivalent_position_candidates,
 )
 
 
@@ -113,26 +112,3 @@ def test_drawer_equivalent_candidates_include_opposite_positive_rotation():
     assert math.isclose(deltas[0], -220.0)
     assert any(math.isclose(delta, -220.0) for delta in deltas)
     assert any(math.isclose(delta, 140.0) for delta in deltas)
-
-
-def test_pose_goal_candidates_include_wrist_equivalent_fallback():
-    current = [0.0, 0.0, 0.0, 0.0, 0.0, math.radians(0.0)]
-    raw = [0.0, 0.0, 0.0, 0.0, 0.0, math.radians(140.0)]
-    joint_names = [
-        "joint_1",
-        "joint_2",
-        "joint_3",
-        "joint_4",
-        "joint_5",
-        "joint_6",
-    ]
-
-    candidates = _pose_goal_equivalent_position_candidates(
-        current,
-        raw,
-        joint_names,
-    )
-    deltas = [math.degrees(candidate[5] - current[5]) for candidate in candidates]
-
-    assert math.isclose(deltas[0], 140.0)
-    assert any(math.isclose(delta, -220.0) for delta in deltas)

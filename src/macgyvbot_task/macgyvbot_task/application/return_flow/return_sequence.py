@@ -422,7 +422,11 @@ class ReturnSequenceRunner:
             f"{observed_tool} 보관 서랍을 닫습니다.",
             context["command"],
         )
-        return self.drawer_flow.close_drawer(drawer_id, self.state.logger())
+        return self.drawer_flow.close_drawer(
+            drawer_id,
+            self.state.logger(),
+            prepare_wrist=True,
+        )
 
     def _home_after_drawer_close(self, context):
         drawer_id = context.get("drawer_id")
