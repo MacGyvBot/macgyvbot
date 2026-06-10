@@ -77,7 +77,6 @@ else:
             self._gui_connection_status = QLabel('GUI 노드: 연결됨')
             self._current_status = QLabel('현재 상태: 명령 대기')
             self._task_target_status = QLabel('작업 대상: 없음')
-            self._task_stage_status = QLabel('작업 단계: 대기')
             self._pause_button = QPushButton('멈춤')
             self._pause_button.setObjectName('pauseControlButton')
             self._pause_button.clicked.connect(
@@ -159,7 +158,6 @@ else:
             status_panel_layout.addSpacing(12)
             status_panel_layout.addWidget(self._current_status)
             status_panel_layout.addWidget(self._task_target_status)
-            status_panel_layout.addWidget(self._task_stage_status)
             status_panel_layout.addStretch(1)
             status_panel_layout.addLayout(pause_resume_button_layout)
             status_panel_layout.addLayout(control_button_layout)
@@ -397,8 +395,8 @@ else:
             self.set_detector_status(detector_text)
 
         def set_task_status(self, target_text, stage_text):
+            _ = stage_text
             self._task_target_status.setText(f'작업 대상: {target_text}')
-            self._task_stage_status.setText(f'작업 단계: {stage_text}')
 
         def set_chat_input_enabled(self, enabled, reason=''):
             enabled = bool(enabled)
@@ -1193,7 +1191,6 @@ else:
                 font-weight: 600;
             '''
             self._task_target_status.setStyleSheet(task_style)
-            self._task_stage_status.setStyleSheet(task_style)
 
         def _apply_avatar_pixmap(self):
             asset_path = (

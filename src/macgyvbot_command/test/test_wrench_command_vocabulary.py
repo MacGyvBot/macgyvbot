@@ -43,6 +43,27 @@ class WrenchCommandVocabularyTest(unittest.TestCase):
                 self.assertEqual(command.get("tool_name"), expected[0])
                 self.assertEqual(command.get("action"), expected[1])
 
+    def test_deictic_return_does_not_inherit_guessed_tool(self):
+        parser = CommandLlmParser(
+            ollama_url="",
+            model="",
+            timeout_sec=1.0,
+            min_confidence=0.7,
+            use_local_parser=True,
+            use_llm_fallback=False,
+        )
+
+        tool_name, target_mode, confidence = parser._adjust_ambiguous_command(
+            "이거 정리해",
+            "hammer",
+            "named",
+            0.9,
+        )
+
+        self.assertEqual(tool_name, "unknown")
+        self.assertEqual(target_mode, "deictic")
+        self.assertEqual(confidence, 0.9)
+
     def test_drill_remains_unsupported(self):
         parser = CommandLlmParser(
             ollama_url="",

@@ -1638,7 +1638,7 @@ class CommandLlmParser:
             )
         )
 
-        if has_deictic_target and not has_tool_clue and tool_name == 'unknown':
+        if has_deictic_target and not has_tool_clue:
             return 'unknown', 'deictic', confidence
 
         inferred_tool = self._infer_tool_from_function_words(
