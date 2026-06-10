@@ -261,9 +261,8 @@ MoveIt pose goal 이동은 `macgyvbot_manipulation.moveit_controller`에서
 RobotState goal로 사용합니다. 안전 한계를 넘는 큰 joint delta가 남으면 pose goal
 fallback으로 우회하지 않고 planning을 중단합니다.
 
-Task coordinator는 전역 MoveIt planner로 OMPL `RRTConnectkConfigDefault`를
-사용합니다. drawer collision object가 있는 상태에서 sampling 기반 우회 경로를
-찾기 위한 설정이며, 관련 MoveItPy pipeline 목록은
+Task coordinator는 전역 MoveIt planner로 Pilz Industrial Motion Planner의
+`PTP`를 사용합니다. 관련 MoveItPy pipeline 목록은
 `src/macgyvbot_bringup/config/moveit_py.yaml`에서 관리합니다.
 
 로봇팔 joint별 최대 속도는
