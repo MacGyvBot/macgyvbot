@@ -38,6 +38,7 @@ PIPE_LABELS = {
     "safety": "tool_drop_safety",
     "request": "task_request",
     "vlm": "vlm_selector",
+    "drawer": "drawer_motion",
 }
 
 MESSAGE_TRANSLATIONS = {
@@ -64,6 +65,9 @@ MESSAGE_TRANSLATIONS = {
     "topic ready": "토픽 준비 완료",
     "YOLO model ready": "YOLO 모델 준비 완료",
     "grasp point mode ready": "grasp point 모드 준비 완료",
+    "yolo grasp point calculation succeeded": "yolo mode로 계산에 성공했습니다.",
+    "center grasp point calculation succeeded": "center mode로 계산에 성공했습니다.",
+    "YOLO grasp point fallback to center": "grasp_point bbox가 없어 center로 fallback되었습니다.",
     "manual gripper service ready": "manual gripper 서비스 준비 완료",
     "robot grasp": "로봇 파지 시작",
     "robot grasp failed": "로봇 파지 실패",
@@ -99,6 +103,7 @@ MESSAGE_TRANSLATIONS = {
     "drawer marker camera state unavailable": "서랍 마커 카메라 상태를 사용할 수 없습니다",
     "drawer marker id missing": "서랍 마커 ID가 없습니다",
     "drawer store exit move failed": "서랍 수납 종료 이동 실패",
+    "drawer motion failed": "서랍 동작 실패",
     "move to drawer store exit": "서랍 수납 종료 위치로 이동",
     "store tool target camera state unavailable": "공구 수납 타겟 카메라 상태를 사용할 수 없습니다",
     "return flow failed": "반납 흐름 실패",

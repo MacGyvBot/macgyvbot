@@ -13,6 +13,8 @@ ROS 패키지가 아니라 colcon workspace root이며, 실행 entrypoint는
   - `macgyvbot.launch.py`는 `macgyvbot_task`, `macgyvbot_perception`,
     `macgyvbot_command` executable을 함께 실행합니다.
   - `moveit_py.yaml` 같은 launch/runtime YAML을 설치합니다.
+  - `joint_velocity_config.py`는 launch 시점에 combined URDF와 MoveIt config dict에
+    joint velocity 설정을 반영하는 patch helper를 소유합니다.
 
 - `src/macgyvbot_task`
   - `macgyvbot_main_node.py`는 `/tool_command`를 typed `/task_request`로 넘기는
@@ -67,6 +69,8 @@ ROS 패키지가 아니라 colcon workspace root이며, 실행 entrypoint는
     threshold, timing, UI, VLM 설정 등 Python runtime constant를 소유합니다.
   - `drawer.py`는 drawer handle pose, drawer/tool mapping, drawer collision
     box 좌표, collision profile, motion key별 opened-scene 매핑을 소유합니다.
+  - `joint_velocity.py`는 M0609 `joint_1`~`joint_6`의 사용자 조절용
+    velocity limit과 전역 MoveIt velocity scaling 값을 소유합니다.
 
 - `src/macgyvbot_domain`
   - package 간 공유되는 in-process Python dataclass를 소유합니다.
@@ -142,14 +146,27 @@ macgyvbot_perception.hand_grasp_detection_node
   여러 IK seed를 시도한 뒤, `q_curr` 기준 가장 가까운 joint goal을 선택합니다.
   선택된 IK 후보의 joint별 `raw`/`short` delta를 로그로 남기며, 최대 joint delta가
   안전 한계를 넘으면 기존 pose fallback으로 우회하지 않고 planning을 중단합니다.
-- task coordinator는 MoveItPy `PlanRequestParameters`를 전역 OMPL
-  `RRTConnectkConfigDefault`로 설정합니다. 이전 Pilz PTP처럼 단일 점대점
-  trajectory를 만든 뒤 collision validation에서 실패하는 대신, drawer collision
-  object를 고려한 sampling 기반 경로 탐색을 시도합니다.
+- task coordinator는 MoveItPy `PlanRequestParameters`를 전역 Pilz Industrial
+  Motion Planner `PTP`로 설정합니다.
 - `moveit_py.yaml`에는 `ompl`, `pilz_industrial_motion_planner`, `chomp`,
   `ompl_rrt_star` pipeline 목록과 profile별 request parameter가 정의되어 있습니다.
   Python runtime에서 실제로 사용하는 기본값은 `task_coordinator_node.py`의
   `self.planning_params`입니다.
+- robot description은 `macgyvbot.launch.py`에서 `macgyvbot_resources`의
+  `m0609_onrobot_rg2_combined.urdf`를 읽어 `robot_description`에 주입합니다.
+  그 직후 `macgyvbot_bringup.joint_velocity_config`의
+  `apply_joint_velocity_limits_to_moveit_config()`가
+  `macgyvbot_config.joint_velocity`의 값을 URDF `<limit velocity="...">`와
+  `robot_description_planning.joint_limits.*.max_velocity`에 함께 적용합니다.
+  따라서 source URDF 파일 자체의 velocity 값은 기본 모델 값으로 남아 있고,
+  MacGyvBot runtime에서 쓰는 조인트 속도 제한은 launch-time patch 결과입니다.
+- 현재 joint velocity 기본값은 `joint_1`/`joint_2` 30 deg/s, `joint_3`
+  36 deg/s, `joint_4`/`joint_5` 45 deg/s, `joint_6` 90 deg/s입니다.
+  `task_coordinator_node.py`는 `PlanRequestParameters.max_velocity_scaling_factor`에
+  `joint_velocity.py`의 `MOTION_VELOCITY_SCALING_FACTOR`를 넣습니다.
+  acceleration scaling은 `moveit_py.yaml`의 기본
+  `plan_request_params.max_acceleration_scaling_factor`가 소유하며, 실제 로봇
+  테스트 기준으로 현재 `0.12`를 사용합니다.
 - drawer collision scene은 항상 기본 `drawer_only` profile에서 시작합니다.
   `MoveItController.plan_and_execute(..., collision_scene_key=...)`가 호출될 때
   `DrawerCollisionSceneManager`는 key를
@@ -166,7 +183,7 @@ macgyvbot_perception.hand_grasp_detection_node
 - `/apply_planning_scene` service가 실패해도 local MoveItPy planning scene에 object
   적용이 성공하면 task node 내부 planning은 계속 진행할 수 있습니다. RViz 표시와
   외부 planning scene 동기화가 필요한 경우 로그의 `apply_service` 결과를 확인합니다.
-- drawer collision object가 목표 pose 자체 또는 손잡이 접촉 공간을 덮으면 OMPL도
+- drawer collision object가 목표 pose 자체 또는 손잡이 접촉 공간을 덮으면 planner가
   경로를 만들 수 없습니다. 이런 경우에는 key를 더 세분화하거나 drawer collision
   geometry를 손잡이 접근 corridor와 겹치지 않게 조정해야 합니다.
 

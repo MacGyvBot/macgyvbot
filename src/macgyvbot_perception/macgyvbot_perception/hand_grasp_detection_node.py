@@ -713,6 +713,11 @@ class HandGraspDetectionNode(Node):
             if self.tool_detector is not None
             else None
         )
+        grasp_point_detection = (
+            self.tool_detector.last_grasp_point_detection
+            if self.tool_detector is not None
+            else None
+        )
         if tool_detection is not None:
             self.latest_tool_detection = tool_detection
             self.last_yolo_seen_frame = self.frame_index
@@ -757,6 +762,7 @@ class HandGraspDetectionNode(Node):
                     active_hand=active_hand,
                     tool_detection=tool_detection,
                     result=result,
+                    grasp_point_detection=grasp_point_detection,
                     depth_mm=self.latest_depth_mm,
                 )
             else:
@@ -766,6 +772,7 @@ class HandGraspDetectionNode(Node):
                     active_hand=active_hand,
                     tool_detection=tool_detection,
                     result=result,
+                    grasp_point_detection=grasp_point_detection,
                     locked_tool=self.locked_tool,
                     candidate_tool_mask=self.depth_lock_preview_tool,
                     depth_mm=self.latest_depth_mm,

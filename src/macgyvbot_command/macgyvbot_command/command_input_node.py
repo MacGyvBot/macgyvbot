@@ -145,6 +145,7 @@ class CommandInputNode(Node):
         robot_status_topic = self.get_parameter("robot_status_topic").value
 
         self._exit_pending = False
+        self._last_robot_state = "unknown"
         self._recent_bot_texts = {}
         self._bot_echo_ignore_ns = 10_000_000_000
         self._last_spoken_robot_status_key = None
@@ -362,6 +363,20 @@ class CommandInputNode(Node):
                     self._publish_feedback_payload(payload)
                 self._send_task_control_request(action=action, reason=text)
                 return
+            if action == "home" and self._handoff_decision_pending():
+                self.get_logger().info(
+                    _format_command_log(
+                        "home interpreted as handoff fallback",
+                        step="interpret",
+                        event="reroute",
+                        action=action,
+                        raw_text=text,
+                    )
+                )
+                for payload in result.get("feedbacks", []):
+                    self._publish_feedback_payload(payload)
+                self._send_task_control_request(action="cancel", reason=text)
+                return
             self._publish_command(command)
 
         for payload in result.get("feedbacks", []):
@@ -405,6 +420,9 @@ class CommandInputNode(Node):
             return True
 
         if action == "home":
+            if self._handoff_decision_pending():
+                self._send_task_control_request(action="cancel", reason=text)
+                return True
             self._publish_command(command)
             return True
 
@@ -417,7 +435,7 @@ class CommandInputNode(Node):
             "resume": "재개 명령으로 이해했습니다. 작업 재개 요청으로 전달합니다.",
             "retry": "다시 인식하라는 뜻으로 이해했습니다.",
             "cancel": "현재 작업을 취소합니다. 다음 명령을 기다리겠습니다.",
-            "home": "Home 위치로 복귀하라는 뜻으로 이해했습니다.",
+            "home": "Home으로 복귀합니다.",
         }.get(action, "명령을 올바른 입력으로 판단했습니다.")
 
     def _publish_command(self, command):
@@ -487,6 +505,7 @@ class CommandInputNode(Node):
             self._parser.update_robot_status(status)
 
         state = str(status.get("status", status.get("state", "unknown"))).lower()
+        self._last_robot_state = state
         if state in self._spoken_robot_statuses():
             message = str(status.get("message") or "").strip()
             if not message:
@@ -565,6 +584,9 @@ class CommandInputNode(Node):
             "reason": msg.reason,
             "command": CommandInputNode._tool_command_payload(msg.command),
         }
+
+    def _handoff_decision_pending(self):
+        return self._last_robot_state == "handoff_inspection_pending"
 
     def _feedback_speech_message(self, feedback):
         status = feedback.get("status", "unknown")

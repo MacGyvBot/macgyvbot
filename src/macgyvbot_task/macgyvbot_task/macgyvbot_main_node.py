@@ -75,11 +75,13 @@ class MacGyvBotNode(Node):
         "done",
         "completed",
         "success",
+        "returned",
         "failed",
         "error",
         "cancelled",
         "rejected",
         "busy",
+        "returned",
     }
     _ROUTED_ACTIONS = {
         "bring",

@@ -71,7 +71,7 @@ class PickFrameProcessor:
             self.state.depth_image,
             self.state.intrinsics,
             use_bbox_center=(
-                self.pick_target_resolver.should_defer_vlm_until_top_view()
+                self.pick_target_resolver.should_refine_grasp_point_at_top_view()
             ),
         )
         if target.found:

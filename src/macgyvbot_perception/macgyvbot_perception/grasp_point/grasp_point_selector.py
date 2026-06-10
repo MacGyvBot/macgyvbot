@@ -7,6 +7,7 @@ from macgyvbot_config.vlm import (
     GRASP_POINT_API_TIMEOUT_SEC,
     GRASP_POINT_MODE_API,
     GRASP_POINT_MODE_CENTER,
+    GRASP_POINT_MODE_YOLO,
     GRASP_POINT_MODE_VLM,
     GRASP_POINT_MODE_VLM_ONLY_QWEN3B,
     GRASP_POINT_MODE_VLM_ONLY_QWEN7B,
@@ -55,6 +56,7 @@ class GraspPointSelector:
         self.vlm_only_grasp_point_selector = None
         self.api_grasp_point_selector = None
         self.center_grasp_point_selector = CenterGraspPointSelector(logger)
+        self.yolo_grasp_point_selector = None
 
     def preload_vlm_if_needed(self):
         if not self._uses_vlm():
@@ -104,12 +106,16 @@ class GraspPointSelector:
             )
         )
 
-    def should_defer_vlm_until_top_view(self):
+    def should_refine_grasp_point_at_top_view(self):
         return (
             self.mode == GRASP_POINT_MODE_CENTER
+            or self.mode == GRASP_POINT_MODE_YOLO
             or self.mode == GRASP_POINT_MODE_VLM
             or self.mode in VLM_ONLY_MODES
         )
+
+    def should_defer_vlm_until_top_view(self):
+        return self.should_refine_grasp_point_at_top_view()
 
     def select(
         self,
@@ -190,6 +196,25 @@ class GraspPointSelector:
             label,
             color_image,
             target_label,
+        )
+
+    def select_yolo_grasp_point(self, boxes, names, target_box):
+        bbox = target_box.xyxy[0].cpu().numpy()
+        try:
+            from macgyvbot_perception.grasp_point.yolo_method.selector import (
+                YoloGraspPointSelector,
+            )
+        except ImportError as exc:
+            self.logger.warn(f"YOLO grasp module import failed: {exc}")
+            return None
+
+        if self.yolo_grasp_point_selector is None:
+            self.yolo_grasp_point_selector = YoloGraspPointSelector(self.logger)
+
+        return self.yolo_grasp_point_selector.select_grasp_pixel(
+            boxes,
+            names,
+            bbox,
         )
 
     def _select_bbox_center_pixel(
@@ -402,6 +427,7 @@ def normalize_grasp_point_mode(mode, logger):
     """Return a supported grasp point mode, falling back to center."""
     if mode in (
         GRASP_POINT_MODE_CENTER,
+        GRASP_POINT_MODE_YOLO,
         GRASP_POINT_MODE_VLM,
         *VLM_ONLY_MODES,
         GRASP_POINT_MODE_API,

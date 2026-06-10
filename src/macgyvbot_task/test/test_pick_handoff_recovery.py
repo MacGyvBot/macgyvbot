@@ -66,7 +66,9 @@ sys.modules.setdefault("scipy.spatial.transform", scipy_transform_module)
 
 from macgyvbot_config.drawer import DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M
 from macgyvbot_config.drawer import DRAWER_WALL_CLEARANCE_Z_OFFSET_M
+from macgyvbot_domain.target_models import PickTarget
 from macgyvbot_manipulation.robot_safezone import safe_z_min_for_drawer
+from macgyvbot_task.application.pick_flow import pick_sequence
 from macgyvbot_task.application.pick_flow import pick_handoff_flow
 from macgyvbot_task.application.pick_flow.pick_handoff_flow import PickHandoffFlow
 from macgyvbot_task.application.pick_flow.pick_sequence import PickSequenceRunner
@@ -88,7 +90,9 @@ class FakeMotion:
         self.results = list(results or [True, True, True, True, True, True])
         self.targets = []
         self.min_z_values = []
+        self.collision_scene_keys = []
         self.home_calls = 0
+        self.wrist_targets = []
 
     def plan_and_execute(
         self,
@@ -100,10 +104,20 @@ class FakeMotion:
     ):
         self.targets.append(pose_goal)
         self.min_z_values.append(min_z)
+        self.collision_scene_keys.append(collision_scene_key)
         return self.results.pop(0)
 
     def move_to_home_joints(self, logger, collision_scene_key=None):
         self.home_calls += 1
+        return True
+
+    def move_wrist_to_joint_rad(
+        self,
+        target_j6_rad,
+        logger,
+        collision_scene_key=None,
+    ):
+        self.wrist_targets.append((target_j6_rad, collision_scene_key))
         return True
 
 
@@ -161,9 +175,11 @@ class FakeHandoff:
         drawer_id=None,
         move_home=True,
         lift_from_current=True,
+        grasp_wrist_joint_rad=None,
     ):
         self.returned_drawer_id = drawer_id
         self.lift_from_current = lift_from_current
+        self.grasp_wrist_joint_rad = grasp_wrist_joint_rad
         self.events.append("return")
         assert not move_home
         return True
@@ -270,6 +286,81 @@ def test_return_tool_to_original_position_uses_drawer_clearance(monkeypatch):
     assert motion.home_calls == 1
 
 
+def test_return_tool_to_original_position_restores_grasp_wrist_before_xy_move(
+    monkeypatch,
+):
+    monkeypatch.setattr(pick_handoff_flow, "get_ee_matrix", lambda _robot: FakeMatrix())
+    motion = FakeMotion()
+    gripper = FakeGripper()
+    flow = PickHandoffFlow(
+        robot=object(),
+        motion_controller=motion,
+        gripper=gripper,
+        state=FakeState(),
+        wait_fn=lambda _duration: None,
+    )
+    ori = {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
+    grasp_wrist_joint_rad = math.radians(67.19)
+
+    assert flow.return_tool_to_original_position(
+        0.30,
+        0.10,
+        0.40,
+        0.35,
+        ori,
+        FakeLogger(),
+        safe_z_min=safe_z_min_for_drawer(1),
+        drawer_id=1,
+        grasp_wrist_joint_rad=grasp_wrist_joint_rad,
+    )
+
+    assert motion.wrist_targets == [
+        (grasp_wrist_joint_rad, "handoff/return_restore_grasp_wrist")
+    ]
+    assert len(motion.targets) == 5
+
+
+def test_return_tool_to_original_position_falls_back_to_home_when_current_lift_fails(
+    monkeypatch,
+):
+    poses = iter(
+        [
+            FakeMatrix(),
+            FakeMatrix(),
+        ]
+    )
+    monkeypatch.setattr(pick_handoff_flow, "get_ee_matrix", lambda _robot: next(poses))
+    motion = FakeMotion(results=[False, True, True, True, True, True])
+    gripper = FakeGripper()
+    flow = PickHandoffFlow(
+        robot=object(),
+        motion_controller=motion,
+        gripper=gripper,
+        state=FakeState(),
+        wait_fn=lambda _duration: None,
+    )
+    ori = {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
+
+    assert flow.return_tool_to_original_position(
+        0.30,
+        0.10,
+        0.40,
+        0.35,
+        ori,
+        FakeLogger(),
+        safe_z_min=safe_z_min_for_drawer(1),
+        drawer_id=1,
+    )
+
+    assert motion.home_calls == 2
+    assert motion.collision_scene_keys[:3] == [
+        "handoff/return_lift_to_clearance",
+        "handoff/return_lift_from_home_to_clearance",
+        "handoff/return_move_above_target",
+    ]
+    assert gripper.open_calls == 1
+
+
 def test_handoff_timeout_return_closes_drawer():
     runner = PickSequenceRunner.__new__(PickSequenceRunner)
     runner.handoff = FakeHandoff()
@@ -292,6 +383,7 @@ def test_handoff_timeout_return_closes_drawer():
 
     assert runner.handoff.returned_drawer_id == 1
     assert runner.handoff.lift_from_current is True
+    assert runner.handoff.grasp_wrist_joint_rad is None
     assert runner.drawer_flow.closed == [1]
     assert runner.handoff.events == ["return", "close", "home"]
     assert runner.state.statuses[-1][0] == "returned"
@@ -347,6 +439,7 @@ def test_handoff_search_failure_returns_directly_to_target_clearance():
 
     assert runner.handoff.returned_drawer_id == 1
     assert runner.handoff.lift_from_current is False
+    assert runner.handoff.grasp_wrist_joint_rad is None
     assert runner.drawer_flow.closed == [1]
     assert runner.handoff.events == ["return", "close", "home"]
     assert runner.state.statuses[-1][0] == "returned"
@@ -513,3 +606,55 @@ def test_pregrasp_depth_adjust_allows_target_below_global_safe_z_min():
 
     assert math.isclose(runner.motion.targets[-1].pose.position.z, 0.230)
     assert math.isclose(runner.motion.min_z_values[-1], 0.220)
+
+
+def test_refine_failure_applies_fallback_pca_yaw(monkeypatch):
+    class RotateMotion:
+        def __init__(self):
+            self.yaws = []
+
+        def rotate_wrist_by_yaw_deg(
+            self,
+            yaw_deg,
+            logger,
+            collision_scene_key=None,
+        ):
+            self.yaws.append((yaw_deg, collision_scene_key))
+            return True
+
+    runner = PickSequenceRunner.__new__(PickSequenceRunner)
+    runner.state = FakeState()
+    runner.robot = object()
+    runner.motion = RotateMotion()
+    runner.refine_pick_target = lambda _target_label: PickTarget(
+        found=False,
+        label="screwdriver",
+        pixel=None,
+        base_xyz=None,
+        depth_m=None,
+        yaw_deg=None,
+        reason="vlm_service_failed",
+    )
+    runner.estimate_grasp_yaw = lambda _target_label: 37.5
+
+    context = {
+        "plan": types.SimpleNamespace(
+            target_x=0.30,
+            target_y=0.10,
+            drawer_wall_clearance_z=0.40,
+            grasp_z=0.25,
+        ),
+        "ori": "old_ori",
+        "safe_z_min": safe_z_min_for_drawer(1),
+        "grasp_yaw_deg": None,
+    }
+
+    monkeypatch.setattr(
+        pick_sequence,
+        "current_ee_orientation",
+        lambda _robot: "rotated_ori",
+    )
+
+    assert runner._refine_target_and_apply_grasp_yaw_step(context)
+    assert runner.motion.yaws == [(37.5, "pick/apply_wrist_yaw")]
+    assert context["ori"] == "rotated_ori"

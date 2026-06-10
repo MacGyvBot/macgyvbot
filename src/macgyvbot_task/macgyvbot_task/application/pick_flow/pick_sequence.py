@@ -52,6 +52,7 @@ class PickSequenceRunner:
         state,
         tool_hold_monitor=None,
         refine_pick_target=None,
+        estimate_grasp_yaw=None,
         generate_grasp_detection_mask_images=None,
         control_events=None,
         drawer_flow=None,
@@ -62,6 +63,7 @@ class PickSequenceRunner:
         self.state = state
         self.tool_hold_monitor = tool_hold_monitor
         self.refine_pick_target = refine_pick_target
+        self.estimate_grasp_yaw = estimate_grasp_yaw
         self.generate_grasp_detection_mask_images = generate_grasp_detection_mask_images
         self.control_events = control_events or {}
         self.drawer_flow = drawer_flow
@@ -107,7 +109,8 @@ class PickSequenceRunner:
             "ori": self.state.home_ori,
             "drawer_id": drawer_id,
             "safe_z_min": safe_z_min,
-            "vlm_yaw_deg": vlm_yaw_deg,
+            "grasp_yaw_deg": vlm_yaw_deg,
+            "grasp_wrist_joint_rad": None,
         }
 
         log_info(
@@ -127,12 +130,12 @@ class PickSequenceRunner:
         steps = [
             TaskStep("pick/open_gripper", self._open_gripper),
             TaskStep(
-                "pick/observe_offset_move",
-                lambda: self._move_to_vlm_observe_pose(context),
+                "pick/grasp_observe_offset_move",
+                lambda: self._move_to_grasp_observe_pose(context),
             ),
             TaskStep(
-                "pick/refine_target_and_apply_vlm_yaw",
-                lambda: self._refine_target_and_apply_vlm_yaw_step(context),
+                "pick/refine_target_and_apply_grasp_yaw",
+                lambda: self._refine_target_and_apply_grasp_yaw_step(context),
             ),
             TaskStep(
                 "pick/grasp_descent",
@@ -145,7 +148,7 @@ class PickSequenceRunner:
                 "pick/pregrasp_depth_adjust",
                 lambda: self._pregrasp_depth_adjust(context),
             ),
-            TaskStep("pick/grasp_tool", self._grasp_tool),
+            TaskStep("pick/grasp_tool", lambda: self._grasp_tool(context)),
             TaskStep(
                 "pick/lift",
                 lambda: self._move_to_pose(
@@ -170,7 +173,7 @@ class PickSequenceRunner:
                 lambda: self._wait_human_grasp(context["plan"], context),
             ),
             TaskStep("pick/release_to_human", self._release_to_human),
-            #TaskStep("pick/home_before_close_drawer", self._home_before_close_drawer),
+            TaskStep("pick/home_before_close_drawer", self._home_before_close_drawer),
             TaskStep(
                 "pick/close_drawer",
                 lambda: self._close_drawer_after_handoff(context),
@@ -220,7 +223,7 @@ class PickSequenceRunner:
         )
         return False
 
-    def _refine_target_and_apply_vlm_yaw_step(self, context):
+    def _refine_target_and_apply_grasp_yaw_step(self, context):
         log = self.state.logger()
         target_label = self.state.target_label
         refined_target = None
@@ -256,7 +259,7 @@ class PickSequenceRunner:
 
         if refined_target is not None and refined_target.found:
             bx, by, bz = refined_target.base_xyz
-            context["vlm_yaw_deg"] = refined_target.yaw_deg
+            context["grasp_yaw_deg"] = refined_target.yaw_deg
             context["plan"] = self.target_planner.plan(
                 bx,
                 by,
@@ -275,7 +278,7 @@ class PickSequenceRunner:
                 target_y=plan.target_y,
                 base_z=bz,
                 depth_m=getattr(refined_target, "depth_m", None),
-                yaw_deg=context["vlm_yaw_deg"],
+                yaw_deg=context["grasp_yaw_deg"],
                 safe_z_min=context["safe_z_min"],
             )
         elif refined_target is not None:
@@ -288,21 +291,56 @@ class PickSequenceRunner:
                 reason=reason,
             )
 
-        vlm_yaw_deg = context.get("vlm_yaw_deg")
-        if vlm_yaw_deg is None:
+        if context.get("grasp_yaw_deg") is None:
+            context["grasp_yaw_deg"] = self._estimate_fallback_grasp_yaw(
+                target_label,
+                log,
+            )
+
+        grasp_yaw_deg = context.get("grasp_yaw_deg")
+        if grasp_yaw_deg is None:
             return True
 
-        return self._rotate_wrist(vlm_yaw_deg, context)
+        return self._rotate_wrist(grasp_yaw_deg, context)
 
-    def _move_to_vlm_observe_pose(self, context):
+    def _estimate_fallback_grasp_yaw(self, target_label, log):
+        if self.estimate_grasp_yaw is None or not target_label:
+            return None
+        try:
+            yaw_deg = self.estimate_grasp_yaw(target_label)
+        except Exception as exc:
+            log_warn(
+                log,
+                "fallback grasp yaw unavailable",
+                step="pca_yaw",
+                event="fail",
+                target=target_label,
+                reason=str(exc) or type(exc).__name__,
+            )
+            return None
+
+        if yaw_deg is None:
+            return None
+
+        log_info(
+            log,
+            "fallback grasp yaw applied",
+            step="pca_yaw",
+            event="fallback",
+            target=target_label,
+            yaw_deg=yaw_deg,
+        )
+        return yaw_deg
+
+    def _move_to_grasp_observe_pose(self, context):
         ok = self._move_to_pose(
-            "1단계: 서랍 내부 관찰 offset 위치로 이동",
+            "grasp point observe offset move",
             context["plan"].target_x - TOOL_OBSERVE_X_BACKOFF_M,
             context["plan"].target_y,
             context["plan"].drawer_wall_clearance_z,
             context["ori"],
-            "서랍 내부 관찰 offset 이동 실패. Pick 시퀀스 중단",
-            "서랍 내부 관찰 offset 이동 실패",
+            "grasp point observe offset move failed. Pick sequence aborted.",
+            "grasp point observe offset move failed",
             "observe_offset_move_failed",
             collision_scene_key="pick/observe_offset_move",
         )
@@ -313,7 +351,10 @@ class PickSequenceRunner:
             "observing_pick_target",
             tool_name=self.state.target_label,
             action="bring",
-            message=f"{self.state.target_label} VLM 관찰 위치에서 SAM 추적을 시작합니다.",
+            message=(
+                f"{self.state.target_label} grasp point observe pose에서 "
+                "SAM 추적을 시작합니다."
+            ),
             command=self.state.current_command,
         )
         self._generate_grasp_detection_mask_images()
@@ -407,10 +448,11 @@ class PickSequenceRunner:
             collision_scene_key="pick/grasp_descent",
         )
 
-    def _grasp_tool(self):
+    def _grasp_tool(self, context):
         log = self.state.logger()
         log_info(log, "robot grasp", step="grasp", event="start")
         if self.grasp.try_robot_grasp(log):
+            context["grasp_wrist_joint_rad"] = self._current_wrist_joint_rad(log)
             self.state._publish_robot_status(
                 "grasp_success",
                 message="공구 grasp에 성공했습니다.",
@@ -701,6 +743,7 @@ class PickSequenceRunner:
             drawer_id=drawer_id,
             move_home=False,
             lift_from_current=lift_from_current,
+            grasp_wrist_joint_rad=context.get("grasp_wrist_joint_rad"),
         )
         if not returned:
             return False, False, False
@@ -753,6 +796,12 @@ class PickSequenceRunner:
     def _home_after_handoff(self):
         log_info(self.state.logger(), "home after handoff", step="home", event="start")
         return self.handoff.move_home_after_handoff(self.state.logger())
+
+    def _current_wrist_joint_rad(self, log):
+        reader = getattr(self.motion, "current_wrist_joint_rad", None)
+        if reader is None:
+            return None
+        return reader(log)
 
     def _close_drawer_after_handoff(self, context):
         drawer_id = context.get("drawer_id")

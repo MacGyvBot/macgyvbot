@@ -44,6 +44,7 @@ from macgyvbot_interfaces.msg import (
 )
 from macgyvbot_ui.event_chat import (
     command_feedback_chat,
+    normal_robot_status_chat,
     robot_status_chat,
     tool_drop_chat,
 )
@@ -103,9 +104,11 @@ class OperatorUiNode(Node):
     _GRIPPER_ACTIVE_STATES = {
         'accepted',
         'opening_drawer',
+        'observing_drawer',
         'moving_to_drawer',
         'searching_drawer',
         'searching_drawer_handle',
+        'observing_pick_target',
         'searching',
         'picking',
         'approaching_tool',
@@ -120,6 +123,7 @@ class OperatorUiNode(Node):
         'checking_return_target',
         'return_hand_detected',
         'placing_return_tool',
+        'placing_drawer_tool',
         'returning_home',
         'closing_drawer',
         'resumed',
@@ -128,7 +132,29 @@ class OperatorUiNode(Node):
         'vlm_loading',
         'vlm_inferencing',
     }
-    _CHAT_INPUT_DISABLED_STATES = _GRIPPER_ACTIVE_STATES
+    _CHAT_INPUT_DISABLED_STATES = _GRIPPER_ACTIVE_STATES - {
+        'busy',
+        'resumed',
+    }
+    _TASK_FINAL_STATES = {
+        'done',
+        'completed',
+        'success',
+        'failed',
+        'error',
+        'cancelled',
+        'rejected',
+        'busy',
+        'returned',
+    }
+    _TASK_ACTIONS = {
+        'bring',
+        'return',
+        'home',
+        'release',
+        'exit',
+        'cancel',
+    }
 
     def __init__(self):
         super().__init__('operator_ui_node')
@@ -146,6 +172,7 @@ class OperatorUiNode(Node):
         )
         self.declare_parameter('camera_timeout_sec', UI_CAMERA_TIMEOUT_SEC)
         self.declare_parameter('detector_timeout_sec', UI_DETECTOR_TIMEOUT_SEC)
+        self.declare_parameter('chat_input_release_grace_sec', 1.5)
         self.declare_parameter(
             'robot_node_names',
             UI_ROBOT_NODE_NAMES,
@@ -180,16 +207,23 @@ class OperatorUiNode(Node):
         self._last_robot_status_key = None
         self._last_robot_log_key = None
         self._last_event_chat_key = None
+        self._task_chat_command_key = None
+        self._shown_task_chat_keys = set()
         self._last_hand_present = None
         self._last_hand_log_key = None
         self._last_tool_drop_key = None
         self._last_robot_state = 'unknown'
+        self._task_execution_active = False
+        self._task_chat_count = 0
+        self._task_chat_limit = 5
         self._manual_gripper_backend_available = False
         self._manual_gripper_request_pending = False
         self._last_gripper_enabled = None
         self._last_gripper_reason = ''
         self._last_chat_input_enabled = None
         self._last_chat_input_reason = ''
+        self._chat_input_hold_until_ns = 0
+        self._chat_input_release_timer_active = False
         self._robot_status_topic = robot_status_topic
         self._manual_gripper_service = (
             str(manual_gripper_service).strip() or MANUAL_GRIPPER_SERVICE
@@ -206,6 +240,10 @@ class OperatorUiNode(Node):
         )
         self._detector_timeout_ns = int(
             float(self.get_parameter('detector_timeout_sec').value) * 1_000_000_000
+        )
+        self._chat_input_release_grace_ns = int(
+            float(self.get_parameter('chat_input_release_grace_sec').value)
+            * 1_000_000_000
         )
 
         self._stt_pub = self.create_publisher(CommandText, stt_text_topic, 10)
@@ -322,10 +360,16 @@ class OperatorUiNode(Node):
             level = 'info'
             status = '손 인식 재시도'
         else:
-            message = '사용자 손 인식을 중단하고 복귀합니다.'
-            event = 'CONTROL_HANDOFF_FALLBACK'
-            level = 'warn'
-            status = '인스팩션 복귀 요청'
+            if label == '복귀':
+                message = 'Home으로 복귀합니다.'
+                event = 'CONTROL_HANDOFF_FALLBACK'
+                level = 'warn'
+                status = 'Home 복귀 요청'
+            else:
+                message = '현재 작업을 취소합니다.'
+                event = 'CONTROL_CANCEL'
+                level = 'warn'
+                status = '작업 취소 요청'
 
         self._append_bot(message)
         self._append_log(
@@ -335,7 +379,27 @@ class OperatorUiNode(Node):
             event=event,
             detail=f'topic={TASK_CONTROL_TOPIC}, action={action}, source=operator_ui',
         )
+        if action == 'pause':
+            self._append_pause_followup()
         self._set_status(status)
+
+    def _append_pause_followup(self):
+        followup_message = '작업을 재개할까요, 아니면 이번 작업을 취소할까요?'
+        self._append_bot(followup_message)
+        if self.window is not None and hasattr(self.window, 'append_control_actions'):
+            self.window.append_control_actions(
+                (
+                    ('재개', '재개', 'resume'),
+                    ('취소', '취소', 'cancel'),
+                )
+            )
+        self._append_log(
+            'info',
+            followup_message,
+            source='ui.chat',
+            event='QUICK_ACTIONS',
+            detail='actions=resume,cancel',
+        )
 
     def _mark_self_published(self, text):
         with self._self_pub_lock:
@@ -430,8 +494,8 @@ class OperatorUiNode(Node):
                 if self.window is not None and hasattr(self.window, 'append_control_actions'):
                     self.window.append_control_actions(
                         (
-                            ('재개', '재개'),
-                            ('취소', '취소'),
+                            ('재개', '재개', 'resume'),
+                            ('취소', '취소', 'cancel'),
                         )
                     )
                 self._append_log(
@@ -618,6 +682,7 @@ class OperatorUiNode(Node):
         self._last_target_label = view['target_label']
         self._set_status(view['panel_status'])
         self._set_task_status(view['target_label'], view['stage_text'])
+        self._update_task_execution_state(status, view['state'])
         self._last_robot_state = view['state']
         self._refresh_gripper_control_state()
         self._refresh_chat_input_state()
@@ -955,6 +1020,7 @@ class OperatorUiNode(Node):
 
         tool_name = status.get('tool_name') or self._last_target_label or 'unknown'
         target_label = self._tool_display_name(tool_name)
+        action = self._status_action(status)
         raw_message = str(status.get('message') or '').strip()
         reason = str(status.get('reason') or '').strip()
 
@@ -963,6 +1029,7 @@ class OperatorUiNode(Node):
             if state == 'handoff_inspection_pending'
             else robot_status_chat(state, reason, raw_message)
         )
+        normal_chat_message = normal_robot_status_chat(state, action, reason)
         message = (
             abnormal_message
             or self._robot_status_message(state, target_label, raw_message, reason)
@@ -972,11 +1039,26 @@ class OperatorUiNode(Node):
         severity = self._robot_status_severity(state)
         log_message = self._robot_log_message(status, state, target_label, message, reason)
 
-        key = (state, str(tool_name), raw_message or message)
-        chat_state = bool(abnormal_message) or state in self._chat_robot_statuses()
-        force_show = state in self._always_show_robot_statuses()
-        show_chat = chat_state and (force_show or key != self._last_robot_status_key)
+        command_key = self._status_command_key(status, action, tool_name)
+        if command_key != self._task_chat_command_key:
+            self._task_chat_command_key = command_key
+            self._shown_task_chat_keys.clear()
+            self._task_chat_count = 0
+
+        chat_message = abnormal_message or normal_chat_message
+        if not chat_message and state in self._operational_chat_statuses():
+            chat_message = message
+        key = (command_key, state, chat_message)
+        show_chat = bool(chat_message) and key not in self._shown_task_chat_keys
+        if (
+            show_chat
+            and self._task_chat_count >= self._task_chat_limit
+            and state not in self._chat_limit_exempt_statuses()
+        ):
+            show_chat = False
         if show_chat:
+            self._shown_task_chat_keys.add(key)
+            self._task_chat_count += 1
             self._last_robot_status_key = key
 
         log_key = (state, str(tool_name), raw_message or message, reason)
@@ -987,7 +1069,7 @@ class OperatorUiNode(Node):
         return {
             'state': state,
             'message': message,
-            'chat_message': message,
+            'chat_message': chat_message,
             'log_message': log_message,
             'panel_status': panel_status,
             'stage_text': stage_text,
@@ -996,6 +1078,44 @@ class OperatorUiNode(Node):
             'show_chat': show_chat,
             'show_log': show_log,
         }
+
+    @staticmethod
+    def _status_action(status):
+        action = str(status.get('action') or '').strip().lower()
+        if action and action != 'unknown':
+            return action
+        command = status.get('command') or {}
+        if isinstance(command, dict):
+            command_action = str(command.get('action') or '').strip().lower()
+            if command_action and command_action != 'unknown':
+                return command_action
+        return action or 'unknown'
+
+    def _update_task_execution_state(self, status, state):
+        action = self._status_action(status)
+        if state in self._TASK_FINAL_STATES:
+            self._task_execution_active = False
+            return
+        if action in self._TASK_ACTIONS and state in self._GRIPPER_ACTIVE_STATES:
+            self._task_execution_active = True
+            return
+        if action in {'bring', 'return', 'home', 'release', 'exit'}:
+            self._task_execution_active = True
+
+    @staticmethod
+    def _status_command_key(status, action, tool_name):
+        command = status.get('command') or {}
+        if isinstance(command, dict):
+            raw_text = str(command.get('raw_text') or '').strip()
+            command_tool = str(command.get('tool_name') or '').strip()
+            command_action = str(command.get('action') or '').strip()
+            if raw_text or command_tool or command_action:
+                return (
+                    command_action or action,
+                    command_tool or str(tool_name or ''),
+                    raw_text,
+                )
+        return (action, str(tool_name or ''), '')
 
     def _robot_status_message(self, state, target_label, raw_message, reason):
         if reason in {'handoff_search_failed', 'hand_target_not_found'}:
@@ -1150,42 +1270,17 @@ class OperatorUiNode(Node):
 
     @staticmethod
     def _chat_robot_statuses():
+        return set()
+
+    @staticmethod
+    def _operational_chat_statuses():
         return {
-            'accepted',
-            'searching_drawer',
-            'moving_to_drawer',
-            'searching_drawer_handle',
-            'opening_drawer',
-            'closing_drawer',
-            'searching',
-            'picking',
-            'approaching_tool',
-            'grasping',
-            'grasp_success',
-            'lifting_tool',
-            'moving_to_handoff',
-            'searching_hand',
-            'waiting_handoff',
-            'handoff_inspection_pending',
-            'handoff_complete',
-            'waiting_return_handoff',
-            'moving_return_grasp_pose',
-            'checking_return_target',
-            'return_hand_detected',
-            'placing_return_tool',
-            'returning_home',
-            'done',
-            'completed',
-            'success',
             'failed',
             'error',
             'busy',
-            'paused',
-            'resumed',
-            'cancelled',
             'rejected',
+            'cancelled',
             'tool_dropped',
-            'returned',
             'vlm_loading',
             'vlm_inferencing',
             'vlm_ready',
@@ -1211,6 +1306,20 @@ class OperatorUiNode(Node):
             'vlm_loading',
             'vlm_inferencing',
             'vlm_ready',
+            'vlm_warning',
+            'vlm_error',
+        }
+
+    @staticmethod
+    def _chat_limit_exempt_statuses():
+        return {
+            'handoff_inspection_pending',
+            'failed',
+            'error',
+            'busy',
+            'rejected',
+            'cancelled',
+            'tool_dropped',
             'vlm_warning',
             'vlm_error',
         }
@@ -1565,10 +1674,40 @@ class OperatorUiNode(Node):
     def _chat_input_state(self):
         state = str(self._last_robot_state or 'unknown').strip().lower()
         if state in {'unknown', 'initializing'}:
-            return True, '로봇 노드 실행 대기 중입니다. 실행 후 명령을 입력해주세요.'
+            return True, ''
         if state in self._CHAT_INPUT_DISABLED_STATES:
+            now_ns = self.get_clock().now().nanoseconds
+            self._chat_input_hold_until_ns = max(
+                self._chat_input_hold_until_ns,
+                now_ns + self._chat_input_release_grace_ns,
+            )
             return False, '동작 실행 중... 상태 버튼이나 음성 명령을 사용해주세요.'
+        if self._task_execution_active:
+            now_ns = self.get_clock().now().nanoseconds
+            self._chat_input_hold_until_ns = max(
+                self._chat_input_hold_until_ns,
+                now_ns + self._chat_input_release_grace_ns,
+            )
+            return False, '동작 실행 중... 상태 버튼이나 음성 명령을 사용해주세요.'
+        if self._chat_input_hold_until_ns > self.get_clock().now().nanoseconds:
+            self._schedule_chat_input_release_refresh()
+            return False, '동작 정리 중... 잠시만 기다려주세요.'
         return True, ''
+
+    def _schedule_chat_input_release_refresh(self):
+        if self._chat_input_release_timer_active:
+            return
+
+        now_ns = self.get_clock().now().nanoseconds
+        delay_ns = max(0, self._chat_input_hold_until_ns - now_ns)
+        delay_ms = max(50, int(delay_ns / 1_000_000))
+        self._chat_input_release_timer_active = True
+
+        def refresh():
+            self._chat_input_release_timer_active = False
+            self._refresh_chat_input_state()
+
+        QTimer.singleShot(delay_ms, refresh)
 
 
 def main(args=None):

@@ -37,10 +37,15 @@ from macgyvbot_config.drawer import (
     ENABLE_DRAWER_COLLISION_SCENE_DEFAULT,
 )
 from macgyvbot_config.gripper import ENABLE_GRIPPER_SELF_COLLISION_ACM_DEFAULT
+from macgyvbot_config.joint_velocity import MOTION_VELOCITY_SCALING_FACTOR
 from macgyvbot_config.structured_logging import (
     format_structured_log,
 )
-from macgyvbot_config.models import HAND_GRASP_SAM_CHECKPOINT_NAME, YOLO_MODEL_NAME
+from macgyvbot_config.models import (
+    HAND_GRASP_SAM_CHECKPOINT_NAME,
+    YOLO_CONFIDENCE_THRESHOLD,
+    YOLO_MODEL_NAME,
+)
 from macgyvbot_config.pick import PICK_GRASP_YAW_OFFSET_DEG
 from macgyvbot_config.robot import GROUP_NAME, HOME_JOINTS, WRIST_JOINT_NAME
 from macgyvbot_config.timing import (
@@ -67,6 +72,7 @@ from macgyvbot_config.vlm import (
     GRASP_POINT_API_MODEL,
     GRASP_POINT_API_TIMEOUT_SEC,
     GRASP_POINT_MODE_CENTER,
+    GRASP_POINT_MODE_YOLO,
     GRASP_POINT_MODE_VLM,
     SAM_BACKEND_DEFAULT,
     SAM_DEVICE_DEFAULT,
@@ -347,6 +353,7 @@ class TaskCoordinatorNode(Node):
 
         self.grasp_point_mode = self._read_grasp_point_mode()
         self.yolo_model = self._read_yolo_model()
+        self.yolo_conf = self._read_yolo_conf()
         self.force_torque_topic = self._read_force_torque_topic()
         self.robot_status_pub = self.create_publisher(
             RobotTaskStatus,
@@ -364,7 +371,10 @@ class TaskCoordinatorNode(Node):
             publish_robot_status=self._publish_robot_status,
             publish_status_payload=self._publish_status_payload,
         )
-        self.detector = YoloDetector(self.yolo_model)
+        self.detector = YoloDetector(
+            self.yolo_model,
+            confidence_threshold=self.yolo_conf,
+        )
         self.grasp_point_logger = VLMStatusLogger(
             self._task_log("vlm"),
             self._publish_status_payload,
@@ -428,9 +438,11 @@ class TaskCoordinatorNode(Node):
         )
 
         self.planning_params = PlanRequestParameters(self.robot)
-        self.planning_params.planning_pipeline = "ompl"
-        self.planning_params.planner_id = "RRTConnectkConfigDefault"
-        self.planning_params.max_velocity_scaling_factor = 0.1
+        self.planning_params.planning_pipeline = "pilz_industrial_motion_planner"
+        self.planning_params.planner_id = "PTP"
+        self.planning_params.max_velocity_scaling_factor = (
+            MOTION_VELOCITY_SCALING_FACTOR
+        )
 
         self.motion = MoveItController(
             self.robot,
@@ -501,6 +513,7 @@ class TaskCoordinatorNode(Node):
             self.state,
             self.tool_hold_monitor,
             refine_pick_target=self._refine_pick_target_after_centering,
+            estimate_grasp_yaw=self._mask_pca_yaw_for_target,
             generate_grasp_detection_mask_images=(
                 self._generate_grasp_detection_mask_images_after_vlm_observe
             ),
@@ -582,6 +595,10 @@ class TaskCoordinatorNode(Node):
             .string_value
             .strip()
         ) or YOLO_MODEL_NAME
+
+    def _read_yolo_conf(self):
+        self.declare_parameter("yolo_conf", YOLO_CONFIDENCE_THRESHOLD)
+        return float(self.get_parameter("yolo_conf").value)
 
     def _read_grasp_point_api_config(self):
         self.declare_parameter("grasp_point_api_model", GRASP_POINT_API_MODEL)
@@ -753,7 +770,8 @@ class TaskCoordinatorNode(Node):
             step="model",
             event="status",
             name="yolo",
-            model=Path(self.yolo_model).name,
+            weight=Path(getattr(self.detector, "model_path", self.yolo_model)).name,
+            conf=self.yolo_conf,
         )
         log.info("grasp point mode ready", step="grasp_point", event="status", mode=self.grasp_point_mode)
 
@@ -1200,15 +1218,14 @@ class TaskCoordinatorNode(Node):
             event="resume",
             reason=reason or "resume_requested",
         )
+        should_dispatch = False
         with self._queue_lock:
-            if self._suspended_step is not None:
-                self._queue.appendleft(
-                    (self._suspended_task_name, self._suspended_step)
-                )
-                self._suspended_step = None
-                self._suspended_task_name = None
-            self.pause_req.clear()
-            self.resume_req.clear()
+            if not self.pause_req.is_set() and self._suspended_step is None:
+                self.resume_req.clear()
+            else:
+                self.resume_req.set()
+                if self._current_step is None and not self._step_thread_alive():
+                    should_dispatch = self._resume_suspended_step_locked()
 
         self._publish_robot_status(
             "resumed",
@@ -1216,7 +1233,8 @@ class TaskCoordinatorNode(Node):
             reason=reason or "resume_requested",
             command=self.state.current_command,
         )
-        self._dispatch_next()
+        if should_dispatch:
+            self._dispatch_next()
         return True
 
     def _handle_cancel(self, reason, publish_status=True):
@@ -1555,7 +1573,10 @@ class TaskCoordinatorNode(Node):
                 if self._suspended_step is None:
                     self._suspended_step = step
                     self._suspended_task_name = task_name
-                return
+                if self.resume_req.is_set():
+                    self._resume_suspended_step_locked()
+                else:
+                    return
             elif self.exit_req.is_set():
                 self._task_log(task_name, quiet_info=True).info(
                     "task queue stopped by exit request",
@@ -1583,6 +1604,17 @@ class TaskCoordinatorNode(Node):
                 return
 
         self._dispatch_next()
+
+    def _resume_suspended_step_locked(self):
+        if self._suspended_step is not None:
+            self._queue.appendleft(
+                (self._suspended_task_name, self._suspended_step)
+            )
+            self._suspended_step = None
+            self._suspended_task_name = None
+        self.pause_req.clear()
+        self.resume_req.clear()
+        return True
 
     def _fail_queue(self, task_name):
         with self._queue_lock:
@@ -1750,11 +1782,11 @@ class TaskCoordinatorNode(Node):
             self.state.picking = False
 
     def _refine_pick_target_after_centering(self, target_label):
-        if not self.pick_target_resolver.should_defer_vlm_until_top_view():
+        if not self.pick_target_resolver.should_refine_grasp_point_at_top_view():
             return None
         if not self.frame_processor.has_camera_state():
             self._task_log("perception").warn(
-                "camera state unavailable for top-view VLM refine",
+                "camera state unavailable for top-view grasp point refine",
                 step="pick_refine",
                 event="unavailable",
                 reason="camera_state_unavailable",
@@ -1764,6 +1796,9 @@ class TaskCoordinatorNode(Node):
         color_image = self.state.color_image.copy()
         depth_image = self.state.depth_image.copy()
         intrinsics = dict(self.state.intrinsics)
+        if self.grasp_point_mode == GRASP_POINT_MODE_YOLO:
+            return self._refine_yolo_pick_target_after_centering(target_label)
+
         results = self.detector.detect(color_image)
         if self.grasp_point_mode not in (GRASP_POINT_MODE_VLM, *VLM_ONLY_MODES):
             target = self.pick_target_resolver.target_from_boxes(
@@ -1775,7 +1810,13 @@ class TaskCoordinatorNode(Node):
             )
             if self.grasp_point_mode != GRASP_POINT_MODE_CENTER:
                 return target
-            return self._target_with_mask_pca_yaw(target, target_label)
+            target = self._target_with_mask_pca_yaw(target, target_label)
+            self._log_grasp_point_refine_success(
+                target,
+                GRASP_POINT_MODE_CENTER,
+                target_label,
+            )
+            return target
 
         matched_box = self.pick_target_resolver.matching_box(
             results[0].boxes,
@@ -1835,6 +1876,103 @@ class TaskCoordinatorNode(Node):
             ),
             depth_image,
             intrinsics,
+        )
+
+    def _refine_yolo_pick_target_after_centering(
+        self,
+        target_label,
+        timeout_sec=2.0,
+    ):
+        deadline = time.monotonic() + timeout_sec
+
+        while not self._motion_interrupted():
+            if not self.frame_processor.has_camera_state():
+                return None
+
+            color_image = self.state.color_image.copy()
+            depth_image = self.state.depth_image.copy()
+            intrinsics = dict(self.state.intrinsics)
+            results = self.detector.detect(color_image)
+
+            matched_box = self.pick_target_resolver.matching_box(
+                results[0].boxes,
+                target_label,
+            )
+            if matched_box is not None:
+                box, label = matched_box
+                selected = self.grasp_point_selector.select_yolo_grasp_point(
+                    results[0].boxes,
+                    self.detector.names,
+                    box,
+                )
+                if selected is not None:
+                    target = self._target_with_mask_pca_yaw(
+                        self.pick_target_resolver.target_from_selected_grasp(
+                            label,
+                            target_label,
+                            selected,
+                            depth_image,
+                            intrinsics,
+                        ),
+                        target_label,
+                    )
+                    self._log_grasp_point_refine_success(
+                        target,
+                        GRASP_POINT_MODE_YOLO,
+                        target_label,
+                    )
+                    return target
+
+            if time.monotonic() >= deadline:
+                self._task_log("perception").warn(
+                    "YOLO grasp point fallback to center",
+                    step="pick_refine",
+                    event="fallback",
+                    reason="grasp_point_bbox_timeout",
+                    timeout_sec=timeout_sec,
+                )
+                target = self._target_with_mask_pca_yaw(
+                    self.pick_target_resolver.target_from_boxes(
+                        results[0].boxes,
+                        target_label,
+                        color_image,
+                        depth_image,
+                        intrinsics,
+                        use_bbox_center=True,
+                    ),
+                    target_label,
+                )
+                self._log_grasp_point_refine_success(
+                    target,
+                    GRASP_POINT_MODE_CENTER,
+                    target_label,
+                )
+                return target
+
+            time.sleep(0.05)
+
+        return None
+
+    def _log_grasp_point_refine_success(self, target, mode, target_label):
+        if target is None or not target.found:
+            return
+
+        pixel_u, pixel_v = target.pixel
+        base_x, base_y, base_z = target.base_xyz
+        self._task_log("perception").info(
+            f"{mode} grasp point calculation succeeded",
+            step="pick_refine",
+            event="done",
+            mode=mode,
+            target=target_label,
+            source=target.source,
+            pixel=f"({pixel_u},{pixel_v})",
+            base=f"({base_x:.3f},{base_y:.3f},{base_z:.3f})",
+            yaw_deg=(
+                f"{float(target.yaw_deg):.1f}"
+                if target.yaw_deg is not None
+                else "none"
+            ),
         )
 
     def _target_with_mask_pca_yaw(self, target, target_label):
@@ -1901,7 +2039,7 @@ class TaskCoordinatorNode(Node):
         )
         if response is None:
             self._task_log("perception").warn(
-                "SAM yaw service failed at VLM observe pose",
+                "SAM yaw service failed at grasp observe pose",
                 step="grasp_mask",
                 event="fail",
                 target=target_label,

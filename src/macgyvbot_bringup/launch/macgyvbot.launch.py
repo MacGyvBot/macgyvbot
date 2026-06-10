@@ -15,6 +15,9 @@ from launch.substitutions import LaunchConfiguration
 from launch.substitutions import PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+from macgyvbot_bringup.joint_velocity_config import (
+    apply_joint_velocity_limits_to_moveit_config,
+)
 from macgyvbot_config.command import (
     DEFAULT_COMMAND_MIN_CONFIDENCE,
     DEFAULT_LLM_MODEL,
@@ -136,6 +139,7 @@ def generate_launch_description():
     grasp_point_api_timeout_sec = LaunchConfiguration(
         "grasp_point_api_timeout_sec"
     )
+    yolo_conf = LaunchConfiguration("yolo_conf")
     vlm_service_name = LaunchConfiguration("vlm_service_name")
     vlm_service_wait_timeout_sec = LaunchConfiguration(
         "vlm_service_wait_timeout_sec"
@@ -167,6 +171,9 @@ def generate_launch_description():
     )
     moveit_config_dict = moveit_config.to_dict()
     moveit_config_dict["robot_description"] = load_combined_robot_description()
+    moveit_config_dict = apply_joint_velocity_limits_to_moveit_config(
+        moveit_config_dict
+    )
 
     moveit_py_params = PathJoinSubstitution(
         [bringup_share, "config", "moveit_py.yaml"]
@@ -228,6 +235,11 @@ def generate_launch_description():
                     "YOLO model path. Defaults to installed "
                     "macgyvbot_resources package share."
                 ),
+            ),
+            DeclareLaunchArgument(
+                "yolo_conf",
+                default_value="0.20",
+                description="YOLO confidence threshold for runtime detectors.",
             ),
             DeclareLaunchArgument(
                 "use_voice_command",
@@ -312,8 +324,8 @@ def generate_launch_description():
                 "grasp_point_mode",
                 default_value=DEFAULT_GRASP_POINT_MODE,
                 description=(
-                    "Grasp point selection mode: center, vlm, vlm_only_smol, "
-                    "vlm_only_qwen3b, vlm_only_qwen7b, or api"
+                    "Grasp point selection mode: center, yolo, vlm, "
+                    "vlm_only_smol, vlm_only_qwen3b, vlm_only_qwen7b, or api"
                 ),
             ),
             DeclareLaunchArgument(
@@ -433,6 +445,7 @@ def generate_launch_description():
                     moveit_py_params,
                     {
                         "yolo_model": LaunchConfiguration("yolo_model"),
+                        "yolo_conf": yolo_conf,
                         "grasp_point_mode": LaunchConfiguration(
                             "grasp_point_mode"
                         ),
