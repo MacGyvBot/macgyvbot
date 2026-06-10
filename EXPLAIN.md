@@ -146,10 +146,8 @@ macgyvbot_perception.hand_grasp_detection_node
   여러 IK seed를 시도한 뒤, `q_curr` 기준 가장 가까운 joint goal을 선택합니다.
   선택된 IK 후보의 joint별 `raw`/`short` delta를 로그로 남기며, 최대 joint delta가
   안전 한계를 넘으면 기존 pose fallback으로 우회하지 않고 planning을 중단합니다.
-- task coordinator는 MoveItPy `PlanRequestParameters`를 전역 OMPL
-  `RRTConnectkConfigDefault`로 설정합니다. 이전 Pilz PTP처럼 단일 점대점
-  trajectory를 만든 뒤 collision validation에서 실패하는 대신, drawer collision
-  object를 고려한 sampling 기반 경로 탐색을 시도합니다.
+- task coordinator는 MoveItPy `PlanRequestParameters`를 전역 Pilz Industrial
+  Motion Planner `PTP`로 설정합니다.
 - `moveit_py.yaml`에는 `ompl`, `pilz_industrial_motion_planner`, `chomp`,
   `ompl_rrt_star` pipeline 목록과 profile별 request parameter가 정의되어 있습니다.
   Python runtime에서 실제로 사용하는 기본값은 `task_coordinator_node.py`의
@@ -185,7 +183,7 @@ macgyvbot_perception.hand_grasp_detection_node
 - `/apply_planning_scene` service가 실패해도 local MoveItPy planning scene에 object
   적용이 성공하면 task node 내부 planning은 계속 진행할 수 있습니다. RViz 표시와
   외부 planning scene 동기화가 필요한 경우 로그의 `apply_service` 결과를 확인합니다.
-- drawer collision object가 목표 pose 자체 또는 손잡이 접촉 공간을 덮으면 OMPL도
+- drawer collision object가 목표 pose 자체 또는 손잡이 접촉 공간을 덮으면 planner가
   경로를 만들 수 없습니다. 이런 경우에는 key를 더 세분화하거나 drawer collision
   geometry를 손잡이 접근 corridor와 겹치지 않게 조정해야 합니다.
 

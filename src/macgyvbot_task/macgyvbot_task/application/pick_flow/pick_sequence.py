@@ -162,7 +162,7 @@ class PickSequenceRunner:
                 lambda: self._wait_human_grasp(context["plan"], context),
             ),
             TaskStep("pick/release_to_human", self._release_to_human),
-            #TaskStep("pick/home_before_close_drawer", self._home_before_close_drawer),
+            TaskStep("pick/home_before_close_drawer", self._home_before_close_drawer),
             TaskStep(
                 "pick/close_drawer",
                 lambda: self._close_drawer_after_handoff(context),

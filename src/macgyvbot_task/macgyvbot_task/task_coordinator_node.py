@@ -406,8 +406,8 @@ class TaskCoordinatorNode(Node):
         )
 
         self.planning_params = PlanRequestParameters(self.robot)
-        self.planning_params.planning_pipeline = "ompl"
-        self.planning_params.planner_id = "RRTConnectkConfigDefault"
+        self.planning_params.planning_pipeline = "pilz_industrial_motion_planner"
+        self.planning_params.planner_id = "PTP"
         self.planning_params.max_velocity_scaling_factor = (
             MOTION_VELOCITY_SCALING_FACTOR
         )
