@@ -44,7 +44,7 @@ def draw_grasp_overlay(
     active_hand: Optional[dict],
     tool_detection: Optional[ToolDetection],
     result: dict,
-    grasp_point_detections: Optional[list[ToolDetection]] = None,
+    grasp_point_detection: Optional[ToolDetection] = None,
     locked_tool: Optional[LockedToolMask] = None,
     candidate_tool_mask: Optional[LockedToolMask] = None,
     show_close_roi: bool = False,
@@ -57,7 +57,7 @@ def draw_grasp_overlay(
         active_hand=active_hand,
         tool_detection=tool_detection,
         result=result,
-        grasp_point_detections=grasp_point_detections,
+        grasp_point_detection=grasp_point_detection,
         locked_tool=locked_tool,
         candidate_tool_mask=candidate_tool_mask,
     )
@@ -69,7 +69,7 @@ def draw_pick_overlay(
     active_hand: Optional[dict],
     tool_detection: Optional[ToolDetection],
     result: dict,
-    grasp_point_detections: Optional[list[ToolDetection]] = None,
+    grasp_point_detection: Optional[ToolDetection] = None,
     locked_tool: Optional[LockedToolMask] = None,
     candidate_tool_mask: Optional[LockedToolMask] = None,
     depth_mm: Optional[np.ndarray] = None,
@@ -100,7 +100,7 @@ def draw_pick_overlay(
         color = mask_roi_color(locked_tool, candidate_tool_mask, result)
         draw_tool_roi(frame, active_tool_roi, label, color)
 
-    draw_grasp_point_detections(frame, grasp_point_detections)
+    draw_grasp_point_detection(frame, grasp_point_detection)
     draw_hands(frame, hand_infos, active_hand)
     draw_grasp_status_text(frame, result, locked_tool, candidate_tool_mask)
 
@@ -111,7 +111,7 @@ def draw_return_overlay(
     active_hand: Optional[dict],
     tool_detection: Optional[ToolDetection],
     result: dict,
-    grasp_point_detections: Optional[list[ToolDetection]] = None,
+    grasp_point_detection: Optional[ToolDetection] = None,
     depth_mm: Optional[np.ndarray] = None,
 ) -> None:
     """Draw return handoff state with close ROI/depth emphasis."""
@@ -131,25 +131,24 @@ def draw_return_overlay(
         color = (255, 120, 0) if tool_detection is not None else (0, 220, 255)
         draw_tool_roi(frame, active_roi, label, color)
 
-    draw_grasp_point_detections(frame, grasp_point_detections)
+    draw_grasp_point_detection(frame, grasp_point_detection)
     draw_hands(frame, hand_infos, active_hand)
     draw_return_status_text(frame, result)
 
 
-def draw_grasp_point_detections(
+def draw_grasp_point_detection(
     frame: np.ndarray,
-    grasp_point_detections: Optional[list[ToolDetection]],
+    grasp_point_detection: Optional[ToolDetection],
 ) -> None:
-    if not grasp_point_detections:
+    if grasp_point_detection is None:
         return
 
-    for detection in grasp_point_detections:
-        draw_tool_roi(
-            frame,
-            detection.roi,
-            f"{detection.label} {detection.confidence:.2f}",
-            (255, 0, 255),
-        )
+    draw_tool_roi(
+        frame,
+        grasp_point_detection.roi,
+        f"{grasp_point_detection.label} {grasp_point_detection.confidence:.2f}",
+        (255, 0, 255),
+    )
 
 
 def draw_hands(

@@ -40,6 +40,7 @@ class _FakeYoloModel:
                     _FakeBox(0, 0.95, (1, 2, 11, 12)),
                     _FakeBox(1, 0.40, (20, 21, 30, 31)),
                     _FakeBox(2, 0.30, (4, 5, 8, 9)),
+                    _FakeBox(2, 0.70, (14, 15, 18, 19)),
                 ],
             },
         )()
@@ -69,11 +70,11 @@ def test_tool_detector_filters_detection_to_requested_label():
     assert detection is not None
     assert detection.label == "wrench"
     assert detection.roi == (20, 21, 30, 31)
-    assert detector.last_grasp_point_detections[0].label == "grasp_point"
-    assert detector.last_grasp_point_detections[0].roi == (4, 5, 8, 9)
+    assert detector.last_grasp_point_detection.label == "grasp_point"
+    assert detector.last_grasp_point_detection.roi == (14, 15, 18, 19)
 
 
-def test_tool_detector_keeps_best_tool_but_records_grasp_points_separately():
+def test_tool_detector_keeps_best_tool_but_records_best_grasp_point_separately():
     detector = ToolDetector.__new__(ToolDetector)
     detector.model = _FakeYoloModel()
     detector.target_classes = {"hammer", "wrench"}
@@ -86,8 +87,8 @@ def test_tool_detector_keeps_best_tool_but_records_grasp_points_separately():
     assert detection is not None
     assert detection.label == "hammer"
     assert detection.roi == (1, 2, 11, 12)
-    assert len(detector.last_grasp_point_detections) == 1
-    assert detector.last_grasp_point_detections[0].label == "grasp_point"
+    assert detector.last_grasp_point_detection.label == "grasp_point"
+    assert detector.last_grasp_point_detection.roi == (14, 15, 18, 19)
 
 
 def test_compute_mask_contact_confirms_landmark_inside_locked_mask():

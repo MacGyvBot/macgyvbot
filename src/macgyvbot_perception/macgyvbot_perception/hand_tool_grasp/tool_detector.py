@@ -61,12 +61,12 @@ class ToolDetector:
         }
         self.confidence_threshold = confidence_threshold
         self.image_size = image_size
-        self.last_grasp_point_detections: list[ToolDetection] = []
+        self.last_grasp_point_detection: Optional[ToolDetection] = None
         self.model = YOLO(str(resolved_model_path))
 
     def detect(self, frame, target_label: str | None = None) -> Optional[ToolDetection]:
         """Return highest-confidence matching tool detection, or None."""
-        self.last_grasp_point_detections = []
+        self.last_grasp_point_detection = None
         results = self.model.predict(
             source=frame,
             imgsz=self.image_size,
@@ -82,6 +82,7 @@ class ToolDetector:
 
         best_detection: Optional[ToolDetection] = None
         best_confidence = -1.0
+        best_grasp_point_confidence = -1.0
         names = result.names
 
         requested_label = self._normalize_label(target_label)
@@ -93,13 +94,13 @@ class ToolDetector:
             x1, y1, x2, y2 = box.xyxy[0].tolist()
 
             if label in self.grasp_point_classes:
-                self.last_grasp_point_detections.append(
-                    ToolDetection(
+                if confidence > best_grasp_point_confidence:
+                    self.last_grasp_point_detection = ToolDetection(
                         roi=(int(x1), int(y1), int(x2), int(y2)),
                         label=label,
                         confidence=confidence,
                     )
-                )
+                    best_grasp_point_confidence = confidence
                 continue
 
             if self.target_classes and label not in self.target_classes:
