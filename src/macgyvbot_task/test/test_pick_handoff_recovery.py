@@ -88,6 +88,7 @@ class FakeMotion:
         self.results = list(results or [True, True, True, True, True, True])
         self.targets = []
         self.min_z_values = []
+        self.collision_scene_keys = []
         self.home_calls = 0
         self.wrist_targets = []
 
@@ -101,6 +102,7 @@ class FakeMotion:
     ):
         self.targets.append(pose_goal)
         self.min_z_values.append(min_z)
+        self.collision_scene_keys.append(collision_scene_key)
         return self.results.pop(0)
 
     def move_to_home_joints(self, logger, collision_scene_key=None):
@@ -314,6 +316,47 @@ def test_return_tool_to_original_position_restores_grasp_wrist_before_xy_move(
         (grasp_wrist_joint_rad, "handoff/return_restore_grasp_wrist")
     ]
     assert len(motion.targets) == 5
+
+
+def test_return_tool_to_original_position_falls_back_to_home_when_current_lift_fails(
+    monkeypatch,
+):
+    poses = iter(
+        [
+            FakeMatrix(),
+            FakeMatrix(),
+        ]
+    )
+    monkeypatch.setattr(pick_handoff_flow, "get_ee_matrix", lambda _robot: next(poses))
+    motion = FakeMotion(results=[False, True, True, True, True, True])
+    gripper = FakeGripper()
+    flow = PickHandoffFlow(
+        robot=object(),
+        motion_controller=motion,
+        gripper=gripper,
+        state=FakeState(),
+        wait_fn=lambda _duration: None,
+    )
+    ori = {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
+
+    assert flow.return_tool_to_original_position(
+        0.30,
+        0.10,
+        0.40,
+        0.35,
+        ori,
+        FakeLogger(),
+        safe_z_min=safe_z_min_for_drawer(1),
+        drawer_id=1,
+    )
+
+    assert motion.home_calls == 2
+    assert motion.collision_scene_keys[:3] == [
+        "handoff/return_lift_to_clearance",
+        "handoff/return_lift_from_home_to_clearance",
+        "handoff/return_move_above_target",
+    ]
+    assert gripper.open_calls == 1
 
 
 def test_handoff_timeout_return_closes_drawer():
