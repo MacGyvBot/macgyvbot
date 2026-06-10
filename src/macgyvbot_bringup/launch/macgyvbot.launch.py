@@ -15,6 +15,9 @@ from launch.substitutions import LaunchConfiguration
 from launch.substitutions import PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+from macgyvbot_bringup.joint_velocity_config import (
+    apply_joint_velocity_limits_to_moveit_config,
+)
 from macgyvbot_config.models import HAND_GRASP_SAM_CHECKPOINT_NAME
 from macgyvbot_config.topics import (
     CAMERA_COLOR_TOPIC,
@@ -117,6 +120,9 @@ def generate_launch_description():
     )
     moveit_config_dict = moveit_config.to_dict()
     moveit_config_dict["robot_description"] = load_combined_robot_description()
+    moveit_config_dict = apply_joint_velocity_limits_to_moveit_config(
+        moveit_config_dict
+    )
 
     moveit_py_params = PathJoinSubstitution(
         [bringup_share, "config", "moveit_py.yaml"]

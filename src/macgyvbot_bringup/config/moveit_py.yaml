@@ -16,7 +16,7 @@
       planning_attempts: 1
       planning_pipeline: ompl
       max_velocity_scaling_factor: 0.1
-      max_acceleration_scaling_factor: 0.1
+      max_acceleration_scaling_factor: 0.12
 
     ompl_rrtc:
       plan_request_params:

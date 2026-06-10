@@ -33,6 +33,7 @@ from macgyvbot_interfaces.msg import (
 from macgyvbot_interfaces.srv import SetGripper
 
 from macgyvbot_config.drawer import DRAWER_OBSERVATION_J6_DEG
+from macgyvbot_config.joint_velocity import MOTION_VELOCITY_SCALING_FACTOR
 from macgyvbot_config.structured_logging import (
     format_structured_log,
 )
@@ -407,7 +408,9 @@ class TaskCoordinatorNode(Node):
         self.planning_params = PlanRequestParameters(self.robot)
         self.planning_params.planning_pipeline = "ompl"
         self.planning_params.planner_id = "RRTConnectkConfigDefault"
-        self.planning_params.max_velocity_scaling_factor = 0.1
+        self.planning_params.max_velocity_scaling_factor = (
+            MOTION_VELOCITY_SCALING_FACTOR
+        )
 
         self.motion = MoveItController(
             self.robot,
