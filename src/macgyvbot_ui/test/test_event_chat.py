@@ -6,7 +6,6 @@ import unittest
 from macgyvbot_ui.event_chat import (
     BRING_DONE_MESSAGE,
     BRING_RETURNED_HOME_MESSAGE,
-    BRING_SEARCH_HAND_MESSAGE,
     BRING_WAIT_HANDOFF_MESSAGE,
     GRASP_RETRY_MESSAGE,
     HAND_NOT_FOUND_MESSAGE,
@@ -65,11 +64,11 @@ class EventChatTest(unittest.TestCase):
     def test_normal_bring_status_messages_are_minimal(self):
         self.assertEqual(
             normal_robot_status_chat("searching_hand", "bring"),
-            BRING_SEARCH_HAND_MESSAGE,
+            BRING_WAIT_HANDOFF_MESSAGE,
         )
         self.assertEqual(
             normal_robot_status_chat("waiting_handoff", "bring"),
-            BRING_WAIT_HANDOFF_MESSAGE,
+            "",
         )
         self.assertEqual(
             normal_robot_status_chat("done", "bring"),

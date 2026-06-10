@@ -98,9 +98,11 @@ class OperatorUiNode(Node):
     _GRIPPER_ACTIVE_STATES = {
         'accepted',
         'opening_drawer',
+        'observing_drawer',
         'moving_to_drawer',
         'searching_drawer',
         'searching_drawer_handle',
+        'observing_pick_target',
         'searching',
         'picking',
         'approaching_tool',
@@ -115,6 +117,7 @@ class OperatorUiNode(Node):
         'checking_return_target',
         'return_hand_detected',
         'placing_return_tool',
+        'placing_drawer_tool',
         'returning_home',
         'closing_drawer',
         'resumed',
@@ -126,6 +129,25 @@ class OperatorUiNode(Node):
     _CHAT_INPUT_DISABLED_STATES = _GRIPPER_ACTIVE_STATES - {
         'busy',
         'resumed',
+    }
+    _TASK_FINAL_STATES = {
+        'done',
+        'completed',
+        'success',
+        'failed',
+        'error',
+        'cancelled',
+        'rejected',
+        'busy',
+        'returned',
+    }
+    _TASK_ACTIONS = {
+        'bring',
+        'return',
+        'home',
+        'release',
+        'exit',
+        'cancel',
     }
 
     def __init__(self):
@@ -182,6 +204,7 @@ class OperatorUiNode(Node):
         self._last_hand_log_key = None
         self._last_tool_drop_key = None
         self._last_robot_state = 'unknown'
+        self._task_execution_active = False
         self._task_chat_count = 0
         self._task_chat_limit = 5
         self._manual_gripper_backend_available = False
@@ -650,6 +673,7 @@ class OperatorUiNode(Node):
         self._last_target_label = view['target_label']
         self._set_status(view['panel_status'])
         self._set_task_status(view['target_label'], view['stage_text'])
+        self._update_task_execution_state(status, view['state'])
         self._last_robot_state = view['state']
         self._refresh_gripper_control_state()
         self._refresh_chat_input_state()
@@ -1057,6 +1081,17 @@ class OperatorUiNode(Node):
             if command_action and command_action != 'unknown':
                 return command_action
         return action or 'unknown'
+
+    def _update_task_execution_state(self, status, state):
+        action = self._status_action(status)
+        if state in self._TASK_FINAL_STATES:
+            self._task_execution_active = False
+            return
+        if action in self._TASK_ACTIONS and state in self._GRIPPER_ACTIVE_STATES:
+            self._task_execution_active = True
+            return
+        if action in {'bring', 'return', 'home', 'release', 'exit'}:
+            self._task_execution_active = True
 
     @staticmethod
     def _status_command_key(status, action, tool_name):
@@ -1632,6 +1667,13 @@ class OperatorUiNode(Node):
         if state in {'unknown', 'initializing'}:
             return True, ''
         if state in self._CHAT_INPUT_DISABLED_STATES:
+            now_ns = self.get_clock().now().nanoseconds
+            self._chat_input_hold_until_ns = max(
+                self._chat_input_hold_until_ns,
+                now_ns + self._chat_input_release_grace_ns,
+            )
+            return False, '동작 실행 중... 상태 버튼이나 음성 명령을 사용해주세요.'
+        if self._task_execution_active:
             now_ns = self.get_clock().now().nanoseconds
             self._chat_input_hold_until_ns = max(
                 self._chat_input_hold_until_ns,
