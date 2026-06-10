@@ -86,6 +86,7 @@ def generate_launch_description():
     grasp_point_api_timeout_sec = LaunchConfiguration(
         "grasp_point_api_timeout_sec"
     )
+    yolo_conf = LaunchConfiguration("yolo_conf")
     vlm_service_name = LaunchConfiguration("vlm_service_name")
     vlm_service_wait_timeout_sec = LaunchConfiguration(
         "vlm_service_wait_timeout_sec"
@@ -178,6 +179,11 @@ def generate_launch_description():
                     "YOLO model path. Defaults to installed "
                     "macgyvbot_resources package share."
                 ),
+            ),
+            DeclareLaunchArgument(
+                "yolo_conf",
+                default_value="0.20",
+                description="YOLO confidence threshold for runtime detectors.",
             ),
             DeclareLaunchArgument(
                 "use_voice_command",
@@ -377,6 +383,7 @@ def generate_launch_description():
                     moveit_py_params,
                     {
                         "yolo_model": LaunchConfiguration("yolo_model"),
+                        "yolo_conf": yolo_conf,
                         "grasp_point_mode": LaunchConfiguration(
                             "grasp_point_mode"
                         ),
@@ -473,8 +480,8 @@ def generate_launch_description():
                         "display": False,
                         "show_return_close_roi": False,
                         "yolo_model": LaunchConfiguration("yolo_model"),
+                        "yolo_conf": yolo_conf,
                         "tool_classes": "drill,hammer,pliers,screwdriver,tape_measure,wrench",
-                        "yolo_conf": 0.20,
                         "yolo_imgsz": 640,
                         "max_hands": 2,
                         "depth_diff_threshold_mm": 35.0,

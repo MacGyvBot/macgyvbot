@@ -12,10 +12,11 @@ def resolve_model_path(model_name):
 class YoloDetector:
     """Small wrapper around Ultralytics YOLO to keep node wiring thin."""
 
-    def __init__(self, model_name):
+    def __init__(self, model_name, confidence_threshold=0.20):
         from ultralytics import YOLO
 
         self.model_path = resolve_model_path(model_name)
+        self.confidence_threshold = float(confidence_threshold)
         self.model = YOLO(self.model_path)
 
     @property
@@ -23,4 +24,4 @@ class YoloDetector:
         return self.model.names
 
     def detect(self, image):
-        return self.model(image, verbose=False)
+        return self.model(image, conf=self.confidence_threshold, verbose=False)

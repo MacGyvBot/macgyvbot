@@ -36,7 +36,11 @@ from macgyvbot_config.drawer import DRAWER_OBSERVATION_J6_DEG
 from macgyvbot_config.structured_logging import (
     format_structured_log,
 )
-from macgyvbot_config.models import HAND_GRASP_SAM_CHECKPOINT_NAME, YOLO_MODEL_NAME
+from macgyvbot_config.models import (
+    HAND_GRASP_SAM_CHECKPOINT_NAME,
+    YOLO_CONFIDENCE_THRESHOLD,
+    YOLO_MODEL_NAME,
+)
 from macgyvbot_config.pick import PICK_GRASP_YAW_OFFSET_DEG
 from macgyvbot_config.robot import GROUP_NAME, HOME_JOINTS, WRIST_JOINT_NAME
 from macgyvbot_config.timing import (
@@ -325,6 +329,7 @@ class TaskCoordinatorNode(Node):
 
         self.grasp_point_mode = self._read_grasp_point_mode()
         self.yolo_model = self._read_yolo_model()
+        self.yolo_conf = self._read_yolo_conf()
         self.force_torque_topic = self._read_force_torque_topic()
         self.robot_status_pub = self.create_publisher(
             RobotTaskStatus,
@@ -342,7 +347,10 @@ class TaskCoordinatorNode(Node):
             publish_robot_status=self._publish_robot_status,
             publish_status_payload=self._publish_status_payload,
         )
-        self.detector = YoloDetector(self.yolo_model)
+        self.detector = YoloDetector(
+            self.yolo_model,
+            confidence_threshold=self.yolo_conf,
+        )
         self.grasp_point_logger = VLMStatusLogger(
             self._task_log("vlm"),
             self._publish_status_payload,
@@ -561,6 +569,10 @@ class TaskCoordinatorNode(Node):
             .strip()
         ) or YOLO_MODEL_NAME
 
+    def _read_yolo_conf(self):
+        self.declare_parameter("yolo_conf", YOLO_CONFIDENCE_THRESHOLD)
+        return float(self.get_parameter("yolo_conf").value)
+
     def _read_grasp_point_api_config(self):
         self.declare_parameter("grasp_point_api_model", "gemini-2.5-flash")
         self.declare_parameter("grasp_point_api_env_file", "")
@@ -725,6 +737,7 @@ class TaskCoordinatorNode(Node):
             model=Path(self.yolo_model).name,
             resolved_model=Path(getattr(self.detector, "model_path", self.yolo_model)).name,
             resolved_path=str(getattr(self.detector, "model_path", self.yolo_model)),
+            conf=self.yolo_conf,
         )
         log.info("grasp point mode ready", step="grasp_point", event="status", mode=self.grasp_point_mode)
 

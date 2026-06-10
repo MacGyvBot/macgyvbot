@@ -19,6 +19,12 @@ DEFAULT_TOOL_CLASSES = (
     "tape_measure",
     "wrench",
 )
+DEFAULT_GRASP_POINT_CLASSES = (
+    "grasp_point",
+    "grasp-point",
+    "grasp point",
+    "grasp",
+)
 
 
 @dataclass(frozen=True)
@@ -35,6 +41,7 @@ class ToolDetector:
         self,
         model_path: str = DEFAULT_MODEL_PATH,
         target_classes: Iterable[str] = DEFAULT_TOOL_CLASSES,
+        grasp_point_classes: Iterable[str] = DEFAULT_GRASP_POINT_CLASSES,
         confidence_threshold: float = 0.20,
         image_size: int = 640,
     ) -> None:
@@ -43,16 +50,23 @@ class ToolDetector:
         resolved_model_path = self._resolve_model_path(model_path)
         self.model_path = str(resolved_model_path)
         self.target_classes = {
-            name.strip().lower()
+            self._normalize_label(name)
             for name in target_classes
+            if name.strip()
+        }
+        self.grasp_point_classes = {
+            self._normalize_label(name)
+            for name in grasp_point_classes
             if name.strip()
         }
         self.confidence_threshold = confidence_threshold
         self.image_size = image_size
+        self.last_grasp_point_detections: list[ToolDetection] = []
         self.model = YOLO(str(resolved_model_path))
 
     def detect(self, frame, target_label: str | None = None) -> Optional[ToolDetection]:
         """Return highest-confidence matching tool detection, or None."""
+        self.last_grasp_point_detections = []
         results = self.model.predict(
             source=frame,
             imgsz=self.image_size,
@@ -76,6 +90,17 @@ class ToolDetector:
             confidence = float(box.conf[0])
             class_id = int(box.cls[0])
             label = self._normalize_label(names.get(class_id, class_id))
+            x1, y1, x2, y2 = box.xyxy[0].tolist()
+
+            if label in self.grasp_point_classes:
+                self.last_grasp_point_detections.append(
+                    ToolDetection(
+                        roi=(int(x1), int(y1), int(x2), int(y2)),
+                        label=label,
+                        confidence=confidence,
+                    )
+                )
+                continue
 
             if self.target_classes and label not in self.target_classes:
                 continue
@@ -86,7 +111,6 @@ class ToolDetector:
             if confidence <= best_confidence:
                 continue
 
-            x1, y1, x2, y2 = box.xyxy[0].tolist()
             best_detection = ToolDetection(
                 roi=(int(x1), int(y1), int(x2), int(y2)),
                 label=label,
@@ -102,7 +126,7 @@ class ToolDetector:
 
     @staticmethod
     def _normalize_label(label) -> str:
-        return str(label or "").strip().lower()
+        return str(label or "").strip().lower().replace(" ", "_").replace("-", "_")
 
     @staticmethod
     def _resolve_model_path(model_path: str) -> Path | str:

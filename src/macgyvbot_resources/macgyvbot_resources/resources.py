@@ -43,6 +43,28 @@ def resolve_weight_file(model_name, default_model_name=None):
     cwd = Path.cwd()
     shares = [share for share in (package_share(),) if share is not None]
 
+    legacy_yolo_names = ("yolo11_best.pt", "yolov11_best.pt")
+    if default_model_name is not None and str(model_name) in legacy_yolo_names:
+        default_path = Path(default_model_name).expanduser()
+        default_candidates = [
+            *(
+                candidate
+                for share in shares
+                for candidate in (share / default_path, share / "weights" / default_path)
+            ),
+            cwd / "weights" / default_path,
+            cwd / default_path,
+            root / "weights" / default_path,
+            root / default_path,
+        ]
+        for candidate in default_candidates:
+            if candidate.exists():
+                print(
+                    f"WARNING: {model_name} is a legacy YOLO name. "
+                    f"Using {default_model_name}."
+                )
+                return candidate
+
     candidates = [
         *(
             candidate
@@ -57,17 +79,6 @@ def resolve_weight_file(model_name, default_model_name=None):
     for candidate in candidates:
         if candidate.exists():
             return candidate
-
-    legacy_yolo_names = ("yolo11_best.pt", "yolov11_best.pt")
-    if default_model_name is not None and str(model_name) in legacy_yolo_names:
-        for base in [*shares, cwd, root]:
-            corrected_path = base / "weights" / default_model_name
-            if corrected_path.exists():
-                print(
-                    f"WARNING: {model_name} not found. "
-                    f"Using {default_model_name}."
-                )
-                return corrected_path
 
     return model_name
 
