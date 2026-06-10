@@ -734,9 +734,7 @@ class TaskCoordinatorNode(Node):
             step="model",
             event="status",
             name="yolo",
-            model=Path(self.yolo_model).name,
-            resolved_model=Path(getattr(self.detector, "model_path", self.yolo_model)).name,
-            resolved_path=str(getattr(self.detector, "model_path", self.yolo_model)),
+            weight=Path(getattr(self.detector, "model_path", self.yolo_model)).name,
             conf=self.yolo_conf,
         )
         log.info("grasp point mode ready", step="grasp_point", event="status", mode=self.grasp_point_mode)
@@ -1758,7 +1756,13 @@ class TaskCoordinatorNode(Node):
             )
             if self.grasp_point_mode != GRASP_POINT_MODE_CENTER:
                 return target
-            return self._target_with_mask_pca_yaw(target, target_label)
+            target = self._target_with_mask_pca_yaw(target, target_label)
+            self._log_grasp_point_refine_success(
+                target,
+                GRASP_POINT_MODE_CENTER,
+                target_label,
+            )
+            return target
 
         matched_box = self.pick_target_resolver.matching_box(
             results[0].boxes,
@@ -1848,7 +1852,7 @@ class TaskCoordinatorNode(Node):
                     box,
                 )
                 if selected is not None:
-                    return self._target_with_mask_pca_yaw(
+                    target = self._target_with_mask_pca_yaw(
                         self.pick_target_resolver.target_from_selected_grasp(
                             label,
                             target_label,
@@ -1858,16 +1862,22 @@ class TaskCoordinatorNode(Node):
                         ),
                         target_label,
                     )
+                    self._log_grasp_point_refine_success(
+                        target,
+                        GRASP_POINT_MODE_YOLO,
+                        target_label,
+                    )
+                    return target
 
             if time.monotonic() >= deadline:
                 self._task_log("perception").warn(
-                    "YOLO grasp_point bbox unavailable; falling back to bbox center",
+                    "YOLO grasp point fallback to center",
                     step="pick_refine",
                     event="fallback",
                     reason="grasp_point_bbox_timeout",
                     timeout_sec=timeout_sec,
                 )
-                return self._target_with_mask_pca_yaw(
+                target = self._target_with_mask_pca_yaw(
                     self.pick_target_resolver.target_from_boxes(
                         results[0].boxes,
                         target_label,
@@ -1878,10 +1888,38 @@ class TaskCoordinatorNode(Node):
                     ),
                     target_label,
                 )
+                self._log_grasp_point_refine_success(
+                    target,
+                    GRASP_POINT_MODE_CENTER,
+                    target_label,
+                )
+                return target
 
             time.sleep(0.05)
 
         return None
+
+    def _log_grasp_point_refine_success(self, target, mode, target_label):
+        if target is None or not target.found:
+            return
+
+        pixel_u, pixel_v = target.pixel
+        base_x, base_y, base_z = target.base_xyz
+        self._task_log("perception").info(
+            f"{mode} grasp point calculation succeeded",
+            step="pick_refine",
+            event="done",
+            mode=mode,
+            target=target_label,
+            source=target.source,
+            pixel=f"({pixel_u},{pixel_v})",
+            base=f"({base_x:.3f},{base_y:.3f},{base_z:.3f})",
+            yaw_deg=(
+                f"{float(target.yaw_deg):.1f}"
+                if target.yaw_deg is not None
+                else "none"
+            ),
+        )
 
     def _target_with_mask_pca_yaw(self, target, target_label):
         if target is None or not target.found:
