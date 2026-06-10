@@ -75,6 +75,7 @@ class MacGyvBotNode(Node):
         "done",
         "completed",
         "success",
+        "returned",
         "failed",
         "error",
         "cancelled",
