@@ -67,6 +67,9 @@ ROS 패키지가 아니라 colcon workspace root이며, 실행 entrypoint는
     threshold, timing, UI, VLM 설정 등 Python runtime constant를 소유합니다.
   - `drawer.py`는 drawer handle pose, drawer/tool mapping, drawer collision
     box 좌표, collision profile, motion key별 opened-scene 매핑을 소유합니다.
+  - `joint_velocity.py`는 M0609 `joint_1`~`joint_6`의 사용자 조절용
+    velocity limit과 전역 MoveIt velocity scaling 값을 소유합니다. 이 값은
+    launch 시점에 combined URDF와 MoveIt planning joint limit에 함께 반영됩니다.
 
 - `src/macgyvbot_domain`
   - package 간 공유되는 in-process Python dataclass를 소유합니다.
@@ -150,6 +153,20 @@ macgyvbot_perception.hand_grasp_detection_node
   `ompl_rrt_star` pipeline 목록과 profile별 request parameter가 정의되어 있습니다.
   Python runtime에서 실제로 사용하는 기본값은 `task_coordinator_node.py`의
   `self.planning_params`입니다.
+- robot description은 `macgyvbot.launch.py`에서 `macgyvbot_resources`의
+  `m0609_onrobot_rg2_combined.urdf`를 읽어 `robot_description`에 주입합니다.
+  그 직후 `macgyvbot_config.joint_velocity.apply_joint_velocity_limits_to_moveit_config()`
+  가 `joint_velocity.py`의 값을 URDF `<limit velocity="...">`와
+  `robot_description_planning.joint_limits.*.max_velocity`에 함께 적용합니다.
+  따라서 source URDF 파일 자체의 velocity 값은 기본 모델 값으로 남아 있고,
+  MacGyvBot runtime에서 쓰는 조인트 속도 제한은 launch-time patch 결과입니다.
+- 현재 joint velocity 기본값은 `joint_1`/`joint_2` 30 deg/s, `joint_3`
+  36 deg/s, `joint_4`/`joint_5` 45 deg/s, `joint_6` 90 deg/s입니다.
+  `task_coordinator_node.py`는 `PlanRequestParameters.max_velocity_scaling_factor`에
+  `joint_velocity.py`의 `MOTION_VELOCITY_SCALING_FACTOR`를 넣습니다.
+  acceleration scaling은 `moveit_py.yaml`의 기본
+  `plan_request_params.max_acceleration_scaling_factor`가 소유하며, 실제 로봇
+  테스트 기준으로 현재 `0.12`를 사용합니다.
 - drawer collision scene은 항상 기본 `drawer_only` profile에서 시작합니다.
   `MoveItController.plan_and_execute(..., collision_scene_key=...)`가 호출될 때
   `DrawerCollisionSceneManager`는 key를

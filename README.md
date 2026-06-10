@@ -266,6 +266,21 @@ Task coordinator는 전역 MoveIt planner로 OMPL `RRTConnectkConfigDefault`를
 찾기 위한 설정이며, 관련 MoveItPy pipeline 목록은
 `src/macgyvbot_bringup/config/moveit_py.yaml`에서 관리합니다.
 
+로봇팔 joint별 최대 속도는
+`src/macgyvbot_config/macgyvbot_config/joint_velocity.py`에서 관리합니다.
+기본값은 `joint_1`/`joint_2` 30 deg/s, `joint_3` 36 deg/s,
+`joint_4`/`joint_5` 45 deg/s, `joint_6` 90 deg/s입니다.
+이 값은 `macgyvbot.launch.py`가 combined URDF를 로드한 뒤
+`robot_description`과 MoveIt planning joint limit에 함께 적용합니다.
+
+전역 planning velocity scaling은 같은 `joint_velocity.py`의
+`MOTION_VELOCITY_SCALING_FACTOR`에서 관리하며, 현재 기본값은 `1.0`입니다.
+planning acceleration scaling은
+`src/macgyvbot_bringup/config/moveit_py.yaml`의 기본
+`plan_request_params.max_acceleration_scaling_factor`에서 관리하며, 실제 로봇
+테스트 기준으로 현재 `0.12`를 사용합니다. 속도/가속도 값을 바꾼 뒤에는
+`colcon build`와 새 터미널 `source install/setup.bash`를 다시 수행합니다.
+
 Drawer collision scene은 `base_link` 기준의 직육면체 keep-out 영역으로
 등록됩니다. 기본 profile은 `drawer_only`이고, 특정 motion key가
 `macgyvbot_config.drawer.DRAWER_COLLISION_SCENE_KEY_PROFILES`에 등록된 경우에만
