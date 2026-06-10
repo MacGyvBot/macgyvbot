@@ -66,7 +66,9 @@ sys.modules.setdefault("scipy.spatial.transform", scipy_transform_module)
 
 from macgyvbot_config.drawer import DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M
 from macgyvbot_config.drawer import DRAWER_WALL_CLEARANCE_Z_OFFSET_M
+from macgyvbot_domain.target_models import PickTarget
 from macgyvbot_manipulation.robot_safezone import safe_z_min_for_drawer
+from macgyvbot_task.application.pick_flow import pick_sequence
 from macgyvbot_task.application.pick_flow import pick_handoff_flow
 from macgyvbot_task.application.pick_flow.pick_handoff_flow import PickHandoffFlow
 from macgyvbot_task.application.pick_flow.pick_sequence import PickSequenceRunner
@@ -561,3 +563,55 @@ def test_pregrasp_depth_adjust_allows_target_below_global_safe_z_min():
 
     assert math.isclose(runner.motion.targets[-1].pose.position.z, 0.230)
     assert math.isclose(runner.motion.min_z_values[-1], 0.220)
+
+
+def test_refine_failure_applies_fallback_pca_yaw(monkeypatch):
+    class RotateMotion:
+        def __init__(self):
+            self.yaws = []
+
+        def rotate_wrist_by_yaw_deg(
+            self,
+            yaw_deg,
+            logger,
+            collision_scene_key=None,
+        ):
+            self.yaws.append((yaw_deg, collision_scene_key))
+            return True
+
+    runner = PickSequenceRunner.__new__(PickSequenceRunner)
+    runner.state = FakeState()
+    runner.robot = object()
+    runner.motion = RotateMotion()
+    runner.refine_pick_target = lambda _target_label: PickTarget(
+        found=False,
+        label="screwdriver",
+        pixel=None,
+        base_xyz=None,
+        depth_m=None,
+        yaw_deg=None,
+        reason="vlm_service_failed",
+    )
+    runner.estimate_grasp_yaw = lambda _target_label: 37.5
+
+    context = {
+        "plan": types.SimpleNamespace(
+            target_x=0.30,
+            target_y=0.10,
+            drawer_wall_clearance_z=0.40,
+            grasp_z=0.25,
+        ),
+        "ori": "old_ori",
+        "safe_z_min": safe_z_min_for_drawer(1),
+        "grasp_yaw_deg": None,
+    }
+
+    monkeypatch.setattr(
+        pick_sequence,
+        "current_ee_orientation",
+        lambda _robot: "rotated_ori",
+    )
+
+    assert runner._refine_target_and_apply_grasp_yaw_step(context)
+    assert runner.motion.yaws == [(37.5, "pick/apply_wrist_yaw")]
+    assert context["ori"] == "rotated_ori"

@@ -101,13 +101,16 @@ class GraspPointSelector:
             )
         )
 
-    def should_defer_vlm_until_top_view(self):
+    def should_refine_grasp_point_at_top_view(self):
         return (
             self.mode == GRASP_POINT_MODE_CENTER
             or self.mode == GRASP_POINT_MODE_YOLO
             or self.mode == GRASP_POINT_MODE_VLM
             or self.mode in VLM_ONLY_MODES
         )
+
+    def should_defer_vlm_until_top_view(self):
+        return self.should_refine_grasp_point_at_top_view()
 
     def select(
         self,

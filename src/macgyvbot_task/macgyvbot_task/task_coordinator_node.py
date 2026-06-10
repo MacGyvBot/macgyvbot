@@ -487,6 +487,7 @@ class TaskCoordinatorNode(Node):
             self.state,
             self.tool_hold_monitor,
             refine_pick_target=self._refine_pick_target_after_centering,
+            estimate_grasp_yaw=self._mask_pca_yaw_for_target,
             generate_grasp_detection_mask_images=(
                 self._generate_grasp_detection_mask_images_after_vlm_observe
             ),
@@ -1728,11 +1729,11 @@ class TaskCoordinatorNode(Node):
             self.state.picking = False
 
     def _refine_pick_target_after_centering(self, target_label):
-        if not self.pick_target_resolver.should_defer_vlm_until_top_view():
+        if not self.pick_target_resolver.should_refine_grasp_point_at_top_view():
             return None
         if not self.frame_processor.has_camera_state():
             self._task_log("perception").warn(
-                "camera state unavailable for top-view VLM refine",
+                "camera state unavailable for top-view grasp point refine",
                 step="pick_refine",
                 event="unavailable",
                 reason="camera_state_unavailable",
@@ -1985,7 +1986,7 @@ class TaskCoordinatorNode(Node):
         )
         if response is None:
             self._task_log("perception").warn(
-                "SAM yaw service failed at VLM observe pose",
+                "SAM yaw service failed at grasp observe pose",
                 step="grasp_mask",
                 event="fail",
                 target=target_label,
