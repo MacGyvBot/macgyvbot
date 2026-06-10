@@ -33,24 +33,16 @@ def run_return_recovery(
     config = _ensure_config(config, status, "return")
     target_tool = _select_return_target(status)
 
-    if target_tool == "unknown":
-        log_recovery_event(
-            logger,
-            "TARGET_NORMALIZED_TO_UNKNOWN",
-            "return recovery 대상 공구를 알 수 없어 unknown으로 처리합니다.",
-            {"task_type": "return", "target_tool": target_tool},
-        )
-
     log_recovery_event(
         logger,
         "RECOVERY_STARTED",
-        "return recovery를 시작합니다.",
+        "return recovery started",
         {"task_type": "return", "target_tool": target_tool},
     )
     clear_remaining_tasks(task_queue)
     set_recovery_mode(status, True)
-    # TODO: interrupt/resume recovery에서는 중단된 return step과 drawer 상태를
-    # 여기서 snapshot으로 보관한 뒤 재개 정책을 선택합니다.
+    # TODO: later interrupt/resume support should snapshot the interrupted
+    # return step and drawer state here.
 
     if not move_to_inspection_pose(motion_controller, config):
         return _fail(
@@ -59,19 +51,156 @@ def run_return_recovery(
             motion_controller,
             config,
             logger,
-            "return",
             target_tool,
             "motion_planning_failed",
             "PLANNING_FAILED",
-            "복구 관찰 자세로 이동하지 못했습니다.",
+            "return recovery inspection pose move failed",
         )
 
-    log_recovery_event(
-        logger,
-        "TARGET_SELECTED",
-        "return recovery 대상을 선택했습니다.",
-        {"task_type": "return", "target_tool": target_tool},
+    detection = detect_target_tool(
+        config.initial_detect_target_fn or config.detect_target_fn or yolo_detector,
+        target_tool,
+        max_retry=config.max_detection_retry,
     )
+    if detection is None:
+        return _fail(
+            status,
+            drawer_controller,
+            motion_controller,
+            config,
+            logger,
+            target_tool,
+            "target_detection_failed",
+            "TARGET_NOT_FOUND",
+            "return recovery target not found",
+        )
+
+    if config.target_observe_fn is not None:
+        if not config.target_observe_fn(detection, target_tool, logger):
+            return _fail(
+                status,
+                drawer_controller,
+                motion_controller,
+                config,
+                logger,
+                target_tool,
+                "target_observe_move_failed",
+                "PLANNING_FAILED",
+                "return recovery target observe pose move failed",
+            )
+        observed_tool = _observed_tool_label(config)
+        if observed_tool != "unknown" and observed_tool != target_tool:
+            log_recovery_event(
+                logger,
+                "TARGET_SELECTED",
+                "return recovery target updated from observed label",
+                {
+                    "task_type": "return",
+                    "target_tool": observed_tool,
+                    "previous_target_tool": target_tool,
+                },
+            )
+            target_tool = observed_tool
+            status.held_tool = target_tool
+
+    drawer_id = _drawer_id_for_tool(drawer_controller, tool_drawer_map, target_tool)
+    if drawer_id is None:
+        return _fail(
+            status,
+            drawer_controller,
+            motion_controller,
+            config,
+            logger,
+            target_tool,
+            "unknown_drawer_mapping",
+            "RECOVERY_FAILED",
+            "return recovery drawer mapping missing",
+        )
+
+    marker_target = None
+    drawer_already_open = _drawer_is_open(status, drawer_controller, drawer_id)
+    if drawer_already_open:
+        status.drawer_open = True
+        status.opened_drawer_id = drawer_id
+        log_recovery_event(
+            logger,
+            "DRAWER_OPEN_STARTED",
+            "return recovery drawer already open; skipping drawer open before grasp",
+            {
+                "task_type": "return",
+                "target_tool": target_tool,
+                "drawer_id": drawer_id,
+                "reason": "drawer_already_open",
+            },
+        )
+    elif drawer_controller is not None:
+        log_recovery_event(
+            logger,
+            "DRAWER_OPEN_STARTED",
+            "return recovery drawer open started",
+            {
+                "task_type": "return",
+                "target_tool": target_tool,
+                "drawer_id": drawer_id,
+            },
+        )
+        if not drawer_controller.open_drawer(drawer_id, logger):
+            return _fail(
+                status,
+                drawer_controller,
+                motion_controller,
+                config,
+                logger,
+                target_tool,
+                "drawer_open_failed",
+                "DRAWER_OPEN_FAILED",
+                "return recovery drawer open failed",
+            )
+        status.drawer_open = True
+        status.opened_drawer_id = drawer_id
+
+        observe_drawer = getattr(drawer_controller, "observe_drawer", None)
+        if observe_drawer is not None and not observe_drawer(drawer_id, logger):
+            return _fail(
+                status,
+                drawer_controller,
+                motion_controller,
+                config,
+                logger,
+                target_tool,
+                "drawer_observe_failed",
+                "PLANNING_FAILED",
+                "return recovery drawer observe failed",
+            )
+
+        marker_target = _resolve_drawer_marker(config, drawer_id, target_tool, logger)
+        if marker_target is None:
+            return _fail(
+                status,
+                drawer_controller,
+                motion_controller,
+                config,
+                logger,
+                target_tool,
+                "drawer_marker_not_found",
+                "TARGET_NOT_FOUND",
+                "return recovery drawer marker not found",
+            )
+
+    if config.target_observe_fn is not None:
+        if not config.target_observe_fn(detection, target_tool, logger):
+            return _fail(
+                status,
+                drawer_controller,
+                motion_controller,
+                config,
+                logger,
+                target_tool,
+                "target_observe_move_failed",
+                "PLANNING_FAILED",
+                "return recovery target observe remount failed",
+            )
+
     detection = detect_target_tool(
         config.detect_target_fn or yolo_detector,
         target_tool,
@@ -84,29 +213,11 @@ def run_return_recovery(
             motion_controller,
             config,
             logger,
-            "return",
             target_tool,
-            "target_detection_failed",
+            "target_redetection_failed",
             "TARGET_NOT_FOUND",
-            "복구 대상 공구를 찾지 못했습니다.",
+            "return recovery target not found at grasp observe pose",
         )
-
-    log_recovery_event(
-        logger,
-        "TARGET_DETECTED",
-        "복구 대상 공구를 감지했습니다.",
-        {
-            "task_type": "return",
-            "target_tool": target_tool,
-            "confidence": getattr(detection, "confidence", None),
-        },
-    )
-    log_recovery_event(
-        logger,
-        "GRASPABILITY_CHECK_STARTED",
-        "복구 grasp 가능 여부를 확인합니다.",
-        {"task_type": "return", "target_tool": target_tool},
-    )
     if not is_graspable(detection, motion_controller, grasp_planner, config):
         return _fail(
             status,
@@ -114,86 +225,21 @@ def run_return_recovery(
             motion_controller,
             config,
             logger,
-            "return",
             target_tool,
             "graspability_check_failed",
             "GRASPABILITY_CHECK_FAILED",
-            "복구 대상 공구가 현재 자세에서 grasp 가능하지 않습니다.",
-        )
-
-    drawer_id = _drawer_id_for_tool(drawer_controller, tool_drawer_map, target_tool)
-    if drawer_id is None:
-        return _fail(
-            status,
-            drawer_controller,
-            motion_controller,
-            config,
-            logger,
-            "return",
-            target_tool,
-            "unknown_drawer_mapping",
-            "RECOVERY_FAILED",
-            "복구 대상 공구에 대응하는 서랍을 찾지 못했습니다.",
-        )
-
-    log_recovery_event(
-        logger,
-        "DRAWER_OPEN_STARTED",
-        "복구 대상 서랍을 엽니다.",
-        {"task_type": "return", "target_tool": target_tool, "drawer_id": drawer_id},
-    )
-    if drawer_controller is not None and not drawer_controller.open_drawer(
-        drawer_id,
-        logger,
-    ):
-        return _fail(
-            status,
-            drawer_controller,
-            motion_controller,
-            config,
-            logger,
-            "return",
-            target_tool,
-            "drawer_open_failed",
-            "DRAWER_OPEN_FAILED",
-            "복구 대상 서랍 열기에 실패했습니다.",
-        )
-    status.drawer_open = True
-    status.opened_drawer_id = drawer_id
-    observe_drawer = getattr(drawer_controller, "observe_drawer", None)
-    if observe_drawer is not None and not observe_drawer(drawer_id, logger):
-        return _fail(
-            status,
-            drawer_controller,
-            motion_controller,
-            config,
-            logger,
-            "return",
-            target_tool,
-            "drawer_observe_failed",
-            "PLANNING_FAILED",
-            "복구 대상 서랍 관찰 자세 이동에 실패했습니다.",
-        )
-    marker_target = _resolve_drawer_marker(config, drawer_id, target_tool, logger)
-    if marker_target is None:
-        return _fail(
-            status,
-            drawer_controller,
-            motion_controller,
-            config,
-            logger,
-            "return",
-            target_tool,
-            "drawer_marker_not_found",
-            "TARGET_NOT_FOUND",
-            "서랍 marker target을 찾지 못했습니다.",
+            "return recovery target is not graspable",
         )
 
     log_recovery_event(
         logger,
         "GRASP_ATTEMPT_STARTED",
-        "복구 grasp를 시도합니다.",
-        {"task_type": "return", "target_tool": target_tool, "drawer_id": drawer_id},
+        "return recovery grasp started",
+        {
+            "task_type": "return",
+            "target_tool": target_tool,
+            "drawer_id": drawer_id,
+        },
     )
     if not attempt_grasp(
         detection,
@@ -210,23 +256,44 @@ def run_return_recovery(
             motion_controller,
             config,
             logger,
-            "return",
             target_tool,
             "grasp_execution_failed",
             "GRASP_ATTEMPT_FAILED",
-            "복구 grasp에 실패했습니다.",
+            "return recovery grasp failed",
         )
 
     status.held_tool = target_tool
     status.gripper_holding = True
     if config.tool_hold_monitor is not None:
         config.tool_hold_monitor.start(target_tool, "return", config.command)
-    log_recovery_event(
-        logger,
-        "GRASP_SUCCEEDED",
-        "복구 grasp가 성공했습니다.",
-        {"task_type": "return", "target_tool": target_tool, "drawer_id": drawer_id},
-    )
+
+    if marker_target is None:
+        observe_drawer = getattr(drawer_controller, "observe_drawer", None)
+        if observe_drawer is not None and not observe_drawer(drawer_id, logger):
+            return _fail(
+                status,
+                drawer_controller,
+                motion_controller,
+                config,
+                logger,
+                target_tool,
+                "drawer_observe_failed",
+                "PLANNING_FAILED",
+                "return recovery drawer observe after grasp failed",
+            )
+        marker_target = _resolve_drawer_marker(config, drawer_id, target_tool, logger)
+        if marker_target is None:
+            return _fail(
+                status,
+                drawer_controller,
+                motion_controller,
+                config,
+                logger,
+                target_tool,
+                "drawer_marker_not_found",
+                "TARGET_NOT_FOUND",
+                "return recovery drawer marker not found after grasp",
+            )
 
     if not _place_recovered_tool(config, drawer_id, target_tool, logger, marker_target):
         return _fail(
@@ -235,53 +302,22 @@ def run_return_recovery(
             motion_controller,
             config,
             logger,
-            "return",
             target_tool,
             "drawer_place_failed",
             "RECOVERY_FAILED",
-            "복구 대상 공구를 서랍에 배치하지 못했습니다.",
+            "return recovery drawer placement failed",
         )
 
     status.held_tool = None
     status.gripper_holding = False
-    drawer_closed = True
-    if drawer_controller is not None:
-        log_recovery_event(
-            logger,
-            "DRAWER_CLOSE_STARTED",
-            "복구 대상 서랍을 닫습니다.",
-            {
-                "task_type": "return",
-                "target_tool": target_tool,
-                "drawer_id": drawer_id,
-            },
-        )
-        drawer_closed = bool(drawer_controller.close_drawer(drawer_id, logger))
-        if drawer_closed:
-            status.drawer_open = False
-            status.opened_drawer_id = None
-        else:
-            log_recovery_event(
-                logger,
-                "DRAWER_CLOSE_FAILED",
-                "복구 대상 서랍 닫기에 실패했습니다.",
-                {
-                    "task_type": "return",
-                    "target_tool": target_tool,
-                    "drawer_id": drawer_id,
-                    "reason": "drawer_close_failed",
-                },
-            )
-    else:
-        status.drawer_open = False
-        status.opened_drawer_id = None
-
+    drawer_closed = _close_drawer(drawer_controller, status, drawer_id, target_tool, logger)
     home_ok = return_home(motion_controller, config)
     set_recovery_mode(status, False)
+
     log_recovery_event(
         logger,
         "RECOVERY_SUCCEEDED" if drawer_closed and home_ok else "RECOVERY_FAILED",
-        "return recovery가 완료되었습니다.",
+        "return recovery finished",
         {
             "task_type": "return",
             "target_tool": target_tool,
@@ -290,17 +326,13 @@ def run_return_recovery(
             "home_ok": home_ok,
         },
     )
-    log_recovery_event(
-        logger,
-        "RECOVERY_FINISHED",
-        "복구 절차를 종료했습니다.",
-        {
-            "task_type": "return",
-            "target_tool": target_tool,
-            "drawer_id": drawer_id,
-        },
-    )
     return bool(drawer_closed and home_ok)
+
+
+def _observed_tool_label(config):
+    if config.observed_tool_label_fn is None:
+        return "unknown"
+    return normalize_tool_name(config.observed_tool_label_fn())
 
 
 def _select_return_target(status):
@@ -327,12 +359,21 @@ def _drawer_id_for_tool(drawer_controller, tool_drawer_map, target_tool):
     return tool_drawer_map.get(target_tool)
 
 
+def _drawer_is_open(status, drawer_controller, drawer_id):
+    if getattr(status, "drawer_open", False) and (
+        getattr(status, "opened_drawer_id", None) in (None, drawer_id)
+    ):
+        return True
+    opened = getattr(drawer_controller, "_opened_drawers", None)
+    return bool(opened and drawer_id in opened)
+
+
 def _resolve_drawer_marker(config, drawer_id, target_tool, logger):
     if config.drawer_marker_target_fn is None or config.place_tool_fn is None:
         log_recovery_event(
             logger,
             "RECOVERY_FAILED",
-            "서랍 배치 adapter가 없어 return recovery를 완료할 수 없습니다.",
+            "return recovery drawer placement adapter missing",
             {
                 "task_type": "return",
                 "target_tool": target_tool,
@@ -347,7 +388,7 @@ def _resolve_drawer_marker(config, drawer_id, target_tool, logger):
         log_recovery_event(
             logger,
             "TARGET_NOT_FOUND",
-            "서랍 marker target을 찾지 못했습니다.",
+            "return recovery drawer marker target not found",
             {
                 "task_type": "return",
                 "target_tool": target_tool,
@@ -361,19 +402,43 @@ def _resolve_drawer_marker(config, drawer_id, target_tool, logger):
 
 def _place_recovered_tool(config, drawer_id, target_tool, logger, marker_target):
     if config.place_tool_fn is None:
+        return False
+    return bool(config.place_tool_fn(marker_target, target_tool, logger))
+
+
+def _close_drawer(drawer_controller, status, drawer_id, target_tool, logger):
+    if drawer_controller is None:
+        status.drawer_open = False
+        status.opened_drawer_id = None
+        return True
+
+    log_recovery_event(
+        logger,
+        "DRAWER_CLOSE_STARTED",
+        "return recovery drawer close started",
+        {
+            "task_type": "return",
+            "target_tool": target_tool,
+            "drawer_id": drawer_id,
+        },
+    )
+    drawer_closed = bool(drawer_controller.close_drawer(drawer_id, logger))
+    if drawer_closed:
+        status.drawer_open = False
+        status.opened_drawer_id = None
+    else:
         log_recovery_event(
             logger,
-            "RECOVERY_FAILED",
-            "서랍 배치 adapter가 없어 return recovery를 완료할 수 없습니다.",
+            "DRAWER_CLOSE_FAILED",
+            "return recovery drawer close failed",
             {
                 "task_type": "return",
                 "target_tool": target_tool,
                 "drawer_id": drawer_id,
-                "reason": "drawer_place_adapter_missing",
+                "reason": "drawer_close_failed",
             },
         )
-        return False
-    return bool(config.place_tool_fn(marker_target, target_tool, logger))
+    return drawer_closed
 
 
 def _fail(
@@ -382,7 +447,6 @@ def _fail(
     motion_controller,
     config,
     logger,
-    task_type,
     target_tool,
     reason,
     event_type,
@@ -392,7 +456,7 @@ def _fail(
         logger,
         event_type,
         message,
-        {"task_type": task_type, "target_tool": target_tool, "reason": reason},
+        {"task_type": "return", "target_tool": target_tool, "reason": reason},
     )
     cleanup_after_recovery(
         status,
@@ -400,15 +464,15 @@ def _fail(
         motion_controller,
         config,
         logger,
-        task_type,
+        "return",
         target_tool,
         reason=reason,
     )
     log_recovery_event(
         logger,
         "RECOVERY_FAILED",
-        "return recovery가 실패했습니다.",
-        {"task_type": task_type, "target_tool": target_tool, "reason": reason},
+        "return recovery failed",
+        {"task_type": "return", "target_tool": target_tool, "reason": reason},
     )
     return False
 

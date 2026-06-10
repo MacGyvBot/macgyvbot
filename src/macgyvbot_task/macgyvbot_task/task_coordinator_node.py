@@ -1600,24 +1600,18 @@ class TaskCoordinatorNode(Node):
             command=command,
             task_type=snapshot["action"],
             tool_hold_monitor=self.tool_hold_monitor,
-            initial_detect_target_fn=lambda target_tool: self._resolve_recovery_target(
+            initial_detect_target_fn=lambda target_tool: self._resolve_recovery_initial_target(
                 target_tool,
-                apply_pca_yaw=False,
-            ),
-            target_observe_fn=(
-                self._move_to_pick_recovery_target_observe_pose
-                if (
-                    snapshot["action"] in ("bring", "pick")
-                    or snapshot["task_name"] == "pick"
-                )
-                else None
-            ),
-            detect_target_fn=lambda target_tool: self._resolve_recovery_target(
-                target_tool,
-                apply_pca_yaw=(
+                allow_supported_fallback=not (
                     snapshot["action"] in ("bring", "pick")
                     or snapshot["task_name"] == "pick"
                 ),
+            ),
+            target_observe_fn=self._move_to_pick_recovery_target_observe_pose,
+            observed_tool_label_fn=self._detect_recovery_observed_tool_label,
+            detect_target_fn=lambda target_tool: self._resolve_recovery_target(
+                target_tool,
+                apply_pca_yaw=True,
             ),
             drawer_marker_target_fn=self.return_perception.resolve_drawer_marker_target,
             place_tool_fn=lambda marker_target, tool_name, logger: (
@@ -1630,6 +1624,22 @@ class TaskCoordinatorNode(Node):
                 )
             ),
         )
+
+    def _resolve_recovery_initial_target(
+        self,
+        target_tool,
+        allow_supported_fallback=False,
+    ):
+        target = self._resolve_recovery_target(target_tool, apply_pca_yaw=False)
+        if target is not None and target.found:
+            return target
+        if not allow_supported_fallback:
+            return target
+
+        observed_tool = self._detect_recovery_observed_tool_label()
+        if not observed_tool or observed_tool == "unknown":
+            return target
+        return self._resolve_recovery_target(observed_tool, apply_pca_yaw=False)
 
     def _resolve_recovery_target(self, target_tool, apply_pca_yaw=False):
         if not self.frame_processor.has_camera_state():
@@ -1696,6 +1706,42 @@ class TaskCoordinatorNode(Node):
             ),
             collision_scene_key="recovery/pick_observe_offset",
         )
+
+    def _detect_recovery_observed_tool_label(self):
+        if not self.frame_processor.has_camera_state():
+            return None
+
+        results = self.detector.detect(self.state.color_image.copy())
+        boxes = results[0].boxes if results else None
+        if boxes is None:
+            return None
+
+        supported = self.drawer_flow.supported_tool_labels()
+        best_label = None
+        best_conf = -1.0
+        for box in boxes:
+            label = self._box_label(box)
+            if label not in supported:
+                continue
+            conf = self._box_confidence(box)
+            if conf > best_conf:
+                best_conf = conf
+                best_label = label
+        return best_label
+
+    def _box_label(self, box):
+        try:
+            class_id = int(box.cls[0])
+        except (TypeError, IndexError):
+            class_id = int(box.cls)
+        return str(self.detector.names[class_id])
+
+    @staticmethod
+    def _box_confidence(box):
+        try:
+            return float(box.conf[0])
+        except (AttributeError, TypeError, IndexError):
+            return 0.0
 
     def start_pick_sequence(self, bx, by, bz, vlm_yaw_deg=None):
         if self.is_running() or self.state.picking:

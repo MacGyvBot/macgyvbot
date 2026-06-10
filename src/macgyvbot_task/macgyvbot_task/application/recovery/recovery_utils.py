@@ -34,6 +34,7 @@ class RecoveryConfig:
     initial_detect_target_fn: Callable[[str], Any] | None = None
     detect_target_fn: Callable[[str], Any] | None = None
     target_observe_fn: Callable[[Any, str, Any], bool] | None = None
+    observed_tool_label_fn: Callable[[], str | None] | None = None
     grasp_fn: Callable[[Any, str, Any], bool] | None = None
     drawer_marker_target_fn: Callable[[int], Any] | None = None
     place_tool_fn: Callable[[Any, str, Any], bool] | None = None
