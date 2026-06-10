@@ -31,7 +31,11 @@ from macgyvbot_config.robot import (
 )
 from macgyvbot_config.timing import SEQUENCE_WAIT_POLL_SEC
 from macgyvbot_manipulation.robot_pose import make_safe_pose
-from macgyvbot_manipulation.robot_safezone import SAFE_X_MIN, SAFE_Z_MIN
+from macgyvbot_manipulation.robot_safezone import (
+    SAFE_X_MIN,
+    SAFE_Z_MIN,
+    clamp_to_safe_workspace,
+)
 
 
 @dataclass(frozen=True)
@@ -289,6 +293,14 @@ def move_to_candidate_with_offset(
         )
 
     target = build_offset_target(candidate, x_offset_m, z_offset_m)
+    safe_x, safe_y, safe_z = clamp_to_safe_workspace(
+        target.x,
+        target.y,
+        target.z,
+        logger,
+        min_z=SAFE_Z_MIN + HANDOVER_TARGET_MIN_Z_CLEARANCE_M,
+    )
+    target = OffsetTarget(safe_x, safe_y, safe_z)
     retry_z = build_failed_replan_z(candidate, z_offset_m)
     attempts = build_replan_attempts(target.x, target.y, target.z, retry_z=retry_z)
 
