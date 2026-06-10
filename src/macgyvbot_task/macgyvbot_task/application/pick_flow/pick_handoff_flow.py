@@ -18,6 +18,7 @@ from macgyvbot_config.handoff import (
     OBSERVATION_TIMEOUT_SEC,
 )
 from macgyvbot_config.robot import BASE_FRAME, WORLD_FRAME
+from macgyvbot_config.structured_logging import format_structured_log
 from macgyvbot_manipulation.handover_targeting import (
     move_to_candidate_with_offset,
     move_to_observation_pose,
@@ -65,6 +66,7 @@ class PickHandoffFlow:
         drawer_id=None,
         move_home=True,
         lift_from_current=True,
+        grasp_wrist_joint_rad=None,
     ):
         if drawer_id is not None:
             drawer_wall_clearance_z = drawer_wall_clearance_z_for_drawer(drawer_id)
@@ -104,6 +106,9 @@ class PickHandoffFlow:
             logger.info(
                 "반환 1단계: 관찰 위치 fallback으로 현재 위치 상승을 생략합니다."
             )
+
+        if not self._restore_grasp_wrist_joint(grasp_wrist_joint_rad, logger):
+            return False
 
         logger.info("반환 2단계: 서랍 접근 안전 높이에서 원래 공구 위치 XY로 이동")
         ok = self.motion.plan_and_execute(
@@ -185,6 +190,51 @@ class PickHandoffFlow:
             return False
 
         return True
+
+    def _restore_grasp_wrist_joint(self, grasp_wrist_joint_rad, logger):
+        if grasp_wrist_joint_rad is None:
+            return True
+
+        restore = getattr(self.motion, "move_wrist_to_joint_rad", None)
+        if restore is None:
+            logger.warn(
+                format_structured_log(
+                    pkg="task",
+                    pipe="pick",
+                    msg="grasp wrist restore API unavailable",
+                    step="handoff_recovery",
+                    joint="joint_6",
+                )
+            )
+            return True
+
+        logger.info(
+            format_structured_log(
+                pkg="task",
+                pipe="pick",
+                msg="restore grasp wrist before return",
+                step="handoff_recovery",
+                joint="joint_6",
+            )
+        )
+        ok = restore(
+            grasp_wrist_joint_rad,
+            logger,
+            collision_scene_key="handoff/return_restore_grasp_wrist",
+        )
+        if ok:
+            return True
+
+        logger.error(
+            format_structured_log(
+                pkg="task",
+                pipe="pick",
+                msg="restore grasp wrist failed",
+                step="handoff_recovery",
+                joint="joint_6",
+            )
+        )
+        return False
 
     def move_to_handoff_pose(self, logger):
         self.last_failure_reason = ""

@@ -38,6 +38,7 @@ PIPE_LABELS = {
     "safety": "tool_drop_safety",
     "request": "task_request",
     "vlm": "vlm_selector",
+    "drawer": "drawer_motion",
 }
 
 MESSAGE_TRANSLATIONS = {
@@ -99,6 +100,7 @@ MESSAGE_TRANSLATIONS = {
     "drawer marker camera state unavailable": "서랍 마커 카메라 상태를 사용할 수 없습니다",
     "drawer marker id missing": "서랍 마커 ID가 없습니다",
     "drawer store exit move failed": "서랍 수납 종료 이동 실패",
+    "drawer motion failed": "서랍 동작 실패",
     "move to drawer store exit": "서랍 수납 종료 위치로 이동",
     "store tool target camera state unavailable": "공구 수납 타겟 카메라 상태를 사용할 수 없습니다",
     "return flow failed": "반납 흐름 실패",
