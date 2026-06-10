@@ -44,6 +44,14 @@ def _nearest_equivalent_value(current, target):
 
 
 def _negative_first_equivalent_values(current, target, tolerance_rad=1e-9):
+    return _equivalent_values(
+        current,
+        target,
+        tolerance_rad=tolerance_rad,
+    )
+
+
+def _equivalent_values(current, target, tolerance_rad=1e-9):
     current = float(current)
     target = float(target)
     nearest_k = int(round((current - target) / _TWO_PI))
@@ -82,6 +90,14 @@ def _negative_first_equivalent_values(current, target, tolerance_rad=1e-9):
     return zero + negative + positive
 
 
+def _opposite_direction(delta_deg):
+    if delta_deg > 0.0:
+        return "negative"
+    if delta_deg < 0.0:
+        return "positive"
+    return "none"
+
+
 def _nearest_equivalent_positions(current_positions, target_positions):
     return np.array(
         [
@@ -90,6 +106,38 @@ def _nearest_equivalent_positions(current_positions, target_positions):
         ],
         dtype=float,
     )
+
+
+def _pose_goal_equivalent_position_candidates(
+    current_positions,
+    raw_positions,
+    joint_names,
+):
+    """Return near-current IK positions plus J6 alternatives for bounds fallback."""
+    primary = _nearest_equivalent_positions(current_positions, raw_positions)
+    candidates = [primary]
+
+    if WRIST_JOINT_NAME not in joint_names:
+        return candidates
+
+    j6_idx = joint_names.index(WRIST_JOINT_NAME)
+    if j6_idx >= len(primary):
+        return candidates
+
+    seen = {round(float(primary[j6_idx]), 9)}
+    for wrist_target in _negative_first_equivalent_values(
+        current_positions[j6_idx],
+        raw_positions[j6_idx],
+    ):
+        key = round(float(wrist_target), 9)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidate = np.array(primary, copy=True)
+        candidate[j6_idx] = wrist_target
+        candidates.append(candidate)
+
+    return candidates
 
 
 def _principal_joint_positions(positions):
@@ -247,49 +295,54 @@ def _pose_goal_to_near_current_state_goal(robot, pose_goal, logger):
             ik_state.get_joint_group_positions(GROUP_NAME),
             dtype=float,
         )
-        goal_positions = _nearest_equivalent_positions(
-            current_positions,
-            raw_positions,
-        )
-        candidate_key = tuple(round(float(value), 6) for value in goal_positions)
-        if candidate_key in candidate_keys:
-            continue
-        candidate_keys.add(candidate_key)
+        for equivalent_index, goal_positions in enumerate(
+            _pose_goal_equivalent_position_candidates(
+                current_positions,
+                raw_positions,
+                joint_names,
+            ),
+            start=1,
+        ):
+            candidate_key = tuple(round(float(value), 6) for value in goal_positions)
+            if candidate_key in candidate_keys:
+                continue
+            candidate_keys.add(candidate_key)
 
-        goal_state = RobotState(robot_model)
-        goal_state.set_joint_group_positions(GROUP_NAME, goal_positions)
-        goal_state.update()
-        if not _state_satisfies_bounds(goal_state, jmg):
-            logger.warn(
-                "pose_goal IK 후보가 joint bounds를 벗어나 제외합니다: "
-                + _format_joint_deltas(
-                    joint_names,
-                    current_positions,
+            goal_state = RobotState(robot_model)
+            goal_state.set_joint_group_positions(GROUP_NAME, goal_positions)
+            goal_state.update()
+            if not _state_satisfies_bounds(goal_state, jmg):
+                logger.warn(
+                    "pose_goal IK 후보가 joint bounds를 벗어나 제외합니다: "
+                    f"seed={seed_index}, equivalent={equivalent_index}, "
+                    + _format_joint_deltas(
+                        joint_names,
+                        current_positions,
+                        raw_positions,
+                        goal_positions,
+                    )
+                )
+                continue
+
+            deltas = goal_positions - current_positions
+            abs_deltas = np.abs(deltas)
+            limited_abs_deltas = abs_deltas[delta_limit_mask]
+            max_limited_delta = (
+                float(np.max(limited_abs_deltas))
+                if len(limited_abs_deltas) > 0
+                else 0.0
+            )
+            total_delta = float(np.sum(abs_deltas))
+            candidates.append(
+                (
+                    max_limited_delta,
+                    total_delta,
+                    seed_index,
+                    goal_state,
                     raw_positions,
                     goal_positions,
                 )
             )
-            continue
-
-        deltas = goal_positions - current_positions
-        abs_deltas = np.abs(deltas)
-        limited_abs_deltas = abs_deltas[delta_limit_mask]
-        max_limited_delta = (
-            float(np.max(limited_abs_deltas))
-            if len(limited_abs_deltas) > 0
-            else 0.0
-        )
-        total_delta = float(np.sum(abs_deltas))
-        candidates.append(
-            (
-                max_limited_delta,
-                total_delta,
-                seed_index,
-                goal_state,
-                raw_positions,
-                goal_positions,
-            )
-        )
 
     if not candidates:
         logger.warn(
@@ -1044,12 +1097,29 @@ class MoveItController:
                     current_deg=math.degrees(current_j6),
                     target_deg=math.degrees(target_j6),
                     delta_deg=delta_deg,
+                    opposite_direction=_opposite_direction(delta_deg),
                 )
             )
 
             state_goal = RobotState(robot_model)
             state_goal.set_joint_group_positions(GROUP_NAME, target_positions)
             state_goal.update()
+            joint_model_group = robot_model.get_joint_model_group(GROUP_NAME)
+            if not _state_satisfies_bounds(state_goal, joint_model_group):
+                logger.warn(
+                    format_structured_log(
+                        pkg="manipulation",
+                        pipe="moveit",
+                        msg="wrist joint target violates bounds",
+                        joint=WRIST_JOINT_NAME,
+                        attempt=attempt,
+                        direction=direction,
+                        target_deg=math.degrees(target_j6),
+                        delta_deg=delta_deg,
+                        fallback_direction=_opposite_direction(delta_deg),
+                    )
+                )
+                continue
 
             if self.plan_and_execute(
                 logger,

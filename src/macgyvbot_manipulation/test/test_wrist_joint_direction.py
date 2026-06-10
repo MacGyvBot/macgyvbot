@@ -33,6 +33,20 @@ geometry_msgs_module.msg = geometry_msgs_msg_module
 sys.modules.setdefault("geometry_msgs", geometry_msgs_module)
 sys.modules.setdefault("geometry_msgs.msg", geometry_msgs_msg_module)
 
+scipy_module = types.ModuleType("scipy")
+scipy_spatial_module = types.ModuleType("scipy.spatial")
+scipy_transform_module = types.ModuleType("scipy.spatial.transform")
+scipy_transform_module.Rotation = types.SimpleNamespace(
+    from_matrix=lambda matrix: types.SimpleNamespace(
+        as_quat=lambda: (0.0, 0.0, 0.0, 1.0),
+    ),
+)
+scipy_module.spatial = scipy_spatial_module
+scipy_spatial_module.transform = scipy_transform_module
+sys.modules.setdefault("scipy", scipy_module)
+sys.modules.setdefault("scipy.spatial", scipy_spatial_module)
+sys.modules.setdefault("scipy.spatial.transform", scipy_transform_module)
+
 moveit_module = types.ModuleType("moveit")
 moveit_core_module = types.ModuleType("moveit.core")
 moveit_robot_state_module = types.ModuleType("moveit.core.robot_state")
@@ -53,6 +67,7 @@ sys.modules.setdefault("rclpy.action", rclpy_action_module)
 
 from macgyvbot_manipulation.moveit_controller import (  # noqa: E402
     _negative_first_equivalent_values,
+    _pose_goal_equivalent_position_candidates,
 )
 
 
@@ -86,3 +101,38 @@ def test_equivalent_current_angle_stays_first():
     deltas = [math.degrees(candidate - current) for candidate in candidates]
 
     assert math.isclose(deltas[0], 0.0, abs_tol=1e-6)
+
+
+def test_drawer_equivalent_candidates_include_opposite_positive_rotation():
+    current = math.radians(0.0)
+    target = current + math.radians(140.0)
+
+    candidates = _negative_first_equivalent_values(current, target)
+    deltas = [math.degrees(candidate - current) for candidate in candidates]
+
+    assert math.isclose(deltas[0], -220.0)
+    assert any(math.isclose(delta, -220.0) for delta in deltas)
+    assert any(math.isclose(delta, 140.0) for delta in deltas)
+
+
+def test_pose_goal_candidates_include_wrist_equivalent_fallback():
+    current = [0.0, 0.0, 0.0, 0.0, 0.0, math.radians(0.0)]
+    raw = [0.0, 0.0, 0.0, 0.0, 0.0, math.radians(140.0)]
+    joint_names = [
+        "joint_1",
+        "joint_2",
+        "joint_3",
+        "joint_4",
+        "joint_5",
+        "joint_6",
+    ]
+
+    candidates = _pose_goal_equivalent_position_candidates(
+        current,
+        raw,
+        joint_names,
+    )
+    deltas = [math.degrees(candidate[5] - current[5]) for candidate in candidates]
+
+    assert math.isclose(deltas[0], 140.0)
+    assert any(math.isclose(delta, -220.0) for delta in deltas)
