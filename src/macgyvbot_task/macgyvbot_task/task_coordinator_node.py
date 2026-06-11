@@ -1611,7 +1611,7 @@ class TaskCoordinatorNode(Node):
             observed_tool_label_fn=self._detect_recovery_observed_tool_label,
             detect_target_fn=lambda target_tool: self._resolve_recovery_target(
                 target_tool,
-                apply_pca_yaw=False,
+                apply_pca_yaw=True,
             ),
             drawer_marker_target_fn=self.return_perception.resolve_drawer_marker_target,
             place_tool_fn=lambda marker_target, tool_name, logger: (
@@ -1654,14 +1654,13 @@ class TaskCoordinatorNode(Node):
 
         if apply_pca_yaw:
             self._generate_grasp_detection_mask_images_after_vlm_observe(target_tool)
-            return self._refine_yolo_pick_target_after_centering(target_tool)
 
         color_image = self.state.color_image.copy()
         depth_image = self.state.depth_image.copy()
         intrinsics = dict(self.state.intrinsics)
         results = self.detector.detect(color_image)
         boxes = results[0].boxes if results else None
-        return self.pick_target_resolver.target_from_boxes(
+        target = self.pick_target_resolver.target_from_boxes(
             boxes,
             target_tool,
             color_image,
@@ -1669,6 +1668,9 @@ class TaskCoordinatorNode(Node):
             intrinsics,
             use_bbox_center=True,
         )
+        if apply_pca_yaw:
+            return self._target_with_mask_pca_yaw(target, target_tool)
+        return target
 
     def _move_to_pick_recovery_target_observe_pose(self, detection, target_tool, logger):
         base_xyz = getattr(detection, "base_xyz", None)

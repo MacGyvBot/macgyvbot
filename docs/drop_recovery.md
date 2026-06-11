@@ -42,6 +42,7 @@ drop detected
 -> move to inspection pose
 -> open gripper after inspection pose arrival
 -> detect selected target tool
+-> recompute yaw PCA from the current bbox/depth view
 -> check graspability through existing planner
 -> attempt grasp through existing gripper verification
 -> align wrist with the return drawer-store posture before drawer observation

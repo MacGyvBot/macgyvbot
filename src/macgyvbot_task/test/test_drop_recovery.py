@@ -92,9 +92,13 @@ class FakeStatus:
         self.grasp_detection_mask_target = "pliers"
         self.grasp_detection_yaw_deg = 17.0
         self.grasp_detection_yaw_target = "pliers"
+        self.status_updates = []
 
     def logger(self):
         return FakeLogger()
+
+    def _publish_robot_status(self, status, **kwargs):
+        self.status_updates.append((status, kwargs))
 
 
 class FakeDrawer:
@@ -200,6 +204,14 @@ def test_return_recovery_prefers_held_tool_and_observes_open_drawer(monkeypatch)
     assert status.tool_mask_locked is False
     assert status.last_tool_mask_lock_result is None
     assert status.grasp_detection_yaw_deg is None
+    assert [
+        update[1].get("reason")
+        for update in status.status_updates
+    ][:3] == [
+        "drop_recovery_started",
+        "moving_to_recovery_inspection",
+        "detecting_recovery_target",
+    ]
 
 
 def test_return_recovery_updates_label_then_redetects_with_grasp_yaw(monkeypatch):
@@ -437,3 +449,11 @@ def test_pick_recovery_observes_target_then_stores_in_original_drawer(monkeypatc
     assert status.held_tool is None
     assert status.gripper_holding is False
     assert status.recovery_mode is False
+    assert "recovery_target_redetected" in [
+        update[1].get("reason")
+        for update in status.status_updates
+    ]
+    assert "recovery_grasp_started" in [
+        update[1].get("reason")
+        for update in status.status_updates
+    ]

@@ -318,6 +318,26 @@ def log_recovery_event(logger, event_type, message, extra=None):
         log_info(logger, message, **fields)
 
 
+def publish_recovery_status(
+    state,
+    status,
+    tool_name,
+    message,
+    reason="",
+):
+    if state is None:
+        return
+    publisher = getattr(state, "_publish_robot_status", None)
+    if publisher is None:
+        return
+    publisher(
+        status,
+        tool_name=tool_name,
+        message=message,
+        reason=reason,
+    )
+
+
 def normalize_tool_name(tool_name) -> str:
     if tool_name is None or str(tool_name).strip() == "":
         return "unknown"

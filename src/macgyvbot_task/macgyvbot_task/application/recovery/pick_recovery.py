@@ -14,6 +14,7 @@ from macgyvbot_task.application.recovery.recovery_utils import (
     move_to_inspection_pose,
     normalize_tool_name,
     open_gripper_after_inspection,
+    publish_recovery_status,
     set_recovery_mode,
 )
 from macgyvbot_task.application.drawer_store_motion import rotate_wrist_for_drawer_store
@@ -55,8 +56,22 @@ def run_pick_recovery(
     clear_remaining_tasks(task_queue)
     set_recovery_mode(status, True)
     clear_recovery_perception_lock(status, logger)
+    publish_recovery_status(
+        status,
+        "recovering",
+        target_tool,
+        "drop recovery를 시작합니다.",
+        reason="drop_recovery_started",
+    )
     # TODO: interrupt/resume recovery에서는 기존 queue snapshot을 여기서 보관합니다.
 
+    publish_recovery_status(
+        status,
+        "recovering",
+        target_tool,
+        "drop된 공구를 다시 찾기 위해 inspection 자세로 이동합니다.",
+        reason="moving_to_recovery_inspection",
+    )
     if not move_to_inspection_pose(motion_controller, config):
         return _fail(
             status,
@@ -90,6 +105,13 @@ def run_pick_recovery(
         "TARGET_SELECTED",
         "pick recovery 대상을 선택했습니다.",
         {"task_type": "pick", "target_tool": target_tool},
+    )
+    publish_recovery_status(
+        status,
+        "recovering",
+        target_tool,
+        "drop된 공구 bbox를 다시 탐지합니다.",
+        reason="detecting_recovery_target",
     )
     detection = detect_target_tool(
         config.initial_detect_target_fn or config.detect_target_fn or yolo_detector,
@@ -133,6 +155,13 @@ def run_pick_recovery(
             "복구 대상 위 관찰 자세로 이동합니다.",
             {"task_type": "pick", "target_tool": target_tool},
         )
+        publish_recovery_status(
+            status,
+            "recovering",
+            target_tool,
+            "공구를 다시 관찰할 수 있는 자세로 이동합니다.",
+            reason="moving_to_recovery_target_observe",
+        )
         if not config.target_observe_fn(detection, target_tool, logger):
             log_recovery_event(
                 logger,
@@ -174,6 +203,13 @@ def run_pick_recovery(
                 "TARGET_NOT_FOUND",
                 "복구 대상 관찰 자세에서 공구를 다시 찾지 못했습니다.",
             )
+        publish_recovery_status(
+            status,
+            "recovering",
+            target_tool,
+            "bbox 기준 공구 위치와 fresh yaw PCA를 다시 계산했습니다.",
+            reason="recovery_target_redetected",
+        )
     if not is_graspable(detection, motion_controller, grasp_planner, config):
         log_recovery_event(
             logger,
@@ -203,6 +239,13 @@ def run_pick_recovery(
         "GRASP_ATTEMPT_STARTED",
         "복구 grasp를 시도합니다.",
         {"task_type": "pick", "target_tool": target_tool},
+    )
+    publish_recovery_status(
+        status,
+        "recovering",
+        target_tool,
+        "yaw PCA를 적용한 recovery grasp를 시도합니다.",
+        reason="recovery_grasp_started",
     )
     if not attempt_grasp(
         detection,
