@@ -1923,6 +1923,14 @@ class TaskCoordinatorNode(Node):
             self.state.current_command = None
             return False
 
+        self._publish_robot_status(
+            "returned",
+            tool_name=target_label,
+            action="bring",
+            message="서랍 검증 실패 후 서랍을 닫고 Home으로 복귀했습니다.",
+            reason="drawer_validation_recovered",
+            command=self.state.current_command,
+        )
         self.state.target_label = None
         self.state.current_command = None
         return True

@@ -410,6 +410,13 @@ class ReturnSequenceRunner:
             reason="drawer_validation_failed",
         )
         if self.motion.move_to_home_joints(logger):
+            self.reporter.publish(
+                "returned",
+                observed_tool,
+                "서랍 검증 실패 후 서랍을 닫고 Home으로 복귀했습니다.",
+                context["command"],
+                reason="drawer_validation_recovered",
+            )
             return True
 
         self.reporter.fail(
