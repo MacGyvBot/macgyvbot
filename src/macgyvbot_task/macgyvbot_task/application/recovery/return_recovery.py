@@ -6,12 +6,14 @@ from macgyvbot_task.application.recovery.recovery_utils import (
     RecoveryConfig,
     attempt_grasp,
     cleanup_after_recovery,
+    clear_recovery_perception_lock,
     clear_remaining_tasks,
     detect_target_tool,
     is_graspable,
     log_recovery_event,
     move_to_inspection_pose,
     normalize_tool_name,
+    open_gripper_after_inspection,
     return_home,
     set_recovery_mode,
 )
@@ -41,6 +43,7 @@ def run_return_recovery(
     )
     clear_remaining_tasks(task_queue)
     set_recovery_mode(status, True)
+    clear_recovery_perception_lock(status, logger)
     # TODO: later interrupt/resume support should snapshot the interrupted
     # return step and drawer state here.
 
@@ -55,6 +58,19 @@ def run_return_recovery(
             "motion_planning_failed",
             "PLANNING_FAILED",
             "return recovery inspection pose move failed",
+        )
+
+    if not open_gripper_after_inspection(gripper, config, logger):
+        return _fail(
+            status,
+            drawer_controller,
+            motion_controller,
+            config,
+            logger,
+            target_tool,
+            "inspection_gripper_open_failed",
+            "RECOVERY_FAILED",
+            "return recovery gripper open after inspection failed",
         )
 
     detection = detect_target_tool(

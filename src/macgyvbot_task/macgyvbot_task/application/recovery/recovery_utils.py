@@ -76,6 +76,32 @@ def set_recovery_mode(status, enabled: bool):
         status.recovery_mode = bool(enabled)
 
 
+def clear_recovery_perception_lock(status, logger=None):
+    """Drop recovery must ignore stale SAM/depth lock state and re-detect by bbox."""
+    if status is None:
+        return
+
+    for attr in (
+        "last_tool_mask_lock_result",
+        "grasp_detection_mask_images",
+        "grasp_detection_mask_target",
+        "grasp_detection_yaw_deg",
+        "grasp_detection_yaw_target",
+    ):
+        if hasattr(status, attr):
+            setattr(status, attr, None)
+    if hasattr(status, "tool_mask_locked"):
+        status.tool_mask_locked = False
+
+    log_info(
+        logger or _logger(None),
+        "recovery perception lock cleared",
+        step="recovery_detect",
+        event="reset",
+        reason="drop_recovery_uses_bbox_center",
+    )
+
+
 def move_to_inspection_pose(motion_controller, config: RecoveryConfig):
     """Move to the existing hand inspection pose used by return handoff."""
     logger = _logger(config)
@@ -98,6 +124,42 @@ def move_to_inspection_pose(motion_controller, config: RecoveryConfig):
         logger,
     )
     return bool(ok)
+
+
+def open_gripper_after_inspection(gripper, config: RecoveryConfig, logger=None):
+    """Open the gripper after the robot reaches the drop inspection pose."""
+    logger = logger or _logger(config)
+    open_gripper = getattr(gripper, "open_gripper", None)
+    if open_gripper is None:
+        log_warn(
+            logger,
+            "recovery gripper open unavailable after inspection",
+            step="recovery",
+            event="fail",
+            reason="gripper_open_missing",
+        )
+        return False
+
+    try:
+        open_gripper()
+    except Exception as exc:
+        log_warn(
+            logger,
+            "recovery gripper open failed after inspection",
+            step="recovery",
+            event="fail",
+            reason=str(exc) or type(exc).__name__,
+        )
+        return False
+
+    log_info(
+        logger,
+        "recovery gripper opened after inspection",
+        step="recovery",
+        event="gripper_opened",
+        task_type=getattr(config, "task_type", "unknown"),
+    )
+    return True
 
 
 def detect_target_tool(yolo_detector, target_tool, max_retry: int = 3):

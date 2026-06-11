@@ -38,10 +38,13 @@ drop detected
 -> cancel current MoveIt goal
 -> clear remaining task queue
 -> set recovery_mode = True
+-> clear locked SAM/depth mask state
 -> move to inspection pose
+-> open gripper after inspection pose arrival
 -> detect selected target tool
 -> check graspability through existing planner
 -> attempt grasp through existing gripper verification
+-> align wrist with the return drawer-store posture before drawer observation
 -> close drawer if needed
 -> return home
 -> set recovery_mode = False

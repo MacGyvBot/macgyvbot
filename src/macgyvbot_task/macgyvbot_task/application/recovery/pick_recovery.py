@@ -6,14 +6,17 @@ from macgyvbot_task.application.recovery.recovery_utils import (
     RecoveryConfig,
     attempt_grasp,
     cleanup_after_recovery,
+    clear_recovery_perception_lock,
     clear_remaining_tasks,
     detect_target_tool,
     is_graspable,
     log_recovery_event,
     move_to_inspection_pose,
     normalize_tool_name,
+    open_gripper_after_inspection,
     set_recovery_mode,
 )
+from macgyvbot_task.application.drawer_store_motion import rotate_wrist_for_drawer_store
 
 
 def run_pick_recovery(
@@ -51,6 +54,7 @@ def run_pick_recovery(
     )
     clear_remaining_tasks(task_queue)
     set_recovery_mode(status, True)
+    clear_recovery_perception_lock(status, logger)
     # TODO: interrupt/resume recovery에서는 기존 queue snapshot을 여기서 보관합니다.
 
     if not move_to_inspection_pose(motion_controller, config):
@@ -65,6 +69,20 @@ def run_pick_recovery(
             "motion_planning_failed",
             "PLANNING_FAILED",
             "복구 관찰 자세로 이동하지 못했습니다.",
+        )
+
+    if not open_gripper_after_inspection(gripper, config, logger):
+        return _fail(
+            status,
+            drawer_controller,
+            motion_controller,
+            config,
+            logger,
+            "pick",
+            target_tool,
+            "inspection_gripper_open_failed",
+            "RECOVERY_FAILED",
+            "pick recovery gripper open after inspection failed",
         )
 
     log_recovery_event(
@@ -221,6 +239,7 @@ def run_pick_recovery(
     if not _store_recovered_pick_tool(
         status,
         drawer_controller,
+        motion_controller,
         config,
         logger,
         target_tool,
@@ -257,7 +276,14 @@ def run_pick_recovery(
     return True
 
 
-def _store_recovered_pick_tool(status, drawer_controller, config, logger, target_tool):
+def _store_recovered_pick_tool(
+    status,
+    drawer_controller,
+    motion_controller,
+    config,
+    logger,
+    target_tool,
+):
     drawer_id = _drawer_id_for_tool(drawer_controller, target_tool)
     if drawer_id is None:
         log_recovery_event(
@@ -286,6 +312,13 @@ def _store_recovered_pick_tool(status, drawer_controller, config, logger, target
             return False
     status.drawer_open = True
     status.opened_drawer_id = drawer_id
+
+    if not rotate_wrist_for_drawer_store(
+        motion_controller,
+        logger,
+        label="pick_recovery_store",
+    ):
+        return False
 
     observe_drawer = getattr(drawer_controller, "observe_drawer", None)
     if observe_drawer is not None and not observe_drawer(drawer_id, logger):

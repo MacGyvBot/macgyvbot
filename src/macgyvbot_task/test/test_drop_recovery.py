@@ -58,6 +58,7 @@ from macgyvbot_task.application.recovery.recovery_utils import (  # noqa: E402
     RecoveryConfig,
     normalize_tool_name,
 )
+from macgyvbot_config.return_flow import RETURN_DRAWER_PLACE_WRIST_YAW_DEG  # noqa: E402
 from macgyvbot_task.application.recovery import pick_recovery  # noqa: E402
 from macgyvbot_task.application.recovery import return_recovery  # noqa: E402
 
@@ -85,6 +86,12 @@ class FakeStatus:
         self.drawer_open = False
         self.opened_drawer_id = None
         self.gripper_holding = False
+        self.tool_mask_locked = True
+        self.last_tool_mask_lock_result = {"locked": True}
+        self.grasp_detection_mask_images = ["locked-image"]
+        self.grasp_detection_mask_target = "pliers"
+        self.grasp_detection_yaw_deg = 17.0
+        self.grasp_detection_yaw_target = "pliers"
 
     def logger(self):
         return FakeLogger()
@@ -111,8 +118,23 @@ class FakeDrawer:
 
 
 class FakeMotion:
+    def __init__(self):
+        self.wrist_rotations = []
+
     def move_to_home_joints(self, _logger):
         return True
+
+    def rotate_wrist_by_yaw_deg(self, yaw_deg, _logger):
+        self.wrist_rotations.append(yaw_deg)
+        return True
+
+
+class FakeGripper:
+    def __init__(self):
+        self.open_calls = 0
+
+    def open_gripper(self):
+        self.open_calls += 1
 
 
 class FakeMonitor:
@@ -132,6 +154,7 @@ def test_normalize_tool_name_uses_unknown_for_missing_values():
 def test_return_recovery_prefers_held_tool_and_observes_open_drawer(monkeypatch):
     status = FakeStatus()
     drawer = FakeDrawer()
+    gripper = FakeGripper()
     placed = []
     logger = FakeLogger()
     detection = types.SimpleNamespace(found=True, base_xyz=(0.3, 0.1, 0.2))
@@ -160,7 +183,7 @@ def test_return_recovery_prefers_held_tool_and_observes_open_drawer(monkeypatch)
         None,
         object(),
         None,
-        object(),
+        gripper,
         drawer,
         None,
         config,
@@ -170,9 +193,13 @@ def test_return_recovery_prefers_held_tool_and_observes_open_drawer(monkeypatch)
     assert ok
     assert placed == [(0, "pliers")]
     assert drawer.events == [("open", 0), ("observe", 0), ("close", 0)]
+    assert gripper.open_calls == 1
     assert status.held_tool is None
     assert status.gripper_holding is False
     assert status.recovery_mode is False
+    assert status.tool_mask_locked is False
+    assert status.last_tool_mask_lock_result is None
+    assert status.grasp_detection_yaw_deg is None
 
 
 def test_return_recovery_updates_label_then_redetects_with_grasp_yaw(monkeypatch):
@@ -181,6 +208,8 @@ def test_return_recovery_updates_label_then_redetects_with_grasp_yaw(monkeypatch
     status.target_tool = "wrench"
     status.target_label = None
     drawer = FakeDrawer()
+    gripper = FakeGripper()
+    motion = FakeMotion()
     monitor = FakeMonitor()
     logger = FakeLogger()
     first_detection = types.SimpleNamespace(
@@ -233,9 +262,9 @@ def test_return_recovery_updates_label_then_redetects_with_grasp_yaw(monkeypatch
         status,
         [],
         None,
-        FakeMotion(),
+        motion,
         None,
-        object(),
+        gripper,
         drawer,
         None,
         config,
@@ -252,6 +281,7 @@ def test_return_recovery_updates_label_then_redetects_with_grasp_yaw(monkeypatch
     ]
     assert placed == [(0, "pliers")]
     assert drawer.events == [("open", 0), ("observe", 0), ("close", 0)]
+    assert gripper.open_calls == 1
     assert monitor.starts == [("pliers", "return", config.command)]
     assert status.held_tool is None
 
@@ -262,6 +292,7 @@ def test_return_recovery_skips_drawer_open_when_drawer_already_open(monkeypatch)
     status.drawer_open = True
     status.opened_drawer_id = 0
     drawer = FakeDrawer()
+    gripper = FakeGripper()
     monitor = FakeMonitor()
     logger = FakeLogger()
     detection = types.SimpleNamespace(
@@ -305,7 +336,7 @@ def test_return_recovery_skips_drawer_open_when_drawer_already_open(monkeypatch)
         None,
         FakeMotion(),
         None,
-        object(),
+        gripper,
         drawer,
         None,
         config,
@@ -322,6 +353,7 @@ def test_return_recovery_skips_drawer_open_when_drawer_already_open(monkeypatch)
         ("final", "pliers"),
     ]
     assert placed == [(0, "pliers")]
+    assert gripper.open_calls == 1
 
 
 def test_pick_recovery_observes_target_then_stores_in_original_drawer(monkeypatch):
@@ -330,6 +362,8 @@ def test_pick_recovery_observes_target_then_stores_in_original_drawer(monkeypatc
     status.target_label = "wrench"
     status.held_tool = "pliers"
     drawer = FakeDrawer()
+    gripper = FakeGripper()
+    motion = FakeMotion()
     monitor = FakeMonitor()
     logger = FakeLogger()
     first_detection = types.SimpleNamespace(
@@ -380,9 +414,9 @@ def test_pick_recovery_observes_target_then_stores_in_original_drawer(monkeypatc
         status,
         [],
         None,
-        FakeMotion(),
+        motion,
         None,
-        object(),
+        gripper,
         drawer,
         config,
         logger,
@@ -398,6 +432,8 @@ def test_pick_recovery_observes_target_then_stores_in_original_drawer(monkeypatc
     assert monitor.starts == [("wrench", "bring", config.command)]
     assert placed == [(2, "wrench")]
     assert drawer.events == [("open", 2), ("observe", 2), ("close", 2)]
+    assert gripper.open_calls == 1
+    assert motion.wrist_rotations == [RETURN_DRAWER_PLACE_WRIST_YAW_DEG]
     assert status.held_tool is None
     assert status.gripper_holding is False
     assert status.recovery_mode is False

@@ -1611,7 +1611,7 @@ class TaskCoordinatorNode(Node):
             observed_tool_label_fn=self._detect_recovery_observed_tool_label,
             detect_target_fn=lambda target_tool: self._resolve_recovery_target(
                 target_tool,
-                apply_pca_yaw=True,
+                apply_pca_yaw=False,
             ),
             drawer_marker_target_fn=self.return_perception.resolve_drawer_marker_target,
             place_tool_fn=lambda marker_target, tool_name, logger: (
