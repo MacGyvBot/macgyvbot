@@ -839,5 +839,6 @@ class PickSequenceRunner:
             for event in (
                 self.control_events.get("exit"),
                 self.control_events.get("pause"),
+                self.control_events.get("drop"),
             )
         )

@@ -8,7 +8,6 @@ import time
 from typing import Any
 
 from macgyvbot_config.grasp import GRASP_RETRY_LIMIT
-from macgyvbot_config.handoff import OBSERVATION_TIMEOUT_SEC
 from macgyvbot_manipulation.grasp_verifier import GraspVerifier
 from macgyvbot_manipulation.handover_targeting import move_to_observation_pose
 from macgyvbot_manipulation.robot_pose import current_ee_orientation, make_safe_pose
@@ -19,6 +18,9 @@ from macgyvbot_task.application.logging_utils import (
     log_warn,
 )
 from macgyvbot_task.application.pick_flow.pick_target_planner import PickTargetPlanner
+
+
+RECOVERY_INSPECTION_SEARCH_TIMEOUT_SEC = 4.0
 
 
 @dataclass
@@ -36,14 +38,12 @@ class RecoveryConfig:
     target_observe_fn: Callable[[Any, str, Any], bool] | None = None
     observed_tool_label_fn: Callable[[], str | None] | None = None
     grasp_fn: Callable[[Any, str, Any], bool] | None = None
-    drawer_marker_target_fn: Callable[[int], Any] | None = None
-    place_tool_fn: Callable[[Any, str, Any], bool] | None = None
     tool_hold_monitor: Any = None
     wait_fn: Callable[[float], None] = cooperative_wait
     max_detection_retry: int = 3
     max_grasp_retry: int = GRASP_RETRY_LIMIT
     detection_retry_wait_sec: float = 0.2
-    recovery_timeout_sec: float = OBSERVATION_TIMEOUT_SEC
+    detection_timeout_sec: float = RECOVERY_INSPECTION_SEARCH_TIMEOUT_SEC
 
 
 def clear_remaining_tasks(task_queue):
@@ -164,14 +164,34 @@ def open_gripper_after_inspection(gripper, config: RecoveryConfig, logger=None):
     return True
 
 
-def detect_target_tool(yolo_detector, target_tool, max_retry: int = 3):
+def detect_target_tool(
+    yolo_detector,
+    target_tool,
+    max_retry: int = 3,
+    retry_wait_sec: float = 0.2,
+    timeout_sec: float | None = None,
+    wait_fn: Callable[[float], None] = time.sleep,
+):
     """Find a tool through an existing detector/resolver callable."""
     target = normalize_tool_name(target_tool)
-    for attempt in range(1, int(max_retry) + 1):
+    deadline = None
+    if timeout_sec is not None:
+        deadline = time.monotonic() + max(0.0, float(timeout_sec))
+
+    attempt = 0
+    while True:
+        attempt += 1
         detection = _call_detector(yolo_detector, target)
         if _detection_found(detection):
             return detection
-        time.sleep(0.2)
+
+        if deadline is None:
+            if attempt >= int(max_retry):
+                return None
+        elif time.monotonic() >= deadline:
+            return None
+
+        wait_fn(float(retry_wait_sec))
     return None
 
 

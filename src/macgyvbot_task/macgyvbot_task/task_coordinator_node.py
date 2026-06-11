@@ -137,8 +137,7 @@ from macgyvbot_task.application.return_flow.return_perception_adapter import (
 from macgyvbot_task.application.pick_flow.pick_sequence import PickSequenceRunner
 from macgyvbot_task.application.return_flow.return_sequence import ReturnSequenceRunner
 from macgyvbot_task.application.recovery import (
-    run_pick_recovery,
-    run_return_recovery,
+    run_drop_recovery,
 )
 from macgyvbot_task.application.recovery.recovery_utils import RecoveryConfig
 from macgyvbot_task.application.robot.robot_home_initializer import (
@@ -343,6 +342,7 @@ class TaskCoordinatorNode(Node):
         self.display = DebugDisplay(enabled=self.display_debug_windows)
         self.exit_req = threading.Event()
         self.pause_req = threading.Event()
+        self.drop_req = threading.Event()
         self.resume_req = threading.Event()
         self.handoff_retry_req = threading.Event()
         self.handoff_fallback_req = threading.Event()
@@ -492,6 +492,7 @@ class TaskCoordinatorNode(Node):
         control_events = {
             "exit": self.exit_req,
             "pause": self.pause_req,
+            "drop": self.drop_req,
             "resume": self.resume_req,
             "handoff_retry": self.handoff_retry_req,
             "handoff_fallback": self.handoff_fallback_req,
@@ -892,7 +893,7 @@ class TaskCoordinatorNode(Node):
         with self._queue_lock:
             active_step = self._current_step is not None or self._step_thread_alive()
             queued = bool(self._queue)
-            paused = self.pause_req.is_set()
+            paused = self.pause_req.is_set() or self.drop_req.is_set()
 
         exit_home_running = (
             self._exit_home_thread is not None
@@ -1132,6 +1133,22 @@ class TaskCoordinatorNode(Node):
         reason = str(msg.reason or "").strip()
         if not action:
             return
+        if self.state.recovery_mode:
+            self._task_log("control").warn(
+                "task control ignored during drop recovery",
+                step="task_control",
+                event="rejected",
+                action=action,
+                reason="drop_recovery_active",
+            )
+            self._publish_robot_status(
+                "busy",
+                action=action,
+                message="drop recovery가 진행 중입니다. 복구가 끝나면 작업을 자동으로 재개합니다.",
+                reason="drop_recovery_active",
+                command=self.state.current_command,
+            )
+            return
         if action == "pause":
             self._handle_pause(reason)
             return
@@ -1233,7 +1250,11 @@ class TaskCoordinatorNode(Node):
         )
         should_dispatch = False
         with self._queue_lock:
-            if not self.pause_req.is_set() and self._suspended_step is None:
+            if (
+                not self.pause_req.is_set()
+                and not self.drop_req.is_set()
+                and self._suspended_step is None
+            ):
                 self.resume_req.clear()
             else:
                 self.resume_req.set()
@@ -1265,6 +1286,7 @@ class TaskCoordinatorNode(Node):
         task_running = self.is_running() or self.state.picking
         self.exit_req.set()
         self.pause_req.clear()
+        self.drop_req.clear()
         self.resume_req.clear()
         self.motion.cancel_current_goal(self._motion_log(), reason=reason or "cancel")
         with self._queue_lock:
@@ -1295,6 +1317,7 @@ class TaskCoordinatorNode(Node):
         )
         self.exit_req.set()
         self.pause_req.clear()
+        self.drop_req.clear()
         self.resume_req.clear()
         self.motion.cancel_current_goal(self._motion_log(), reason=reason or "exit")
         with self._queue_lock:
@@ -1460,17 +1483,16 @@ class TaskCoordinatorNode(Node):
             return
 
         snapshot = self._drop_recovery_snapshot(payload)
-        self.exit_req.set()
-        self.pause_req.clear()
+        self.drop_req.set()
         self.resume_req.clear()
         self.motion.cancel_current_goal(
             self._motion_log(),
             reason=snapshot["reason"],
         )
         with self._queue_lock:
-            self._queue.clear()
-            self._suspended_step = None
-            self._suspended_task_name = None
+            if self._current_step is not None:
+                self._suspended_step = self._current_step
+                self._suspended_task_name = self._current_task_name
 
         self._drop_recovery_thread = threading.Thread(
             target=self._run_drop_recovery,
@@ -1498,11 +1520,17 @@ class TaskCoordinatorNode(Node):
             "tool_name": tool_name,
             "command": command,
             "reason": payload.get("reason") or "tool_dropped",
+            "resume_state": {
+                "picking": self.state.picking,
+                "target_label": self.state.target_label,
+                "target_tool": self.state.target_tool,
+                "current_command": self.state.current_command,
+            },
         }
 
     def _run_drop_recovery(self, snapshot):
         log = self._task_log("recovery")
-        if not self._wait_for_task_queue_to_stop(log):
+        if not self._wait_for_active_task_step_to_stop(log):
             self._publish_robot_status(
                 "failed",
                 action=snapshot["action"],
@@ -1511,11 +1539,10 @@ class TaskCoordinatorNode(Node):
                 reason="drop_recovery_queue_shutdown_timeout",
                 command=snapshot["command"],
             )
-            self.exit_req.clear()
-            self._clear_task_state()
             return
 
-        self.exit_req.clear()
+        self.drop_req.clear()
+        self.resume_req.clear()
         self.state.picking = True
         self.state.current_command = snapshot["command"]
         self.state.target_tool = snapshot["tool_name"]
@@ -1525,33 +1552,26 @@ class TaskCoordinatorNode(Node):
             self.state.held_tool = snapshot["tool_name"]
 
         recovery_config = self._build_recovery_config(snapshot)
-        if snapshot["action"] in ("bring", "pick") or snapshot["task_name"] == "pick":
-            ok = run_pick_recovery(
-                self.state,
-                self._clear_recovery_queue,
-                self.detector,
-                self.motion,
-                None,
-                self.gripper,
-                self.drawer_flow,
-                recovery_config,
-                log,
-            )
+        is_pick_drop_recovery = (
+            snapshot["action"] in ("bring", "pick")
+            or snapshot["task_name"] == "pick"
+        )
+        if is_pick_drop_recovery:
             action = "bring"
         else:
-            ok = run_return_recovery(
-                self.state,
-                self._clear_recovery_queue,
-                self.detector,
-                self.motion,
-                None,
-                self.gripper,
-                self.drawer_flow,
-                None,
-                recovery_config,
-                log,
-            )
             action = "return"
+        ok = run_drop_recovery(
+            self.state,
+            self._keep_recovery_queue,
+            self.detector,
+            self.motion,
+            None,
+            self.gripper,
+            self.drawer_flow,
+            recovery_config,
+            log,
+            task_type="pick" if is_pick_drop_recovery else "return",
+        )
 
         self._publish_robot_status(
             "returned" if ok else "failed",
@@ -1565,8 +1585,54 @@ class TaskCoordinatorNode(Node):
             reason="drop_recovery_succeeded" if ok else "drop_recovery_failed",
             command=snapshot["command"],
         )
-        self._clear_task_state()
+        self._restore_drop_recovery_resume_state(snapshot)
+        pending_drop_recovery = self._pending_drop_recovery_payload is not None
+        if ok and not pending_drop_recovery:
+            with self._queue_lock:
+                should_dispatch = self._resume_suspended_step_locked()
+            self._publish_robot_status(
+                "resumed",
+                tool_name=snapshot["tool_name"],
+                action=action,
+                message="drop recovery가 완료되어 중단된 작업을 자동으로 다시 실행합니다.",
+                reason="drop_recovery_auto_resumed",
+                command=snapshot["command"],
+            )
+            if should_dispatch:
+                self._dispatch_next()
+        else:
+            self.drop_req.set()
+            self.resume_req.clear()
         self._restart_pending_drop_recovery()
+
+    def _wait_for_active_task_step_to_stop(
+        self,
+        logger,
+        timeout_sec=TASK_QUEUE_STOP_TIMEOUT_SEC,
+    ):
+        deadline = time.monotonic() + timeout_sec
+        while time.monotonic() < deadline:
+            with self._queue_lock:
+                active = self._current_step is not None or self._step_thread_alive()
+            if not active:
+                return True
+            time.sleep(TASK_QUEUE_STOP_POLL_SEC)
+        logger.warn(
+            "active task step shutdown wait timed out",
+            step="queue",
+            event="timeout",
+            reason="drop_recovery_active_step_shutdown_timeout",
+            timeout_sec=timeout_sec,
+        )
+        return False
+
+    def _restore_drop_recovery_resume_state(self, snapshot):
+        resume_state = snapshot.get("resume_state") or {}
+        self.state.picking = bool(resume_state.get("picking", self.state.picking))
+        self.state.target_label = resume_state.get("target_label")
+        self.state.target_tool = resume_state.get("target_tool")
+        self.state.current_command = resume_state.get("current_command")
+        self.state.recovery_mode = False
 
     def _restart_pending_drop_recovery(self):
         payload = self._pending_drop_recovery_payload
@@ -1592,6 +1658,9 @@ class TaskCoordinatorNode(Node):
             self._suspended_task_name = None
         return True
 
+    def _keep_recovery_queue(self):
+        return True
+
     def _build_recovery_config(self, snapshot):
         command = snapshot["command"]
         return RecoveryConfig(
@@ -1607,21 +1676,11 @@ class TaskCoordinatorNode(Node):
                     or snapshot["task_name"] == "pick"
                 ),
             ),
-            target_observe_fn=self._move_to_pick_recovery_target_observe_pose,
+            target_observe_fn=self._move_to_drop_recovery_target_observe_pose,
             observed_tool_label_fn=self._detect_recovery_observed_tool_label,
             detect_target_fn=lambda target_tool: self._resolve_recovery_target(
                 target_tool,
                 apply_pca_yaw=True,
-            ),
-            drawer_marker_target_fn=self.return_perception.resolve_drawer_marker_target,
-            place_tool_fn=lambda marker_target, tool_name, logger: (
-                self.return_runner.drawer_placement.place_tool_at_marker(
-                    marker_target,
-                    tool_name,
-                    command,
-                    logger,
-                    drawer_id=getattr(self.state, "opened_drawer_id", None),
-                )
             ),
         )
 
@@ -1672,7 +1731,7 @@ class TaskCoordinatorNode(Node):
             return self._target_with_mask_pca_yaw(target, target_tool)
         return target
 
-    def _move_to_pick_recovery_target_observe_pose(self, detection, target_tool, logger):
+    def _move_to_drop_recovery_target_observe_pose(self, detection, target_tool, logger):
         base_xyz = getattr(detection, "base_xyz", None)
         if base_xyz is None:
             return False
@@ -1806,6 +1865,7 @@ class TaskCoordinatorNode(Node):
                 )
                 return False
             self.exit_req.clear()
+            self.drop_req.clear()
             self.resume_req.clear()
             self._queue.clear()
             self._queue.extend((task_name, step) for step in steps)
@@ -1820,7 +1880,11 @@ class TaskCoordinatorNode(Node):
 
     def _dispatch_next(self):
         with self._queue_lock:
-            if self.exit_req.is_set() or self.pause_req.is_set():
+            if (
+                self.exit_req.is_set()
+                or self.pause_req.is_set()
+                or self.drop_req.is_set()
+            ):
                 return
             if self._current_step is not None or self._step_thread_alive():
                 return
@@ -1877,7 +1941,7 @@ class TaskCoordinatorNode(Node):
             self._current_task_name = None
             self._step_thread = None
 
-            if ok and not self.pause_req.is_set():
+            if ok and not self.pause_req.is_set() and not self.drop_req.is_set():
                 self._task_log(task_name, quiet_info=True).info(
                     "task step completed",
                     step="step",
@@ -1885,11 +1949,11 @@ class TaskCoordinatorNode(Node):
                     step_name=step.name,
                     target=self.state.target_label or "unknown",
                 )
-            elif self.pause_req.is_set() and step.retry_on_pause:
+            elif (self.pause_req.is_set() or self.drop_req.is_set()) and step.retry_on_pause:
                 self._task_log(task_name, quiet_info=True).info(
                     "task step suspended",
                     step="step",
-                    event="pause",
+                    event="drop" if self.drop_req.is_set() else "pause",
                     step_name=step.name,
                     target=self.state.target_label or "unknown",
                 )
@@ -1936,6 +2000,7 @@ class TaskCoordinatorNode(Node):
             self._suspended_step = None
             self._suspended_task_name = None
         self.pause_req.clear()
+        self.drop_req.clear()
         self.resume_req.clear()
         return True
 
@@ -1964,6 +2029,7 @@ class TaskCoordinatorNode(Node):
         self._run_cleanup_callbacks()
         self._clear_task_state()
         self.exit_req.clear()
+        self.drop_req.clear()
         self.resume_req.clear()
 
     def is_running(self):
@@ -2391,7 +2457,11 @@ class TaskCoordinatorNode(Node):
         return response
 
     def _motion_interrupted(self):
-        return self.exit_req.is_set() or self.pause_req.is_set()
+        return (
+            self.exit_req.is_set()
+            or self.pause_req.is_set()
+            or self.drop_req.is_set()
+        )
 
     def _hand_grasp_cb(self, msg):
         result = self._human_grasp_payload(msg)

@@ -56,13 +56,13 @@ sys.modules.setdefault("scipy.spatial.transform", scipy_transform_module)
 
 from macgyvbot_task.application.recovery.recovery_utils import (  # noqa: E402
     RecoveryConfig,
+    RECOVERY_INSPECTION_SEARCH_TIMEOUT_SEC,
     attempt_grasp,
+    detect_target_tool,
     normalize_tool_name,
 )
 import macgyvbot_task.application.recovery.recovery_utils as recovery_utils  # noqa: E402
-from macgyvbot_config.return_flow import RETURN_DRAWER_PLACE_WRIST_YAW_DEG  # noqa: E402
-from macgyvbot_task.application.recovery import pick_recovery  # noqa: E402
-from macgyvbot_task.application.recovery import return_recovery  # noqa: E402
+from macgyvbot_task.application.recovery import drop_recovery  # noqa: E402
 
 
 class FakeLogger:
@@ -199,6 +199,39 @@ def test_normalize_tool_name_uses_unknown_for_missing_values():
     assert normalize_tool_name(" wrench ") == "wrench"
 
 
+def test_recovery_config_searches_inspection_for_four_seconds():
+    assert RecoveryConfig().detection_timeout_sec == RECOVERY_INSPECTION_SEARCH_TIMEOUT_SEC
+    assert RECOVERY_INSPECTION_SEARCH_TIMEOUT_SEC == 4.0
+
+
+def test_detect_target_tool_retries_until_timeout(monkeypatch):
+    now = {"value": 0.0}
+    calls = []
+
+    monkeypatch.setattr(
+        recovery_utils.time,
+        "monotonic",
+        lambda: now["value"],
+    )
+
+    def detector(_target):
+        calls.append(now["value"])
+        return None
+
+    def wait(duration):
+        now["value"] += duration
+
+    assert detect_target_tool(
+        detector,
+        "wrench",
+        max_retry=1,
+        retry_wait_sec=1.0,
+        timeout_sec=4.0,
+        wait_fn=wait,
+    ) is None
+    assert calls == [0.0, 1.0, 2.0, 3.0, 4.0]
+
+
 def test_recovery_grasp_rotates_yaw_before_xy_align_and_z_descent(monkeypatch):
     monkeypatch.setattr(
         recovery_utils,
@@ -231,51 +264,38 @@ def test_recovery_grasp_rotates_yaw_before_xy_align_and_z_descent(monkeypatch):
     assert gripper.events == ["open", "close"]
 
 
-def test_return_recovery_prefers_held_tool_and_observes_open_drawer(monkeypatch):
+def test_return_recovery_prefers_held_tool_and_returns_home(monkeypatch):
     status = FakeStatus()
     drawer = FakeDrawer()
     gripper = FakeGripper()
-    placed = []
     logger = FakeLogger()
     detection = types.SimpleNamespace(found=True, base_xyz=(0.3, 0.1, 0.2))
     config = RecoveryConfig(
         state=status,
         inspection_pose_fn=lambda *_args: True,
         detect_target_fn=lambda target: detection,
-        drawer_marker_target_fn=lambda drawer_id: types.SimpleNamespace(
-            found=True,
-            base_xyz=(0.4, 0.2, 0.1),
-            drawer_id=drawer_id,
-        ),
-        place_tool_fn=lambda marker, tool, _logger: placed.append(
-            (marker.drawer_id, tool)
-        )
-        or True,
     )
 
-    monkeypatch.setattr(return_recovery, "is_graspable", lambda *_args: True)
-    monkeypatch.setattr(return_recovery, "attempt_grasp", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(return_recovery, "return_home", lambda *_args: True)
-
-    ok = return_recovery.run_return_recovery(
+    monkeypatch.setattr(drop_recovery, "is_graspable", lambda *_args: True)
+    monkeypatch.setattr(drop_recovery, "attempt_grasp", lambda *_args, **_kwargs: True)
+    ok = drop_recovery.run_drop_recovery(
         status,
         [],
         None,
-        object(),
+        FakeMotion(),
         None,
         gripper,
         drawer,
-        None,
         config,
         logger,
+        task_type="return",
     )
 
     assert ok
-    assert placed == [(0, "pliers")]
-    assert drawer.events == [("open", 0), ("observe", 0), ("close", 0)]
+    assert drawer.events == []
     assert gripper.open_calls == 1
-    assert status.held_tool is None
-    assert status.gripper_holding is False
+    assert status.held_tool == "pliers"
+    assert status.gripper_holding is True
     assert status.recovery_mode is False
     assert status.tool_mask_locked is False
     assert status.last_tool_mask_lock_result is None
@@ -311,7 +331,6 @@ def test_return_recovery_updates_label_then_redetects_with_grasp_yaw(monkeypatch
         yaw_deg=31.0,
     )
     calls = []
-    placed = []
     config = RecoveryConfig(
         state=status,
         command={"tool_name": "wrench", "action": "return"},
@@ -325,28 +344,17 @@ def test_return_recovery_updates_label_then_redetects_with_grasp_yaw(monkeypatch
         observed_tool_label_fn=lambda: "pliers",
         detect_target_fn=lambda target: calls.append(("final", target))
         or final_detection,
-        drawer_marker_target_fn=lambda drawer_id: types.SimpleNamespace(
-            found=True,
-            drawer_id=drawer_id,
-            base_xyz=(0.4, 0.2, 0.1),
-        ),
-        place_tool_fn=lambda marker, tool, _logger: placed.append(
-            (marker.drawer_id, tool)
-        )
-        or True,
         tool_hold_monitor=monitor,
     )
 
-    monkeypatch.setattr(return_recovery, "is_graspable", lambda *_args: True)
+    monkeypatch.setattr(drop_recovery, "is_graspable", lambda *_args: True)
 
     def fake_attempt_grasp(detection, *_args, **kwargs):
         calls.append(("grasp", kwargs["target_tool"], detection.yaw_deg))
         return True
 
-    monkeypatch.setattr(return_recovery, "attempt_grasp", fake_attempt_grasp)
-    monkeypatch.setattr(return_recovery, "return_home", lambda *_args: True)
-
-    ok = return_recovery.run_return_recovery(
+    monkeypatch.setattr(drop_recovery, "attempt_grasp", fake_attempt_grasp)
+    ok = drop_recovery.run_drop_recovery(
         status,
         [],
         None,
@@ -354,24 +362,22 @@ def test_return_recovery_updates_label_then_redetects_with_grasp_yaw(monkeypatch
         None,
         gripper,
         drawer,
-        None,
         config,
         logger,
+        task_type="return",
     )
 
     assert ok
     assert calls == [
         ("initial", "wrench"),
         ("observe", "wrench", (0.3, 0.1, 0.2)),
-        ("observe", "pliers", (0.3, 0.1, 0.2)),
         ("final", "pliers"),
         ("grasp", "pliers", 31.0),
     ]
-    assert placed == [(0, "pliers")]
-    assert drawer.events == [("open", 0), ("observe", 0), ("close", 0)]
+    assert drawer.events == []
     assert gripper.open_calls == 1
     assert monitor.starts == [("pliers", "return", config.command)]
-    assert status.held_tool is None
+    assert status.held_tool == "pliers"
 
 
 def test_return_recovery_skips_drawer_open_when_drawer_already_open(monkeypatch):
@@ -389,7 +395,6 @@ def test_return_recovery_skips_drawer_open_when_drawer_already_open(monkeypatch)
         yaw_deg=19.0,
     )
     calls = []
-    placed = []
     config = RecoveryConfig(
         state=status,
         command={"tool_name": "unknown", "action": "return"},
@@ -402,23 +407,12 @@ def test_return_recovery_skips_drawer_open_when_drawer_already_open(monkeypatch)
         or True,
         observed_tool_label_fn=lambda: "pliers",
         detect_target_fn=lambda target: calls.append(("final", target)) or detection,
-        drawer_marker_target_fn=lambda drawer_id: types.SimpleNamespace(
-            found=True,
-            drawer_id=drawer_id,
-            base_xyz=(0.4, 0.2, 0.1),
-        ),
-        place_tool_fn=lambda marker, tool, _logger: placed.append(
-            (marker.drawer_id, tool)
-        )
-        or True,
         tool_hold_monitor=monitor,
     )
 
-    monkeypatch.setattr(return_recovery, "is_graspable", lambda *_args: True)
-    monkeypatch.setattr(return_recovery, "attempt_grasp", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(return_recovery, "return_home", lambda *_args: True)
-
-    ok = return_recovery.run_return_recovery(
+    monkeypatch.setattr(drop_recovery, "is_graspable", lambda *_args: True)
+    monkeypatch.setattr(drop_recovery, "attempt_grasp", lambda *_args, **_kwargs: True)
+    ok = drop_recovery.run_drop_recovery(
         status,
         [],
         None,
@@ -426,25 +420,23 @@ def test_return_recovery_skips_drawer_open_when_drawer_already_open(monkeypatch)
         None,
         gripper,
         drawer,
-        None,
         config,
         logger,
+        task_type="return",
     )
 
     assert ok
-    assert drawer.events == [("observe", 0), ("close", 0)]
+    assert drawer.events == [("close", 0)]
     assert ("open", 0) not in drawer.events
     assert calls == [
         ("initial", "pliers"),
         ("observe_target", "pliers"),
-        ("observe_target", "pliers"),
         ("final", "pliers"),
     ]
-    assert placed == [(0, "pliers")]
     assert gripper.open_calls == 1
 
 
-def test_pick_recovery_observes_target_then_stores_in_original_drawer(monkeypatch):
+def test_pick_recovery_observes_target_then_returns_home(monkeypatch):
     status = FakeStatus()
     status.target_tool = "wrench"
     status.target_label = "wrench"
@@ -465,7 +457,6 @@ def test_pick_recovery_observes_target_then_stores_in_original_drawer(monkeypatc
         yaw_deg=42.0,
     )
     calls = []
-    placed = []
     config = RecoveryConfig(
         state=status,
         command={"tool_name": "wrench", "action": "bring"},
@@ -478,27 +469,18 @@ def test_pick_recovery_observes_target_then_stores_in_original_drawer(monkeypatc
         or True,
         detect_target_fn=lambda target: calls.append(("final", target))
         or final_detection,
-        drawer_marker_target_fn=lambda drawer_id: types.SimpleNamespace(
-            found=True,
-            drawer_id=drawer_id,
-            base_xyz=(0.4, 0.2, 0.1),
-        ),
-        place_tool_fn=lambda marker, tool, _logger: placed.append(
-            (marker.drawer_id, tool)
-        )
-        or True,
         tool_hold_monitor=monitor,
     )
 
-    monkeypatch.setattr(pick_recovery, "is_graspable", lambda *_args: True)
+    monkeypatch.setattr(drop_recovery, "is_graspable", lambda *_args: True)
 
     def fake_attempt_grasp(detection, *_args, **kwargs):
         calls.append(("grasp", kwargs["target_tool"], detection.yaw_deg))
         return True
 
-    monkeypatch.setattr(pick_recovery, "attempt_grasp", fake_attempt_grasp)
+    monkeypatch.setattr(drop_recovery, "attempt_grasp", fake_attempt_grasp)
 
-    ok = pick_recovery.run_pick_recovery(
+    ok = drop_recovery.run_drop_recovery(
         status,
         [],
         None,
@@ -508,6 +490,7 @@ def test_pick_recovery_observes_target_then_stores_in_original_drawer(monkeypatc
         drawer,
         config,
         logger,
+        task_type="pick",
     )
 
     assert ok
@@ -518,12 +501,11 @@ def test_pick_recovery_observes_target_then_stores_in_original_drawer(monkeypatc
         ("grasp", "wrench", 42.0),
     ]
     assert monitor.starts == [("wrench", "bring", config.command)]
-    assert placed == [(2, "wrench")]
-    assert drawer.events == [("open", 2), ("observe", 2), ("close", 2)]
+    assert drawer.events == []
     assert gripper.open_calls == 1
-    assert motion.wrist_rotations == [RETURN_DRAWER_PLACE_WRIST_YAW_DEG]
-    assert status.held_tool is None
-    assert status.gripper_holding is False
+    assert motion.wrist_rotations == []
+    assert status.held_tool == "wrench"
+    assert status.gripper_holding is True
     assert status.recovery_mode is False
     assert "recovery_target_redetected" in [
         update[1].get("reason")
