@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from macgyvbot_config.drawer import DRAWER_ARUCO_MARKER_IDS
+from collections import Counter
+
+from macgyvbot_config.drawer import (
+    DRAWER_ARUCO_MARKER_IDS,
+    DRAWER_OCCUPANCY_SAMPLE_COUNT,
+    DRAWER_OCCUPANCY_SAMPLE_INTERVAL_SEC,
+)
 from macgyvbot_perception.drawer_marker_resolver import DrawerMarkerResolver
 from macgyvbot_task.application.logging_utils import log_error, log_warn
 
@@ -19,6 +25,7 @@ class ReturnPerceptionAdapter:
         pick_target_resolver,
         depth_projector,
         logger,
+        wait_fn=None,
     ):
         self.state = state
         self.detector = detector
@@ -30,22 +37,47 @@ class ReturnPerceptionAdapter:
             logger,
         )
         self.logger = logger
+        self.wait_fn = wait_fn or (lambda _duration: None)
 
     def detect_store_tool_label(self):
+        labels = self.detect_drawer_tool_labels()
+        if labels is None:
+            return None
+        return labels[0] if labels else None
+
+    def detect_drawer_tool_labels(self):
+        votes = []
+        for sample_index in range(DRAWER_OCCUPANCY_SAMPLE_COUNT):
+            labels = self._detect_drawer_tool_labels_once()
+            if labels is None:
+                return None
+            votes.append(tuple(sorted(labels)))
+            if sample_index < DRAWER_OCCUPANCY_SAMPLE_COUNT - 1:
+                self.wait_fn(DRAWER_OCCUPANCY_SAMPLE_INTERVAL_SEC)
+
+        selected_labels, vote_count = Counter(votes).most_common(1)[0]
+        self.logger.info(
+            "drawer occupancy yolo vote "
+            f"samples={votes}, selected={selected_labels}, votes={vote_count}"
+        )
+        return list(selected_labels)
+
+    def _detect_drawer_tool_labels_once(self):
         if self.state.color_image is None:
             return None
 
         results = self.detector.detect(self.state.color_image)
-        boxes = results[0].boxes if results else None
+        boxes = results[0].boxes if results else []
         if boxes is None:
-            return None
+            boxes = []
 
         supported = self.drawer_flow.supported_tool_labels()
+        labels = []
         for box in boxes:
             label = self._box_label(box)
-            if label in supported:
-                return label
-        return None
+            if label in supported and label not in labels:
+                labels.append(label)
+        return labels
 
     def resolve_store_tool_target(self, tool_name):
         if not self.frame_processor.has_camera_state():

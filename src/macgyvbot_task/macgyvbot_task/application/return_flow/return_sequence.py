@@ -35,6 +35,7 @@ class ReturnSequenceRunner:
         control_events=None,
         drawer_flow=None,
         detect_store_tool_label=None,
+        detect_drawer_tool_labels=None,
         resolve_store_tool_target=None,
         resolve_drawer_marker_target=None,
     ):
@@ -46,6 +47,9 @@ class ReturnSequenceRunner:
         self.control_events = control_events or {}
         self.drawer_flow = drawer_flow
         self.detect_store_tool_label = detect_store_tool_label or (lambda: None)
+        self.detect_drawer_tool_labels = detect_drawer_tool_labels or (
+            lambda: []
+        )
         self.resolve_store_tool_target = resolve_store_tool_target or (
             lambda _tool_name: None
         )
@@ -317,7 +321,105 @@ class ReturnSequenceRunner:
             f"{observed_tool} 보관 서랍 내부 marker를 관찰합니다.",
             context["command"],
         )
-        return self.drawer_flow.observe_drawer(drawer_id, self.state.logger())
+        log = self.state.logger()
+        if not self.drawer_flow.observe_drawer(drawer_id, log):
+            self.reporter.fail(
+                observed_tool,
+                "서랍 내부 관찰 위치 이동에 실패했습니다.",
+                "return_drawer_observe_failed",
+                context["command"],
+                log,
+            )
+            self._recover_from_drawer_validation_failure(context, log)
+            return False
+
+        return self._validate_drawer_occupancy(context)
+
+    def _validate_drawer_occupancy(self, context):
+        drawer_id = context.get("drawer_id")
+        observed_tool = context.get("observed_tool")
+        if self.drawer_flow is None or drawer_id is None:
+            return True
+
+        labels = self.detect_drawer_tool_labels()
+        log = self.state.logger()
+        if labels is None:
+            self.reporter.fail(
+                observed_tool,
+                "서랍 내부 점유 상태를 확인하지 못했습니다.",
+                "return_drawer_occupancy_unknown",
+                context["command"],
+                log,
+            )
+            self._recover_from_drawer_validation_failure(context, log)
+            return False
+
+        conflicting = [label for label in labels if label != observed_tool]
+        if not conflicting:
+            log.info(
+                "return drawer occupancy validated "
+                f"drawer_id={drawer_id}, expected_tool={observed_tool}, "
+                f"observed_tools={labels}"
+            )
+            return True
+
+        self.reporter.fail(
+            observed_tool,
+            (
+                f"{observed_tool} 보관 서랍에 다른 공구 "
+                f"{', '.join(conflicting)}가 감지되어 반납을 중단합니다."
+            ),
+            "return_drawer_occupied_by_other_tool",
+            context["command"],
+            log,
+        )
+        log.warn(
+            "return drawer occupied by other tool "
+            f"drawer_id={drawer_id}, expected_tool={observed_tool}, "
+            f"observed_tools={labels}, conflicting_tools={conflicting}"
+        )
+        self._recover_from_drawer_validation_failure(context, log)
+        return False
+
+    def _recover_from_drawer_validation_failure(self, context, logger):
+        drawer_id = context.get("drawer_id")
+        observed_tool = context.get("observed_tool") or context["requested_tool"]
+        if self.drawer_flow is not None and drawer_id is not None:
+            self.reporter.publish(
+                "closing_drawer",
+                observed_tool,
+                "서랍 검증 실패 후 서랍을 닫습니다.",
+                context["command"],
+                reason="drawer_validation_failed",
+            )
+            if not self.drawer_flow.close_drawer(drawer_id, logger):
+                self.reporter.fail(
+                    observed_tool,
+                    "서랍 검증 실패 후 서랍 닫기에 실패했습니다.",
+                    "return_drawer_validation_close_failed",
+                    context["command"],
+                    logger,
+                )
+                return False
+
+        self.reporter.publish(
+            "returning_home",
+            observed_tool,
+            "서랍 검증 실패 후 Home 위치로 복귀합니다.",
+            context["command"],
+            reason="drawer_validation_failed",
+        )
+        if self.motion.move_to_home_joints(logger):
+            return True
+
+        self.reporter.fail(
+            observed_tool,
+            "서랍 검증 실패 후 Home 위치 복귀에 실패했습니다.",
+            "return_drawer_validation_home_failed",
+            context["command"],
+            logger,
+        )
+        return False
 
     def _resolve_drawer_marker(self, context):
         drawer_id = context.get("drawer_id")
@@ -336,6 +438,10 @@ class ReturnSequenceRunner:
                 message,
                 reason,
                 context["command"],
+                self.state.logger(),
+            )
+            self._recover_from_drawer_validation_failure(
+                context,
                 self.state.logger(),
             )
             return False
@@ -366,6 +472,10 @@ class ReturnSequenceRunner:
 
         if self._interrupted():
             return False
+        self._recover_from_drawer_validation_failure(
+            context,
+            self.state.logger(),
+        )
         return False
 
     def _resolve_store_tool_bbox(self, context):
@@ -380,6 +490,10 @@ class ReturnSequenceRunner:
                 "임시 관찰 위치에서 공구 bbox 중심을 찾지 못했습니다.",
                 "return_store_tool_bbox_not_found",
                 context["command"],
+                self.state.logger(),
+            )
+            self._recover_from_drawer_validation_failure(
+                context,
                 self.state.logger(),
             )
             return False

@@ -505,6 +505,7 @@ class TaskCoordinatorNode(Node):
             self.pick_target_resolver,
             self.depth_projector,
             self._task_log("return", quiet_info=True),
+            wait_fn=cooperative_wait,
         )
         self.pick_runner = PickSequenceRunner(
             self.robot,
@@ -530,6 +531,9 @@ class TaskCoordinatorNode(Node):
             drawer_flow=self.drawer_flow,
             detect_store_tool_label=(
                 self.return_perception.detect_store_tool_label
+            ),
+            detect_drawer_tool_labels=(
+                self.return_perception.detect_drawer_tool_labels
             ),
             resolve_store_tool_target=(
                 self.return_perception.resolve_store_tool_target
@@ -1755,8 +1759,30 @@ class TaskCoordinatorNode(Node):
                     command=self.state.current_command,
                 )
                 ok = self.drawer_flow.observe_drawer(drawer_id, log)
+                if not ok:
+                    self._publish_robot_status(
+                        "failed",
+                        tool_name=target_label,
+                        action="bring",
+                        message=f"{target_label} 탐색 전 서랍 내부 관찰에 실패했습니다.",
+                        reason="pick_drawer_observe_failed",
+                        command=self.state.current_command,
+                    )
+                    self._recover_after_pick_drawer_validation_failure(
+                        target_label,
+                        drawer_id,
+                        log,
+                        "pick_drawer_observe_failed",
+                    )
+                    return
 
             if ok:
+                if not self._validate_pick_drawer_ownership(
+                    target_label,
+                    drawer_id,
+                    log,
+                ):
+                    return
                 self.state.target_label = target_label
                 self.state.drawer_prepared_tool = target_label
                 self._publish_robot_status(
@@ -1780,6 +1806,126 @@ class TaskCoordinatorNode(Node):
         finally:
             self.state.drawer_preparing_tool = None
             self.state.picking = False
+
+    def _validate_pick_drawer_ownership(self, target_label, drawer_id, log):
+        observed_tools = self.return_perception.detect_drawer_tool_labels()
+        if observed_tools is None:
+            self._publish_robot_status(
+                "failed",
+                tool_name=target_label,
+                action="bring",
+                message=f"{target_label} 서랍 내부 공구 상태를 확인하지 못했습니다.",
+                reason="pick_drawer_occupancy_unknown",
+                command=self.state.current_command,
+            )
+            self._recover_after_pick_drawer_validation_failure(
+                target_label,
+                drawer_id,
+                log,
+                "pick_drawer_occupancy_unknown",
+            )
+            return False
+
+        conflicting_tools = [
+            observed_tool
+            for observed_tool in observed_tools
+            if observed_tool != target_label
+        ]
+        if target_label in observed_tools and not conflicting_tools:
+            log.info(
+                "pick drawer ownership validated",
+                step="drawer_ownership",
+                event="valid",
+                target=target_label,
+                drawer=drawer_id,
+                observed_tools=observed_tools,
+            )
+            return True
+
+        reason = "pick_drawer_tool_not_found"
+        if conflicting_tools:
+            reason = "pick_drawer_tool_mismatch"
+        observed_text = ", ".join(observed_tools) if observed_tools else "none"
+        log.warn(
+            "pick drawer ownership mismatch",
+            step="drawer_ownership",
+            event="fail",
+            expected_tool=target_label,
+            observed_tool=observed_text,
+            drawer_id=drawer_id,
+            reason=reason,
+        )
+        self._publish_robot_status(
+            "failed",
+            tool_name=target_label,
+            action="bring",
+            message=(
+                f"{target_label} 서랍에서 기대 공구를 찾지 못했습니다. "
+                f"감지된 공구: {observed_text}"
+            ),
+            reason=reason,
+            command=self.state.current_command,
+        )
+        self._recover_after_pick_drawer_validation_failure(
+            target_label,
+            drawer_id,
+            log,
+            reason,
+        )
+        return False
+
+    def _recover_after_pick_drawer_validation_failure(
+        self,
+        target_label,
+        drawer_id,
+        log,
+        reason,
+    ):
+        self._publish_robot_status(
+            "closing_drawer",
+            tool_name=target_label,
+            action="bring",
+            message="서랍 검증 실패 후 서랍을 닫습니다.",
+            reason=reason,
+            command=self.state.current_command,
+        )
+        if not self.drawer_flow.close_drawer(drawer_id, log):
+            self._publish_robot_status(
+                "failed",
+                tool_name=target_label,
+                action="bring",
+                message="서랍 검증 실패 후 서랍 닫기에 실패했습니다.",
+                reason=f"{reason}_drawer_close_failed",
+                command=self.state.current_command,
+            )
+            self.state.target_label = None
+            self.state.current_command = None
+            return False
+
+        self._publish_robot_status(
+            "returning_home",
+            tool_name=target_label,
+            action="bring",
+            message="서랍 검증 실패 후 Home 위치로 복귀합니다.",
+            reason=reason,
+            command=self.state.current_command,
+        )
+        if not self.motion.move_to_home_joints(log):
+            self._publish_robot_status(
+                "failed",
+                tool_name=target_label,
+                action="bring",
+                message="서랍 검증 실패 후 Home 위치 복귀에 실패했습니다.",
+                reason=f"{reason}_home_failed",
+                command=self.state.current_command,
+            )
+            self.state.target_label = None
+            self.state.current_command = None
+            return False
+
+        self.state.target_label = None
+        self.state.current_command = None
+        return True
 
     def _refine_pick_target_after_centering(self, target_label):
         if not self.pick_target_resolver.should_refine_grasp_point_at_top_view():
