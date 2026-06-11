@@ -658,6 +658,24 @@ class HandGraspDetectionNode(Node):
         status = str(msg.status or "").strip().lower()
         self.robot_status = status
         requested_tool_label = self._status_tool_label(msg)
+        reason = str(getattr(msg, "reason", "") or "").strip().lower()
+
+        if status == "tool_dropped" or (
+            status == "recovering"
+            and (
+                reason.startswith("drop_recovery")
+                or reason.startswith("moving_to_recovery")
+                or reason.startswith("detecting_recovery")
+            )
+        ):
+            self._reset_tool_mask_state()
+            self.mask_tracking_active = False
+            if self.ml_classifier is not None:
+                self.ml_classifier.reset()
+            self.get_logger().info(
+                "Drop recovery status received. Tool mask/depth lock cleared."
+            )
+            return
 
         if status == self.lock_on_status:
             self._set_active_tool_label(requested_tool_label)

@@ -87,6 +87,8 @@ def clear_recovery_perception_lock(status, logger=None):
         "grasp_detection_mask_target",
         "grasp_detection_yaw_deg",
         "grasp_detection_yaw_target",
+        "hand_grasp_image",
+        "last_grasp_result",
     ):
         if hasattr(status, attr):
             setattr(status, attr, None)
@@ -259,8 +261,27 @@ def attempt_grasp(
 
     if not motion_controller.plan_and_execute(
         logger,
-        pose_goal=make_safe_pose(plan.target_x, plan.target_y, plan.grasp_z, ori, logger),
-        collision_scene_key="recovery/grasp",
+        pose_goal=make_safe_pose(
+            plan.target_x,
+            plan.target_y,
+            plan.drawer_wall_clearance_z,
+            ori,
+            logger,
+        ),
+        collision_scene_key="recovery/grasp_xy_align",
+    ):
+        return False
+
+    if plan.should_descend_to_grasp and not motion_controller.plan_and_execute(
+        logger,
+        pose_goal=make_safe_pose(
+            plan.target_x,
+            plan.target_y,
+            plan.grasp_z,
+            ori,
+            logger,
+        ),
+        collision_scene_key="recovery/grasp_descent",
     ):
         return False
 

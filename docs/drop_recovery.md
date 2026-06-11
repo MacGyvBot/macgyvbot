@@ -44,7 +44,10 @@ drop detected
 -> detect selected target tool
 -> recompute yaw PCA from the current bbox/depth view
 -> check graspability through existing planner
--> attempt grasp through existing gripper verification
+-> rotate wrist by fresh yaw PCA
+-> align XY at drawer-wall clearance height
+-> descend Z to grasp height
+-> close gripper and verify grasp
 -> align wrist with the return drawer-store posture before drawer observation
 -> close drawer if needed
 -> return home

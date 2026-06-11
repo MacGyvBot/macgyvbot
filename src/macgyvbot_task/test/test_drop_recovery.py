@@ -56,8 +56,10 @@ sys.modules.setdefault("scipy.spatial.transform", scipy_transform_module)
 
 from macgyvbot_task.application.recovery.recovery_utils import (  # noqa: E402
     RecoveryConfig,
+    attempt_grasp,
     normalize_tool_name,
 )
+import macgyvbot_task.application.recovery.recovery_utils as recovery_utils  # noqa: E402
 from macgyvbot_config.return_flow import RETURN_DRAWER_PLACE_WRIST_YAW_DEG  # noqa: E402
 from macgyvbot_task.application.recovery import pick_recovery  # noqa: E402
 from macgyvbot_task.application.recovery import return_recovery  # noqa: E402
@@ -75,6 +77,23 @@ class FakeLogger:
 
     def error(self, message, **fields):
         self.messages.append(("error", message, fields))
+
+
+class FakeRecoveryGripper:
+    def __init__(self):
+        self.events = []
+
+    def open_gripper(self):
+        self.events.append("open")
+
+    def close_gripper(self):
+        self.events.append("close")
+
+    def get_status(self):
+        return [False, True]
+
+    def get_width(self):
+        return 24.0
 
 
 class FakeStatus:
@@ -124,13 +143,38 @@ class FakeDrawer:
 class FakeMotion:
     def __init__(self):
         self.wrist_rotations = []
+        self.events = []
 
     def move_to_home_joints(self, _logger):
         return True
 
-    def rotate_wrist_by_yaw_deg(self, yaw_deg, _logger):
+    def rotate_wrist_by_yaw_deg(self, yaw_deg, _logger, **_kwargs):
+        self.events.append(("yaw", yaw_deg))
         self.wrist_rotations.append(yaw_deg)
         return True
+
+    def plan_and_execute(self, _logger, pose_goal, collision_scene_key=None, **_kwargs):
+        self.events.append(
+            (
+                "move",
+                collision_scene_key,
+                pose_goal.pose.position.x,
+                pose_goal.pose.position.y,
+                pose_goal.pose.position.z,
+            )
+        )
+        return True
+
+
+class FakeRecoveryPlanner:
+    def plan(self, *_args, **_kwargs):
+        return types.SimpleNamespace(
+            target_x=0.31,
+            target_y=0.12,
+            drawer_wall_clearance_z=0.42,
+            grasp_z=0.25,
+            should_descend_to_grasp=True,
+        )
 
 
 class FakeGripper:
@@ -153,6 +197,38 @@ def test_normalize_tool_name_uses_unknown_for_missing_values():
     assert normalize_tool_name(None) == "unknown"
     assert normalize_tool_name("  ") == "unknown"
     assert normalize_tool_name(" wrench ") == "wrench"
+
+
+def test_recovery_grasp_rotates_yaw_before_xy_align_and_z_descent(monkeypatch):
+    monkeypatch.setattr(
+        recovery_utils,
+        "current_ee_orientation",
+        lambda _robot: {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+    )
+    motion = FakeMotion()
+    gripper = FakeRecoveryGripper()
+    detection = types.SimpleNamespace(
+        found=True,
+        base_xyz=(0.30, 0.10, 0.20),
+        yaw_deg=37.0,
+    )
+
+    ok = attempt_grasp(
+        detection,
+        motion,
+        FakeRecoveryPlanner(),
+        gripper,
+        config=RecoveryConfig(robot=object(), wait_fn=lambda _duration: None),
+        target_tool="wrench",
+    )
+
+    assert ok
+    assert motion.events == [
+        ("yaw", 37.0),
+        ("move", "recovery/grasp_xy_align", 0.31, 0.12, 0.42),
+        ("move", "recovery/grasp_descent", 0.31, 0.12, 0.25),
+    ]
+    assert gripper.events == ["open", "close"]
 
 
 def test_return_recovery_prefers_held_tool_and_observes_open_drawer(monkeypatch):
