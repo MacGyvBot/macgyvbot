@@ -51,6 +51,14 @@ def _nearest_equivalent_value(current, target):
 
 
 def _negative_first_equivalent_values(current, target, tolerance_rad=1e-9):
+    return _equivalent_values(
+        current,
+        target,
+        tolerance_rad=tolerance_rad,
+    )
+
+
+def _equivalent_values(current, target, tolerance_rad=1e-9):
     current = float(current)
     target = float(target)
     nearest_k = int(round((current - target) / _TWO_PI))
@@ -87,6 +95,14 @@ def _negative_first_equivalent_values(current, target, tolerance_rad=1e-9):
     )
 
     return zero + negative + positive
+
+
+def _opposite_direction(delta_deg):
+    if delta_deg > 0.0:
+        return "negative"
+    if delta_deg < 0.0:
+        return "positive"
+    return "none"
 
 
 def _nearest_equivalent_positions(current_positions, target_positions):
@@ -1063,12 +1079,29 @@ class MoveItController:
                     current_deg=math.degrees(current_j6),
                     target_deg=math.degrees(target_j6),
                     delta_deg=delta_deg,
+                    opposite_direction=_opposite_direction(delta_deg),
                 )
             )
 
             state_goal = RobotState(robot_model)
             state_goal.set_joint_group_positions(GROUP_NAME, target_positions)
             state_goal.update()
+            joint_model_group = robot_model.get_joint_model_group(GROUP_NAME)
+            if not _state_satisfies_bounds(state_goal, joint_model_group):
+                logger.warn(
+                    format_structured_log(
+                        pkg="manipulation",
+                        pipe="moveit",
+                        msg="wrist joint target violates bounds",
+                        joint=WRIST_JOINT_NAME,
+                        attempt=attempt,
+                        direction=direction,
+                        target_deg=math.degrees(target_j6),
+                        delta_deg=delta_deg,
+                        fallback_direction=_opposite_direction(delta_deg),
+                    )
+                )
+                continue
 
             if self.plan_and_execute(
                 logger,

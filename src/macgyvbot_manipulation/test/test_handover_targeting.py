@@ -281,6 +281,34 @@ class TestHandoverTargeting(unittest.TestCase):
         self.assertLess(abs(attempts[1][1]), abs(attempts[0][1]))
         self.assertLess(abs(attempts[2][1]), abs(attempts[1][1]))
 
+    def test_failed_handoff_replan_reduces_from_initial_safe_target(self):
+        motion = FakeMotion([False, True])
+        candidate = TargetCandidate(
+            found=True,
+            x=0.3,
+            y=0.5,
+            z=0.25,
+            frame_id="base_link",
+            source="test",
+        )
+
+        ok, final_pose, reason = move_to_candidate_with_offset(
+            motion,
+            candidate,
+            {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+            FakeLogger(),
+            x_offset_m=0.0,
+            z_offset_m=0.10,
+        )
+
+        self.assertTrue(ok)
+        self.assertEqual(reason, "")
+        self.assertAlmostEqual(motion.targets[0][1], 0.3)
+        self.assertLess(motion.targets[1][0], motion.targets[0][0])
+        self.assertLess(abs(motion.targets[1][1]), abs(motion.targets[0][1]))
+        self.assertAlmostEqual(final_pose.x, motion.targets[1][0])
+        self.assertAlmostEqual(final_pose.y, motion.targets[1][1])
+
     def test_handoff_target_z_uses_hand_height_when_higher_than_minimum(self):
         motion = FakeMotion([True])
         candidate = TargetCandidate(

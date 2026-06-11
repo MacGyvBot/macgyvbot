@@ -9,6 +9,7 @@ from moveit.core.robot_state import RobotState
 
 from macgyvbot_config.drawer import (
     DRAWER_CLOSE_LIFT_OFFSET_M,
+    DRAWER_CLOSE_PREPARE_WRIST_YAW_DEG,
     DRAWER_GRIPPER_SETTLE_SEC,
     DRAWER_HANDLE_PREAPPROACH_X_OFFSET_M,
     DRAWER_HANDLE_JOINT_DEGREES,
@@ -113,7 +114,7 @@ class DrawerMotionFlow:
             drawer_id=drawer_id,
         )
 
-    def close_drawer(self, drawer_id, logger):
+    def close_drawer(self, drawer_id, logger, prepare_wrist=False):
         """Move to the opened handle pose, grip it, push closed, then release."""
         opened = self._opened_drawers.get(drawer_id)
         if opened is None:
@@ -126,6 +127,9 @@ class DrawerMotionFlow:
             return False
 
         open_handle_xyz = self._open_handle_target_xyz(drawer_id, opened["xyz"])
+        if prepare_wrist and not self._prepare_wrist_for_close(drawer_id, logger):
+            return False
+
         if not self._move_to_handle_pose_with_preapproach(
             open_handle_xyz,
             opened["ori"],
@@ -168,6 +172,40 @@ class DrawerMotionFlow:
             drawer_id,
             logger,
         )
+
+    def _prepare_wrist_for_close(self, drawer_id, logger):
+        logger.info(
+            f"drawer {drawer_id} close prepare: "
+            f"J6를 {DRAWER_CLOSE_PREPARE_WRIST_YAW_DEG:.1f}도 회전합니다."
+        )
+        if self.dry_run:
+            return True
+
+        rotate_wrist = getattr(self.motion, "rotate_wrist_by_yaw_deg", None)
+        if rotate_wrist is None:
+            _log_drawer_motion_failed(
+                logger,
+                stage="close_prepare_wrist",
+                drawer_id=drawer_id,
+                reason="wrist_rotation_api_unavailable",
+            )
+            return False
+
+        ok = rotate_wrist(
+            DRAWER_CLOSE_PREPARE_WRIST_YAW_DEG,
+            logger,
+            collision_scene_key="drawer/close_prepare_wrist",
+        )
+        if not ok:
+            _log_drawer_motion_failed(
+                logger,
+                stage="close_prepare_wrist",
+                drawer_id=drawer_id,
+                reason="wrist_rotation_failed",
+                yaw_deg=DRAWER_CLOSE_PREPARE_WRIST_YAW_DEG,
+                collision_scene_key="drawer/close_prepare_wrist",
+            )
+        return ok
 
     def _move_to_handle_joints(self, drawer_id, logger):
         joint_positions = self._joint_positions(drawer_id)
