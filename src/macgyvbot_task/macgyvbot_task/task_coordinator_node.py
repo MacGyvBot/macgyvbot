@@ -1858,9 +1858,14 @@ class TaskCoordinatorNode(Node):
 
         best_label = None
         best_conf = -1.0
+        confidence_threshold = float(
+            getattr(self.detector, "confidence_threshold", 0.0)
+        )
         for box in boxes:
             label = self._box_label(box)
             conf = self._box_confidence(box)
+            if conf < confidence_threshold:
+                continue
             if conf > best_conf:
                 best_conf = conf
                 best_label = label

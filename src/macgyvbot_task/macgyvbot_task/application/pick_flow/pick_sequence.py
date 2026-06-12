@@ -1,5 +1,6 @@
 """Pick sequence step construction."""
 
+import math
 import time
 
 import rclpy
@@ -18,6 +19,7 @@ from macgyvbot_config.pick import (
 from macgyvbot_manipulation.robot_pose import (
     current_ee_orientation,
     make_safe_pose,
+    normalize_angle_deg,
 )
 from macgyvbot_manipulation.robot_safezone import (
     SAFE_Z_MIN,
@@ -138,8 +140,12 @@ class PickSequenceRunner:
                 lambda: self._move_to_grasp_observe_pose(context),
             ),
             TaskStep(
-                "pick/refine_target_and_apply_grasp_yaw",
-                lambda: self._refine_target_and_apply_grasp_yaw_step(context),
+                "pick/refine_target_and_prepare_grasp_yaw",
+                lambda: self._refine_target_and_prepare_grasp_yaw_step(context),
+            ),
+            TaskStep(
+                "pick/apply_grasp_yaw",
+                lambda: self._apply_grasp_yaw_step(context),
             ),
             TaskStep(
                 "pick/grasp_descent",
@@ -227,7 +233,7 @@ class PickSequenceRunner:
         )
         return False
 
-    def _refine_target_and_apply_grasp_yaw_step(self, context):
+    def _refine_target_and_prepare_grasp_yaw_step(self, context):
         log = self.state.logger()
         target_label = self.state.target_label
         refined_target = None
@@ -307,7 +313,13 @@ class PickSequenceRunner:
         if grasp_yaw_deg is None:
             return True
 
-        return self._rotate_wrist(grasp_yaw_deg, context)
+        return self._prepare_grasp_wrist_target(grasp_yaw_deg, context, log)
+
+    def _refine_target_and_apply_grasp_yaw_step(self, context):
+        """Compatibility wrapper for older tests/callers."""
+        if not self._refine_target_and_prepare_grasp_yaw_step(context):
+            return False
+        return self._apply_grasp_yaw_step(context)
 
     def _estimate_fallback_grasp_yaw(self, target_label, log):
         if self.estimate_grasp_yaw is None or not target_label:
@@ -386,10 +398,92 @@ class PickSequenceRunner:
                 reason=str(exc) or type(exc).__name__,
             )
 
-    def _rotate_wrist(self, vlm_yaw_deg, context):
+    def _prepare_grasp_wrist_target(self, grasp_yaw_deg, context, log):
+        try:
+            yaw_deg = float(grasp_yaw_deg)
+        except (TypeError, ValueError):
+            log_warn(
+                log,
+                "grasp yaw invalid",
+                step="wrist",
+                event="prepare_fail",
+                yaw_deg=grasp_yaw_deg,
+            )
+            return False
+
+        if not math.isfinite(yaw_deg):
+            log_warn(
+                log,
+                "grasp yaw nonfinite",
+                step="wrist",
+                event="prepare_fail",
+                yaw_deg=grasp_yaw_deg,
+            )
+            return False
+
+        yaw_deg = normalize_angle_deg(yaw_deg)
+        context["grasp_yaw_deg"] = yaw_deg
+        if abs(yaw_deg) < 0.1:
+            context["grasp_wrist_target_rad"] = None
+            log_info(
+                log,
+                "grasp yaw rotation skipped",
+                step="wrist",
+                event="prepared",
+                reason="yaw_near_zero",
+                yaw_deg=yaw_deg,
+            )
+            return True
+
+        current_wrist_rad = self._current_wrist_joint_rad(log)
+        if current_wrist_rad is None:
+            log_error(
+                log,
+                "current wrist joint unavailable",
+                step="wrist",
+                event="prepare_fail",
+            )
+            self.state._publish_robot_status(
+                "failed",
+                message="J6 현재 각도를 읽을 수 없어 grasp yaw를 적용할 수 없습니다.",
+                reason="wrist_joint_read_failed",
+                command=self.state.current_command,
+            )
+            return False
+
+        target_wrist_rad = float(current_wrist_rad) + math.radians(yaw_deg)
+        context["grasp_wrist_target_rad"] = target_wrist_rad
+        log_info(
+            log,
+            "grasp wrist target prepared",
+            step="wrist",
+            event="prepared",
+            yaw_deg=yaw_deg,
+            current_wrist_deg=math.degrees(float(current_wrist_rad)),
+            target_wrist_deg=math.degrees(target_wrist_rad),
+        )
+        return True
+
+    def _apply_grasp_yaw_step(self, context):
+        target_wrist_rad = context.get("grasp_wrist_target_rad")
+        if target_wrist_rad is None:
+            return True
+        return self._move_wrist_to_grasp_target(target_wrist_rad, context)
+
+    def _move_wrist_to_grasp_target(self, target_wrist_rad, context):
         log = self.state.logger()
-        ok = self.motion.rotate_wrist_by_yaw_deg(
-            vlm_yaw_deg,
+        move_wrist = getattr(self.motion, "move_wrist_to_joint_rad", None)
+        if move_wrist is None:
+            log_error(
+                log,
+                "wrist joint target move unavailable",
+                step="wrist",
+                event="fail",
+            )
+            return False
+
+        ok = move_wrist(
+            target_wrist_rad,
             log,
             collision_scene_key="pick/apply_wrist_yaw",
         )

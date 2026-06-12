@@ -14,11 +14,15 @@ class PickTargetResolver:
         grasp_point_selector,
         depth_projector,
         logger,
+        confidence_threshold=None,
     ):
         self.detector = detector
         self.grasp_point_selector = grasp_point_selector
         self.depth_projector = depth_projector
         self.logger = logger
+        if confidence_threshold is None:
+            confidence_threshold = getattr(detector, "confidence_threshold", 0.0)
+        self.confidence_threshold = float(confidence_threshold)
 
     def target_from_boxes(
         self,
@@ -62,11 +66,26 @@ class PickTargetResolver:
         if boxes is None:
             return None
 
+        best_box = None
+        best_label = None
+        best_confidence = -1.0
+
         for box in boxes:
             label = self._box_label(box)
-            if label == target_label:
-                return box, label
-        return None
+            if label != target_label:
+                continue
+
+            confidence = self._box_confidence(box)
+            if confidence < self.confidence_threshold:
+                continue
+            if confidence > best_confidence:
+                best_box = box
+                best_label = label
+                best_confidence = confidence
+
+        if best_box is None:
+            return None
+        return best_box, best_label
 
     def target_from_selected_grasp(
         self,
@@ -128,6 +147,13 @@ class PickTargetResolver:
         except (TypeError, IndexError):
             class_id = int(box.cls)
         return str(self.detector.names[class_id])
+
+    @staticmethod
+    def _box_confidence(box):
+        try:
+            return float(box.conf[0])
+        except (AttributeError, TypeError, IndexError):
+            return 0.0
 
     @staticmethod
     def _extract_yaw(vlm_rpy_deg):
