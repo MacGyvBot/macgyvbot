@@ -31,6 +31,9 @@ DRAWER_ARUCO_MARKER_IDS = {
     0: 10,
 }
 
+DRAWER_OCCUPANCY_SAMPLE_COUNT = 5
+DRAWER_OCCUPANCY_SAMPLE_INTERVAL_SEC = 0.1
+
 DRAWER_STORE_TOOL_OBSERVE_POINT = {
     "joint_1": math.radians(-22.82),
     "joint_2": math.radians(3.95),

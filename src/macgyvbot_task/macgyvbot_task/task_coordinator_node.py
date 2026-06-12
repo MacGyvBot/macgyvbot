@@ -516,6 +516,7 @@ class TaskCoordinatorNode(Node):
             self.pick_target_resolver,
             self.depth_projector,
             self._task_log("return", quiet_info=True),
+            wait_fn=cooperative_wait,
         )
         self.pick_runner = PickSequenceRunner(
             self.robot,
@@ -541,6 +542,9 @@ class TaskCoordinatorNode(Node):
             drawer_flow=self.drawer_flow,
             detect_store_tool_label=(
                 self.return_perception.detect_store_tool_label
+            ),
+            detect_drawer_tool_labels=(
+                self.return_perception.detect_drawer_tool_labels
             ),
             resolve_store_tool_target=(
                 self.return_perception.resolve_store_tool_target
@@ -2056,6 +2060,8 @@ class TaskCoordinatorNode(Node):
         self.state.grasp_detection_mask_target = None
         self.state.grasp_detection_yaw_deg = None
         self.state.grasp_detection_yaw_target = None
+        self.state.grasp_detection_width_mm = None
+        self.state.grasp_detection_width_target = None
         self.handoff_retry_req.clear()
         self.handoff_fallback_req.clear()
         self.handoff_decision_pending.clear()
@@ -2146,8 +2152,30 @@ class TaskCoordinatorNode(Node):
                     command=self.state.current_command,
                 )
                 ok = self.drawer_flow.observe_drawer(drawer_id, log)
+                if not ok:
+                    self._publish_robot_status(
+                        "failed",
+                        tool_name=target_label,
+                        action="bring",
+                        message=f"{target_label} 탐색 전 서랍 내부 관찰에 실패했습니다.",
+                        reason="pick_drawer_observe_failed",
+                        command=self.state.current_command,
+                    )
+                    self._recover_after_pick_drawer_validation_failure(
+                        target_label,
+                        drawer_id,
+                        log,
+                        "pick_drawer_observe_failed",
+                    )
+                    return
 
             if ok:
+                if not self._validate_pick_drawer_ownership(
+                    target_label,
+                    drawer_id,
+                    log,
+                ):
+                    return
                 self.state.target_label = target_label
                 self.state.drawer_prepared_tool = target_label
                 self._publish_robot_status(
@@ -2171,6 +2199,134 @@ class TaskCoordinatorNode(Node):
         finally:
             self.state.drawer_preparing_tool = None
             self.state.picking = False
+
+    def _validate_pick_drawer_ownership(self, target_label, drawer_id, log):
+        observed_tools = self.return_perception.detect_drawer_tool_labels()
+        if observed_tools is None:
+            self._publish_robot_status(
+                "failed",
+                tool_name=target_label,
+                action="bring",
+                message=f"{target_label} 서랍 내부 공구 상태를 확인하지 못했습니다.",
+                reason="pick_drawer_occupancy_unknown",
+                command=self.state.current_command,
+            )
+            self._recover_after_pick_drawer_validation_failure(
+                target_label,
+                drawer_id,
+                log,
+                "pick_drawer_occupancy_unknown",
+            )
+            return False
+
+        conflicting_tools = [
+            observed_tool
+            for observed_tool in observed_tools
+            if observed_tool != target_label
+        ]
+        if target_label in observed_tools and not conflicting_tools:
+            log.info(
+                "pick drawer ownership validated",
+                step="drawer_ownership",
+                event="valid",
+                target=target_label,
+                drawer=drawer_id,
+                observed_tools=observed_tools,
+            )
+            return True
+
+        reason = "pick_drawer_tool_not_found"
+        if conflicting_tools:
+            reason = "pick_drawer_tool_mismatch"
+        observed_text = ", ".join(observed_tools) if observed_tools else "none"
+        log.warn(
+            "pick drawer ownership mismatch",
+            step="drawer_ownership",
+            event="fail",
+            expected_tool=target_label,
+            observed_tool=observed_text,
+            drawer_id=drawer_id,
+            reason=reason,
+        )
+        self._publish_robot_status(
+            "failed",
+            tool_name=target_label,
+            action="bring",
+            message=(
+                f"{target_label} 서랍에서 기대 공구를 찾지 못했습니다. "
+                f"감지된 공구: {observed_text}"
+            ),
+            reason=reason,
+            command=self.state.current_command,
+        )
+        self._recover_after_pick_drawer_validation_failure(
+            target_label,
+            drawer_id,
+            log,
+            reason,
+        )
+        return False
+
+    def _recover_after_pick_drawer_validation_failure(
+        self,
+        target_label,
+        drawer_id,
+        log,
+        reason,
+    ):
+        self._publish_robot_status(
+            "closing_drawer",
+            tool_name=target_label,
+            action="bring",
+            message="서랍 검증 실패 후 서랍을 닫습니다.",
+            reason=reason,
+            command=self.state.current_command,
+        )
+        if not self.drawer_flow.close_drawer(drawer_id, log):
+            self._publish_robot_status(
+                "failed",
+                tool_name=target_label,
+                action="bring",
+                message="서랍 검증 실패 후 서랍 닫기에 실패했습니다.",
+                reason=f"{reason}_drawer_close_failed",
+                command=self.state.current_command,
+            )
+            self.state.target_label = None
+            self.state.current_command = None
+            return False
+
+        self._publish_robot_status(
+            "returning_home",
+            tool_name=target_label,
+            action="bring",
+            message="서랍 검증 실패 후 Home 위치로 복귀합니다.",
+            reason=reason,
+            command=self.state.current_command,
+        )
+        if not self.motion.move_to_home_joints(log):
+            self._publish_robot_status(
+                "failed",
+                tool_name=target_label,
+                action="bring",
+                message="서랍 검증 실패 후 Home 위치 복귀에 실패했습니다.",
+                reason=f"{reason}_home_failed",
+                command=self.state.current_command,
+            )
+            self.state.target_label = None
+            self.state.current_command = None
+            return False
+
+        self._publish_robot_status(
+            "returned",
+            tool_name=target_label,
+            action="bring",
+            message="서랍 검증 실패 후 서랍을 닫고 Home으로 복귀했습니다.",
+            reason="drawer_validation_recovered",
+            command=self.state.current_command,
+        )
+        self.state.target_label = None
+        self.state.current_command = None
+        return True
 
     def _refine_pick_target_after_centering(self, target_label):
         if not self.pick_target_resolver.should_refine_grasp_point_at_top_view():
@@ -2201,7 +2357,7 @@ class TaskCoordinatorNode(Node):
             )
             if self.grasp_point_mode != GRASP_POINT_MODE_CENTER:
                 return target
-            target = self._target_with_mask_pca_yaw(target, target_label)
+            target = self._target_with_mask_pca_result(target, target_label)
             self._log_grasp_point_refine_success(
                 target,
                 GRASP_POINT_MODE_CENTER,
@@ -2251,23 +2407,19 @@ class TaskCoordinatorNode(Node):
                 reason="vlm_service_failed",
             )
 
-        orientation_rpy_deg = list(response.orientation_rpy_deg) or None
-        pca_yaw_deg = self._mask_pca_yaw_for_target(target_label)
-        if pca_yaw_deg is not None:
-            orientation_rpy_deg = [0.0, 0.0, float(pca_yaw_deg)]
-
-        return self.pick_target_resolver.target_from_selected_grasp(
+        target = self.pick_target_resolver.target_from_selected_grasp(
             label,
             target_label,
             (
                 int(response.pixel_u),
                 int(response.pixel_v),
                 str(response.source or self.grasp_point_mode),
-                orientation_rpy_deg,
+                list(response.orientation_rpy_deg) or None,
             ),
             depth_image,
             intrinsics,
         )
+        return self._target_with_mask_pca_result(target, target_label)
 
     def _refine_yolo_pick_target_after_centering(
         self,
@@ -2297,7 +2449,7 @@ class TaskCoordinatorNode(Node):
                     box,
                 )
                 if selected is not None:
-                    target = self._target_with_mask_pca_yaw(
+                    target = self._target_with_mask_pca_result(
                         self.pick_target_resolver.target_from_selected_grasp(
                             label,
                             target_label,
@@ -2322,7 +2474,7 @@ class TaskCoordinatorNode(Node):
                     reason="grasp_point_bbox_timeout",
                     timeout_sec=timeout_sec,
                 )
-                target = self._target_with_mask_pca_yaw(
+                target = self._target_with_mask_pca_result(
                     self.pick_target_resolver.target_from_boxes(
                         results[0].boxes,
                         target_label,
@@ -2374,6 +2526,15 @@ class TaskCoordinatorNode(Node):
             return target
         return replace(target, yaw_deg=float(pca_yaw_deg))
 
+    def _target_with_mask_pca_result(self, target, target_label):
+        if target is None or not target.found:
+            return target
+        self._generate_grasp_detection_mask_images_after_vlm_observe(
+            target_label,
+            grasp_point_xy=target.pixel,
+        )
+        return self._target_with_mask_pca_yaw(target, target_label)
+
     def _mask_pca_yaw_for_target(self, target_label):
         if self.state.grasp_detection_yaw_target != target_label:
             return None
@@ -2393,7 +2554,11 @@ class TaskCoordinatorNode(Node):
         )
         return adjusted_yaw_deg
 
-    def _generate_grasp_detection_mask_images_after_vlm_observe(self, target_label):
+    def _generate_grasp_detection_mask_images_after_vlm_observe(
+        self,
+        target_label,
+        grasp_point_xy=None,
+    ):
         if not self.frame_processor.has_camera_state():
             self._task_log("perception").warn(
                 "camera state unavailable for grasp detection mask image",
@@ -2426,6 +2591,8 @@ class TaskCoordinatorNode(Node):
             depth_image=self.state.depth_image.copy(),
             bbox_xyxy=bbox_xyxy,
             target_label=target_label,
+            grasp_point_xy=grasp_point_xy,
+            intrinsics=self.state.intrinsics,
             interrupted=self._motion_interrupted,
         )
         if response is None:
@@ -2440,18 +2607,31 @@ class TaskCoordinatorNode(Node):
             self.state.grasp_detection_mask_target = None
             self.state.grasp_detection_yaw_deg = None
             self.state.grasp_detection_yaw_target = None
+            self.state.grasp_detection_width_mm = None
+            self.state.grasp_detection_width_target = None
             return None
 
         self.state.grasp_detection_mask_images = None
         self.state.grasp_detection_mask_target = None
         self.state.grasp_detection_yaw_deg = float(response.yaw_deg)
         self.state.grasp_detection_yaw_target = target_label
+        if getattr(response, "has_grasp_width_mm", False):
+            self.state.grasp_detection_width_mm = float(response.grasp_width_mm)
+            self.state.grasp_detection_width_target = target_label
+        else:
+            self.state.grasp_detection_width_mm = None
+            self.state.grasp_detection_width_target = None
         self._task_log("perception", quiet_info=True).info(
             "SAM yaw service result saved",
             step="grasp_mask",
             event="done",
             target=target_label,
             yaw_deg=f"{response.yaw_deg:.1f}",
+            width_mm=(
+                f"{float(response.grasp_width_mm):.1f}"
+                if getattr(response, "has_grasp_width_mm", False)
+                else "none"
+            ),
             path=response.debug_image_path,
         )
         return response
