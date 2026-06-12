@@ -833,6 +833,15 @@ class PickSequenceRunner:
         if self.tool_hold_monitor is not None:
             self.tool_hold_monitor.stop("handoff_release")
         self.gripper.open_gripper()
+        self.state.tool_mask_locked = False
+        self.state.last_tool_mask_lock_result = None
+        self.state._publish_robot_status(
+            "released_to_human",
+            tool_name=self.state.target_label,
+            action="bring",
+            message="사용자에게 공구 전달을 완료하고 mask lock을 해제합니다.",
+            command=self.state.current_command,
+        )
         cooperative_wait(HANDOFF_RELEASE_WAIT_SEC)
         return True
 
