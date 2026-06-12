@@ -37,6 +37,7 @@ from macgyvbot_config.command import (
 from macgyvbot_config.models import (
     HAND_GRASP_MODEL_NAME,
     HAND_GRASP_SAM_CHECKPOINT_NAME,
+    YOLO_CONFIDENCE_THRESHOLD,
     YOLO_MODEL_NAME,
 )
 from macgyvbot_config.robot import BASE_FRAME
@@ -238,7 +239,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "yolo_conf",
-                default_value="0.20",
+                default_value=str(YOLO_CONFIDENCE_THRESHOLD),
                 description="YOLO confidence threshold for runtime detectors.",
             ),
             DeclareLaunchArgument(
