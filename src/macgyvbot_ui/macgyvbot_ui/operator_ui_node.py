@@ -1149,10 +1149,10 @@ class OperatorUiNode(Node):
             return '손이 인식되지 않았습니다. 움직여서 카메라에 나오게 하세요!'
         if state == 'tool_dropped':
             return '공구를 떨어트렸습니다. inspection하여 다시 찾습니다.'
+        if state in ('failed', 'error'):
+            return self._short_error_chat(target_label, raw_message, reason)
 
         if raw_message:
-            if state in ('failed', 'error') and reason and reason not in raw_message:
-                return f'{raw_message} 원인: {reason}'
             return raw_message
 
         templates = {
@@ -1201,9 +1201,31 @@ class OperatorUiNode(Node):
             'vlm_error': 'VLM grasp 모델 처리 중 오류가 발생했습니다.',
         }
         message = templates.get(state, f'현재 작업 상태는 {state}입니다.')
-        if state in ('failed', 'error') and reason:
-            return f'{message} 원인: {reason}'
         return message
+
+    @staticmethod
+    def _short_error_chat(target_label, raw_message, reason):
+        reason_key = str(reason or '').strip()
+        message = str(raw_message or '').strip()
+
+        if reason_key == 'pick_drawer_tool_not_found':
+            return f'{target_label}를 서랍에서 찾지 못했습니다.'
+        if reason_key in {'drawer_prepare_failed', 'drawer_open_failed'}:
+            return '서랍을 여는 중 문제가 발생했습니다.'
+        if reason_key in {'pose_goal_plan_failed', 'planning_failed'}:
+            return '이동 경로를 찾지 못했습니다.'
+        if reason_key in {'handoff_pose_unavailable', 'handoff_target_unavailable'}:
+            return '전달 위치를 계산하지 못했습니다.'
+        if reason_key in {'home_motion_failed', 'home_pose_unavailable'}:
+            return '홈 위치 복귀에 실패했습니다.'
+        if reason_key in {'tool_mask_lock_failed', 'mask_lock_failed'}:
+            return '공구 추적 준비에 실패했습니다.'
+
+        if message:
+            first_line = message.splitlines()[0].strip()
+            if first_line:
+                return OperatorUiNode._limit_words(first_line, 7)
+        return '작업 중 문제가 발생했습니다.'
 
     @staticmethod
     def _robot_panel_status(state, message):
@@ -1628,9 +1650,16 @@ class OperatorUiNode(Node):
             return compact
         koreanized = raw.replace('Home', '홈').replace('VLM', '모델')
         koreanized = ' '.join(koreanized.split())
-        if len(koreanized) <= 16:
-            return koreanized
-        return koreanized[:15] + '…'
+        return OperatorUiNode._limit_words(koreanized, 7)
+
+    @staticmethod
+    def _limit_words(text, max_words):
+        words = str(text or '').strip().split()
+        if not words:
+            return ''
+        if len(words) <= max_words:
+            return ' '.join(words)
+        return ' '.join(words[:max_words])
 
     def request_manual_gripper_width(self, width_mm):
         try:
