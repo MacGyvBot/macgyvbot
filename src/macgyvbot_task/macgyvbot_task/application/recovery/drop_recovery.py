@@ -446,6 +446,11 @@ def _monitor_action(task_type):
 def _recovery_failure_message(reason):
     if reason in {"target_detection_failed", "target_redetection_failed"}:
         return "공구를 못찾겠습니다. 서랍을 닫고 홈 위치로 복귀합니다."
-    if reason in {"graspability_check_failed", "grasp_execution_failed"}:
+    if reason in {
+        "motion_planning_failed",
+        "target_observe_move_failed",
+        "graspability_check_failed",
+        "grasp_execution_failed",
+    }:
         return "공구를 못잡겠습니다. 서랍을 닫고 홈 위치로 복귀합니다."
     return None

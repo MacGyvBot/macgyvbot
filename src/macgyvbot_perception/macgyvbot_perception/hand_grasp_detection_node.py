@@ -704,6 +704,11 @@ class HandGraspDetectionNode(Node):
             return
 
         if status in {"returned", "done", "failed", "cancelled"}:
+            if status == "returned" and reason == "drop_recovery_succeeded":
+                self.get_logger().info(
+                    "Drop recovery succeeded. Keeping tool mask/depth lock for resumed task."
+                )
+                return
             self._reset_tool_mask_state()
             self.mask_tracking_active = False
             if self.ml_classifier is not None:
