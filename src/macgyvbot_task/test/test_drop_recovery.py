@@ -735,6 +735,43 @@ def test_recovery_target_observe_planning_failure_closes_open_drawer(monkeypatch
     }) in status.status_updates
 
 
+def test_recovery_failed_event_with_open_drawer_uses_fallback_cleanup(monkeypatch):
+    status = FakeStatus()
+    status.drawer_open = True
+    status.opened_drawer_id = 4
+    gripper = FakeGripper()
+    logger = FakeLogger()
+    drawer_closer = FakeDrawerCloser()
+    config = RecoveryConfig(
+        robot=object(),
+        state=status,
+        close_open_drawer_fn=drawer_closer,
+    )
+
+    monkeypatch.setattr(
+        recovery_utils,
+        "move_to_observation_pose",
+        lambda *_args: (False, None),
+    )
+
+    ok = drop_recovery.run_drop_recovery(
+        status,
+        FakeMotion(),
+        gripper,
+        config,
+        logger,
+        task_type="pick",
+    )
+
+    assert not ok
+    assert len(drawer_closer.calls) == 1
+    assert ("recovering", {
+        "tool_name": "wrench",
+        "message": "recovery가 실패했습니다. 서랍을 닫고 홈 위치로 복귀합니다.",
+        "reason": "motion_planning_failed",
+    }) in status.status_updates
+
+
 def test_pick_recovery_observes_target_then_returns_home(monkeypatch):
     status = FakeStatus()
     status.target_tool = "wrench"

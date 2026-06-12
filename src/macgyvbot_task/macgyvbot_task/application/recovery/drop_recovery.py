@@ -396,7 +396,11 @@ def _fail(
         set_recovery_mode(status, False)
         return False
 
-    failure_message = _recovery_failure_message(reason)
+    failure_message = _recovery_failure_message_for_event(
+        reason,
+        event_type,
+        drawer_open=bool(getattr(status, "drawer_open", False)),
+    )
     if failure_message is not None:
         publish_recovery_status(
             status,
@@ -454,3 +458,28 @@ def _recovery_failure_message(reason):
     }:
         return "공구를 못잡겠습니다. 서랍을 닫고 홈 위치로 복귀합니다."
     return None
+
+
+def _recovery_failure_message_for_event(reason, event_type, drawer_open=False):
+    if (
+        reason in {"target_detection_failed", "target_redetection_failed"}
+        or event_type == "TARGET_NOT_FOUND"
+    ):
+        return "공구를 못찾겠습니다. 서랍을 닫고 홈 위치로 복귀합니다."
+    if (
+        reason in {
+            "motion_planning_failed",
+            "target_observe_move_failed",
+            "graspability_check_failed",
+            "grasp_execution_failed",
+        }
+        or event_type in {
+            "PLANNING_FAILED",
+            "GRASPABILITY_CHECK_FAILED",
+            "GRASP_ATTEMPT_FAILED",
+        }
+    ):
+        return "공구를 못잡겠습니다. 서랍을 닫고 홈 위치로 복귀합니다."
+    if drawer_open and str(event_type).endswith("FAILED"):
+        return "recovery가 실패했습니다. 서랍을 닫고 홈 위치로 복귀합니다."
+    return _recovery_failure_message(reason)
