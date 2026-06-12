@@ -1696,6 +1696,7 @@ class TaskCoordinatorNode(Node):
             ),
             target_observe_fn=self._move_to_drop_recovery_target_observe_pose,
             observed_tool_label_fn=self._detect_recovery_observed_tool_label,
+            close_open_drawer_fn=self._close_open_drawer_for_recovery_failure,
             detect_target_fn=lambda target_tool: self._resolve_recovery_target(
                 target_tool,
                 apply_pca_yaw=True,
@@ -1705,6 +1706,18 @@ class TaskCoordinatorNode(Node):
             drop_event=self.drop_req,
             exit_event=self.exit_req,
         )
+
+    def _close_open_drawer_for_recovery_failure(self, logger):
+        drawer_id = getattr(self.state, "opened_drawer_id", None)
+        if not getattr(self.state, "drawer_open", False) or drawer_id is None:
+            return True
+
+        if not self.drawer_flow.close_drawer(drawer_id, logger):
+            return False
+
+        self.state.drawer_open = False
+        self.state.opened_drawer_id = None
+        return True
 
     def _resolve_recovery_initial_target(
         self,
@@ -1733,9 +1746,6 @@ class TaskCoordinatorNode(Node):
             )
             return None
 
-        if apply_pca_yaw:
-            self._generate_grasp_detection_mask_images_after_vlm_observe(target_tool)
-
         color_image = self.state.color_image.copy()
         depth_image = self.state.depth_image.copy()
         intrinsics = dict(self.state.intrinsics)
@@ -1750,7 +1760,7 @@ class TaskCoordinatorNode(Node):
             use_bbox_center=True,
         )
         if apply_pca_yaw:
-            target = self._target_with_mask_pca_yaw(target, target_tool)
+            target = self._target_with_mask_pca_result(target, target_tool)
             self._set_recovery_tool_mask_lock_state(target, target_tool)
             return target
         return target

@@ -113,6 +113,8 @@ class FakeStatus:
         self.target_tool = "wrench"
         self.target_label = "screwdriver"
         self.gripper_holding = False
+        self.drawer_open = False
+        self.opened_drawer_id = None
         self.tool_mask_locked = True
         self.last_tool_mask_lock_result = {"locked": True}
         self.grasp_detection_mask_images = ["locked-image"]
@@ -127,6 +129,14 @@ class FakeStatus:
         return FakeLogger()
 
     def _publish_robot_status(self, status, **kwargs):
+        if status == "grasp_success":
+            self.tool_mask_locked = True
+            self.last_tool_mask_lock_result = {
+                "locked": True,
+                "mask_source": "DEPTH_LOCKED_TOOL",
+                "tool_roi": {"center_u": 10, "center_v": 20},
+                "reason": "drop_recovery_grasp_success",
+            }
         self.status_updates.append((status, kwargs))
 
 
@@ -170,6 +180,16 @@ class FakeMonitor:
 
     def start(self, tool_name, action, command=None):
         self.starts.append((tool_name, action, command))
+
+
+class FakeDrawerCloser:
+    def __init__(self, result=True):
+        self.result = result
+        self.calls = []
+
+    def __call__(self, logger):
+        self.calls.append(logger)
+        return self.result
 
 
 class FakeEvent:
@@ -422,8 +442,13 @@ def test_return_recovery_prefers_held_tool_and_returns_home(monkeypatch):
     assert status.held_tool == "pliers"
     assert status.gripper_holding is True
     assert status.recovery_mode is False
-    assert status.tool_mask_locked is False
-    assert status.last_tool_mask_lock_result is None
+    assert status.tool_mask_locked is True
+    assert status.last_tool_mask_lock_result == {
+        "locked": True,
+        "mask_source": "DEPTH_LOCKED_TOOL",
+        "tool_roi": {"center_u": 10, "center_v": 20},
+        "reason": "drop_recovery_grasp_success",
+    }
     assert status.grasp_detection_yaw_deg is None
     assert [
         update[1].get("reason")
@@ -587,6 +612,87 @@ def test_recovery_cleanup_returns_home(monkeypatch):
     assert ok
     assert status.gripper_holding is True
     assert status.recovery_mode is False
+
+
+def test_recovery_not_found_closes_open_drawer_then_returns_home(monkeypatch):
+    status = FakeStatus()
+    status.drawer_open = True
+    status.opened_drawer_id = 1
+    gripper = FakeGripper()
+    logger = FakeLogger()
+    drawer_closer = FakeDrawerCloser()
+    motion = FakeMotion()
+    config = RecoveryConfig(
+        robot=object(),
+        state=status,
+        detect_target_fn=lambda _target: None,
+        close_open_drawer_fn=drawer_closer,
+    )
+
+    monkeypatch.setattr(
+        recovery_utils,
+        "move_to_observation_pose",
+        lambda *_args: (True, None),
+    )
+
+    ok = drop_recovery.run_drop_recovery(
+        status,
+        motion,
+        gripper,
+        config,
+        logger,
+        task_type="pick",
+    )
+
+    assert not ok
+    assert len(drawer_closer.calls) == 1
+    assert status.recovery_mode is False
+    assert ("recovering", {
+        "tool_name": "wrench",
+        "message": "공구를 못찾겠습니다. 서랍을 닫고 홈 위치로 복귀합니다.",
+        "reason": "target_detection_failed",
+    }) in status.status_updates
+
+
+def test_recovery_not_graspable_closes_open_drawer_then_returns_home(monkeypatch):
+    status = FakeStatus()
+    status.drawer_open = True
+    status.opened_drawer_id = 2
+    gripper = FakeGripper()
+    logger = FakeLogger()
+    drawer_closer = FakeDrawerCloser()
+    detection = types.SimpleNamespace(found=True, base_xyz=(0.3, 0.1, 0.2))
+    config = RecoveryConfig(
+        robot=object(),
+        state=status,
+        detect_target_fn=lambda _target: detection,
+        close_open_drawer_fn=drawer_closer,
+    )
+
+    monkeypatch.setattr(
+        recovery_utils,
+        "move_to_observation_pose",
+        lambda *_args: (True, None),
+    )
+    monkeypatch.setattr(drop_recovery, "is_graspable", lambda *_args: False)
+
+    ok = drop_recovery.run_drop_recovery(
+        status,
+        FakeMotion(),
+        gripper,
+        config,
+        logger,
+        task_type="pick",
+    )
+
+    assert not ok
+    assert len(drawer_closer.calls) == 1
+    assert status.recovery_mode is False
+    assert ("recovering", {
+        "tool_name": "wrench",
+        "message": "공구를 못잡겠습니다. 서랍을 닫고 홈 위치로 복귀합니다.",
+        "reason": "graspability_check_failed",
+    }) in status.status_updates
 
 
 def test_pick_recovery_observes_target_then_returns_home(monkeypatch):

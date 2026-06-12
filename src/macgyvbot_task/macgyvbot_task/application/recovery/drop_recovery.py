@@ -7,16 +7,19 @@ from macgyvbot_task.application.recovery.recovery_utils import (
     attempt_grasp,
     cleanup_after_recovery,
     clear_recovery_perception_lock,
+    close_open_drawer_after_recovery_failure,
     detect_target_tool,
     is_graspable,
     log_recovery_event,
     move_to_inspection_pose,
     normalize_tool_name,
     open_gripper_after_inspection,
+    publish_recovery_grasp_success,
     publish_recovery_status,
     recovery_restart_requested,
     run_recovery_step_with_pause_retry,
     set_recovery_mode,
+    wait_for_recovery_tool_mask_lock,
 )
 
 
@@ -259,6 +262,27 @@ def run_drop_recovery(
 
     status.held_tool = target_tool
     status.gripper_holding = True
+    publish_recovery_grasp_success(status, config, target_tool)
+    if not run_recovery_step_with_pause_retry(
+        config,
+        status,
+        logger,
+        target_tool,
+        "recovery_tool_mask_lock",
+        lambda: wait_for_recovery_tool_mask_lock(config, logger, target_tool),
+    ):
+        return _fail(
+            status,
+            motion_controller,
+            config,
+            logger,
+            task_type,
+            target_tool,
+            "tool_mask_lock_failed",
+            "RECOVERY_FAILED",
+            f"{task_type} recovery tool mask lock failed after grasp",
+        )
+
     if config.tool_hold_monitor is not None:
         config.tool_hold_monitor.start(target_tool, _monitor_action(task_type), config.command)
 
@@ -372,6 +396,23 @@ def _fail(
         set_recovery_mode(status, False)
         return False
 
+    failure_message = _recovery_failure_message(reason)
+    if failure_message is not None:
+        publish_recovery_status(
+            status,
+            "recovering",
+            target_tool,
+            failure_message,
+            reason=reason,
+        )
+        close_open_drawer_after_recovery_failure(
+            status,
+            config,
+            logger,
+            target_tool,
+            reason,
+        )
+
     log_recovery_event(
         logger,
         event_type,
@@ -400,3 +441,11 @@ def _monitor_action(task_type):
     if task_type == "return":
         return "return"
     return "bring"
+
+
+def _recovery_failure_message(reason):
+    if reason in {"target_detection_failed", "target_redetection_failed"}:
+        return "공구를 못찾겠습니다. 서랍을 닫고 홈 위치로 복귀합니다."
+    if reason in {"graspability_check_failed", "grasp_execution_failed"}:
+        return "공구를 못잡겠습니다. 서랍을 닫고 홈 위치로 복귀합니다."
+    return None

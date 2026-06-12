@@ -8,6 +8,8 @@ import time
 from typing import Any
 
 from macgyvbot_config.grasp import GRASP_RETRY_LIMIT
+from macgyvbot_config.hand_grasp import HAND_GRASP_MASK_LOCK_TIMEOUT_SEC
+from macgyvbot_config.handoff import HANDOFF_WAIT_POLL_SEC
 from macgyvbot_config.pick import PICK_PREGRASP_REOPEN_WAIT_SEC
 from macgyvbot_manipulation.grasp_verifier import GraspVerifier
 from macgyvbot_manipulation.handover_targeting import move_to_observation_pose
@@ -42,6 +44,7 @@ class RecoveryConfig:
     detect_target_fn: Callable[[str], Any] | None = None
     target_observe_fn: Callable[[Any, str, Any], bool] | None = None
     observed_tool_label_fn: Callable[[], str | None] | None = None
+    close_open_drawer_fn: Callable[[Any], bool] | None = None
     tool_hold_monitor: Any = None
     pause_event: Any = None
     resume_event: Any = None
@@ -554,6 +557,117 @@ def publish_recovery_status(
         message=message,
         reason=reason,
     )
+
+
+def publish_recovery_grasp_success(state, config, tool_name):
+    if state is None:
+        return
+    publisher = getattr(state, "_publish_robot_status", None)
+    if publisher is None:
+        return
+
+    if hasattr(state, "tool_mask_locked"):
+        state.tool_mask_locked = False
+    if hasattr(state, "last_tool_mask_lock_result"):
+        state.last_tool_mask_lock_result = None
+
+    command = getattr(config, "command", None) or getattr(state, "current_command", None)
+    action = None
+    if isinstance(command, dict):
+        action = command.get("action")
+
+    publisher(
+        "grasp_success",
+        tool_name=tool_name,
+        action=action,
+        message="recovery grasp succeeded.",
+        reason="drop_recovery_grasp_success",
+        command=command,
+    )
+
+
+def wait_for_recovery_tool_mask_lock(config: RecoveryConfig, logger, target_tool) -> bool:
+    state = getattr(config, "state", None)
+    if state is None:
+        return False
+
+    start_time = time.monotonic()
+    wait_fn = getattr(config, "wait_fn", cooperative_wait)
+    while True:
+        if _recovery_interrupted(config):
+            return False
+
+        result = getattr(state, "last_tool_mask_lock_result", None)
+        if getattr(state, "tool_mask_locked", False) and result is not None:
+            log_info(
+                logger,
+                "recovery tool mask lock confirmed",
+                step="recovery_tool_mask_lock",
+                event="done",
+                target=target_tool,
+                source=result.get("mask_source"),
+                roi=result.get("tool_roi"),
+            )
+            return True
+
+        if result is not None and result.get("locked") is False:
+            log_warn(
+                logger,
+                "recovery tool mask lock failed",
+                step="recovery_tool_mask_lock",
+                event="fail",
+                target=target_tool,
+                reason=result.get("reason", "unknown"),
+            )
+            return False
+
+        if time.monotonic() - start_time >= HAND_GRASP_MASK_LOCK_TIMEOUT_SEC:
+            log_warn(
+                logger,
+                "recovery tool mask lock timed out",
+                step="recovery_tool_mask_lock",
+                event="timeout",
+                target=target_tool,
+                timeout_sec=HAND_GRASP_MASK_LOCK_TIMEOUT_SEC,
+            )
+            return False
+
+        wait_fn(HANDOFF_WAIT_POLL_SEC)
+
+
+def close_open_drawer_after_recovery_failure(
+    status,
+    config: RecoveryConfig,
+    logger,
+    target_tool,
+    reason,
+):
+    drawer_is_open = bool(getattr(status, "drawer_open", False))
+    if not drawer_is_open:
+        return True
+
+    close_drawer = getattr(config, "close_open_drawer_fn", None)
+    if close_drawer is None:
+        log_warn(
+            logger,
+            "recovery failure drawer close unavailable",
+            step="recovery_drawer_close",
+            event="skip",
+            target=target_tool,
+            reason=reason,
+        )
+        return False
+
+    log_info(
+        logger,
+        "close drawer after recovery failure",
+        step="recovery_drawer_close",
+        event="start",
+        target=target_tool,
+        reason=reason,
+        drawer_id=getattr(status, "opened_drawer_id", None),
+    )
+    return bool(close_drawer(logger))
 
 
 def normalize_tool_name(tool_name) -> str:
