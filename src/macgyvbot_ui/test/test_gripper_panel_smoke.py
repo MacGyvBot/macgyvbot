@@ -50,7 +50,6 @@ class GripperPanelSmokeTest(unittest.TestCase):
 
         self.assertTrue(self.window._gripper_slider.isEnabled())
         self.assertTrue(self.window._gripper_width_input.isEnabled())
-        self.assertEqual(self.window._gripper_value.text(), "폭: 42 mm")
         self.assertEqual(self.window._gripper_width_input.value(), 42)
         self.assertEqual(self.gripper_widths, [])
 
@@ -66,7 +65,7 @@ class GripperPanelSmokeTest(unittest.TestCase):
         self.window._gripper_width_input.setValue(17)
 
         self.assertEqual(self.window._gripper_slider.value(), 17)
-        self.assertEqual(self.window._gripper_value.text(), "폭: 17 mm")
+        self.assertEqual(self.window._gripper_width_input.value(), 17)
         self.assertEqual(self.gripper_widths, [])
 
     def test_gripper_panel_disable_reason_is_visible(self):

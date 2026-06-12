@@ -64,6 +64,15 @@ class VoiceCommandWindowSmokeTest(unittest.TestCase):
             ),
         )
 
+    def test_task_log_accepts_runtime_structured_log(self):
+        structured = (
+            '[pkg] ui              | [pipe] operator_ui'
+            '                   | [msg] "GUI 연결 완료"'
+        )
+        self.window.append_task_log("info", structured)
+
+        self.assertEqual(self.window._task_log.text(), structured)
+
     def test_chat_and_quick_reply_paths_publish_user_text(self):
         self.window.append_bot("손이 인식되었습니다!")
         self.window.append_system("Detector 영상: 수신 중")

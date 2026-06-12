@@ -75,7 +75,8 @@ else:
             self._camera_connection_status = QLabel('카메라 노드: 미확인')
             self._detector_connection_status = QLabel('Detector 영상: 대기 중')
             self._gui_connection_status = QLabel('GUI 노드: 연결됨')
-            self._current_status = QLabel('현재 상태: 명령 대기')
+            self._current_status = QLabel('대기')
+            self._current_status.setAlignment(Qt.AlignCenter)
             self._task_target_status = QLabel('작업 대상: 없음')
             self._pause_button = QPushButton('멈춤')
             self._pause_button.setObjectName('pauseControlButton')
@@ -166,9 +167,6 @@ else:
             gripper_title.setObjectName('gripperPanelTitle')
             self._gripper_status = QLabel('비활성화: 안전한 제어 인터페이스 없음')
             self._gripper_status.setObjectName('gripperStatus')
-            self._gripper_value = QLabel('폭: 80 mm')
-            self._gripper_value.setObjectName('gripperValue')
-
             self._gripper_slider = QSlider(Qt.Horizontal)
             self._gripper_slider.setObjectName('gripperSlider')
             self._gripper_slider.setRange(0, 80)
@@ -194,7 +192,7 @@ else:
             gripper_width_layout = QHBoxLayout()
             gripper_width_layout.setContentsMargins(0, 0, 0, 0)
             gripper_width_layout.setSpacing(8)
-            gripper_width_layout.addWidget(self._gripper_value)
+            gripper_width_layout.addStretch(1)
             gripper_width_layout.addWidget(self._gripper_width_input)
 
             gripper_scale_layout = QHBoxLayout()
@@ -365,7 +363,8 @@ else:
             self._append_command_card(command)
 
         def set_status(self, text):
-            self._current_status.setText(f'현재 상태: {text}')
+            text = str(text or '').strip() or '대기'
+            self._current_status.setText(text)
 
         def set_connection_status(
             self,
@@ -432,7 +431,6 @@ else:
 
         def _set_gripper_width_value(self, value, *, source):
             width_mm = int(value)
-            self._gripper_value.setText(f'폭: {width_mm} mm')
 
             if source != 'slider' and self._gripper_slider.value() != width_mm:
                 self._gripper_slider.blockSignals(True)
@@ -464,15 +462,18 @@ else:
             if not message:
                 return
 
-            source = str(source or 'ui').strip() or 'ui'
-            event = str(event or 'EVENT').strip().upper() or 'EVENT'
-            detail = str(detail or '').strip()
-            entry = (
-                f'[{datetime.now().strftime("%H:%M:%S")}] '
-                f'[{source}] [{level}] {event} - {message}'
-            )
-            if detail:
-                entry = f'{entry} | {detail}'
+            if message.startswith('[pkg] '):
+                entry = message
+            else:
+                source = str(source or 'ui').strip() or 'ui'
+                event = str(event or 'EVENT').strip().upper() or 'EVENT'
+                detail = str(detail or '').strip()
+                entry = (
+                    f'[{datetime.now().strftime("%H:%M:%S")}] '
+                    f'[{source}] [{level}] {event} - {message}'
+                )
+                if detail:
+                    entry = f'{entry} | {detail}'
             self._task_log_entries.append(entry)
             self._task_log_entries = self._task_log_entries[-80:]
             self._task_log.setText('\n'.join(self._task_log_entries))
@@ -996,11 +997,6 @@ else:
                     font-size: 15px;
                     font-weight: 900;
                 }
-                QLabel#gripperValue {
-                    color: #34536F;
-                    font-size: 13px;
-                    font-weight: 800;
-                }
                 QSpinBox#gripperWidthInput {
                     background-color: #FFFFFF;
                     color: #163B5C;
@@ -1172,13 +1168,13 @@ else:
             )
             self._current_status.setStyleSheet(
                 '''
-                background-color: #FFFFFF;
-                border: 1px solid #D5E2F0;
+                background-color: #FFF4B8;
+                border: 1px solid #E2B84D;
                 border-radius: 10px;
                 padding: 8px 12px;
-                color: #49677F;
+                color: #5A4300;
                 font-size: 13px;
-                font-weight: 600;
+                font-weight: 900;
                 '''
             )
             task_style = '''
