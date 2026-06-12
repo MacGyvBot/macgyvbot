@@ -773,8 +773,11 @@ def test_drop_recovery_builds_queue_steps():
         "recovery/prepare_grasp_plan_and_yaw",
         "recovery/apply_grasp_yaw",
         "recovery/execute_grasp",
+        "recovery/publish_grasp_success",
         "recovery/wait_tool_mask_lock",
-        "recovery/cleanup",
+        "recovery/start_tool_hold_monitor",
+        "recovery/return_home",
+        "recovery/finish",
     ]
     assert all(step.retry_on_pause for step in steps[1:])
 
@@ -833,6 +836,73 @@ def test_drop_recovery_prepares_and_applies_yaw_in_separate_steps(monkeypatch):
 
     assert step_by_name["recovery/apply_grasp_yaw"].execute()
     assert motion.events == [("wrist_target", 0.5 + math.radians(30.0))]
+
+
+def test_drop_recovery_grasp_success_publish_is_idempotent():
+    status = FakeStatus()
+    logger = FakeLogger()
+    config = RecoveryConfig(
+        robot=FakeRobot(),
+        state=status,
+    )
+    steps = drop_recovery_sequence.build_drop_recovery_steps(
+        status,
+        FakeMotion(),
+        FakeGripper(),
+        config,
+        logger,
+        task_type="pick",
+    )
+    step_by_name = {step.name: step for step in steps}
+    publish_step = step_by_name["recovery/publish_grasp_success"]
+
+    assert publish_step.execute()
+    first_result = dict(status.last_tool_mask_lock_result)
+    status.tool_mask_locked = True
+    status.last_tool_mask_lock_result = {"locked": True, "reason": "already_locked"}
+
+    assert publish_step.execute()
+    assert status.tool_mask_locked is True
+    assert status.last_tool_mask_lock_result == {"locked": True, "reason": "already_locked"}
+    assert first_result["reason"] == "drop_recovery_grasp_success"
+
+
+def test_drop_recovery_mask_lock_and_monitor_start_are_separate_steps():
+    status = FakeStatus()
+    status.tool_mask_locked = True
+    status.last_tool_mask_lock_result = {
+        "locked": True,
+        "mask_source": "DEPTH_LOCKED_TOOL",
+    }
+    monitor = FakeMonitor()
+    config = RecoveryConfig(
+        robot=FakeRobot(),
+        state=status,
+        command={"action": "bring", "tool_name": "wrench"},
+        tool_hold_monitor=monitor,
+    )
+    steps = drop_recovery_sequence.build_drop_recovery_steps(
+        status,
+        FakeMotion(),
+        FakeGripper(),
+        config,
+        FakeLogger(),
+        task_type="pick",
+    )
+    step_by_name = {step.name: step for step in steps}
+
+    assert step_by_name["recovery/wait_tool_mask_lock"].execute()
+    assert monitor.starts == []
+
+    assert step_by_name["recovery/start_tool_hold_monitor"].execute()
+    assert monitor.starts == [
+        ("wrench", "bring", {"action": "bring", "tool_name": "wrench"})
+    ]
+
+    assert step_by_name["recovery/start_tool_hold_monitor"].execute()
+    assert monitor.starts == [
+        ("wrench", "bring", {"action": "bring", "tool_name": "wrench"})
+    ]
 
 
 def test_drop_recovery_queue_step_returns_immediately_when_paused(monkeypatch):

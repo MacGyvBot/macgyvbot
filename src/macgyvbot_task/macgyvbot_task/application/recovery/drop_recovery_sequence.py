@@ -26,7 +26,6 @@ from macgyvbot_task.application.recovery.drop_recovery import (
 from macgyvbot_task.application.recovery.recovery_utils import (
     _pregrasp_depth_adjust_for_recovery,
     _set_limited_gripper_width_for_recovery,
-    cleanup_after_recovery,
     clear_recovery_perception_lock,
     is_graspable,
     log_recovery_event,
@@ -35,6 +34,7 @@ from macgyvbot_task.application.recovery.recovery_utils import (
     publish_recovery_grasp_success,
     publish_recovery_status,
     recovery_restart_requested,
+    return_home,
     set_recovery_mode,
     wait_for_recovery_tool_mask_lock,
 )
@@ -66,6 +66,8 @@ class DropRecoverySequenceRunner:
         self.grasp_plan = None
         self.grasp_ori = None
         self.grasp_wrist_target_rad = None
+        self.grasp_success_published = False
+        self.tool_hold_monitor_started = False
 
     def build_steps(self):
         return [
@@ -111,12 +113,24 @@ class DropRecoverySequenceRunner:
                 self._execute_grasp,
             ),
             TaskStep(
+                "recovery/publish_grasp_success",
+                self._publish_grasp_success,
+            ),
+            TaskStep(
                 "recovery/wait_tool_mask_lock",
                 self._wait_tool_mask_lock,
             ),
             TaskStep(
-                "recovery/cleanup",
-                self._cleanup,
+                "recovery/start_tool_hold_monitor",
+                self._start_tool_hold_monitor,
+            ),
+            TaskStep(
+                "recovery/return_home",
+                self._return_home,
+            ),
+            TaskStep(
+                "recovery/finish",
+                self._finish,
             ),
         ]
 
@@ -410,9 +424,6 @@ class DropRecoverySequenceRunner:
         if not ok:
             return False
 
-        self.status.held_tool = self.target_tool
-        self.status.gripper_holding = True
-        publish_recovery_grasp_success(self.status, self.config, self.target_tool)
         return True
 
     def _execute_grasp_action(self):
@@ -474,6 +485,18 @@ class DropRecoverySequenceRunner:
         )
         return bool(verifier.try_grasp(self.logger, failure_prefix="recovery grasp"))
 
+    def _publish_grasp_success(self):
+        if recovery_restart_requested(self.config) or self._paused_or_exiting():
+            return False
+        if self.grasp_success_published:
+            return True
+
+        self.status.held_tool = self.target_tool
+        self.status.gripper_holding = True
+        publish_recovery_grasp_success(self.status, self.config, self.target_tool)
+        self.grasp_success_published = True
+        return not self._paused_or_exiting()
+
     def _current_wrist_joint_rad(self):
         current_wrist = getattr(self.motion_controller, "current_wrist_joint_rad", None)
         if current_wrist is None:
@@ -502,42 +525,47 @@ class DropRecoverySequenceRunner:
         if not ok:
             return False
 
+        return True
+
+    def _start_tool_hold_monitor(self):
+        if recovery_restart_requested(self.config) or self._paused_or_exiting():
+            return False
+        if self.tool_hold_monitor_started:
+            return True
+
         if self.config.tool_hold_monitor is not None:
             self.config.tool_hold_monitor.start(
                 self.target_tool,
                 _monitor_action(self.task_type),
                 self.config.command,
             )
+        self.tool_hold_monitor_started = True
         return True
 
-    def _cleanup(self):
-        if recovery_restart_requested(self.config) or self._paused_or_exiting():
-            return False
-
-        cleanup_ok = cleanup_after_recovery(
-            self.status,
-            self.motion_controller,
-            self.config,
-            self.logger,
-            self.task_type,
-            self.target_tool,
-            reason="recovery_succeeded",
-            finish_recovery_mode=False,
+    def _return_home(self):
+        return self._run_queue_step(
+            "recovery_return_home",
+            lambda: return_home(self.motion_controller, self.config),
+            "return_home_failed",
+            "RECOVERY_FAILED",
+            f"{self.task_type} recovery Home return failed",
         )
+
+    def _finish(self):
         if recovery_restart_requested(self.config) or self._paused_or_exiting():
             return False
-
         log_recovery_event(
             self.logger,
-            "RECOVERY_SUCCEEDED" if cleanup_ok else "RECOVERY_FAILED",
+            "RECOVERY_SUCCEEDED",
             f"{self.task_type} recovery finished",
             {
                 "task_type": self.task_type,
                 "target_tool": self.target_tool,
-                "cleanup_ok": cleanup_ok,
+                "cleanup_ok": True,
+                "gripper_holding": getattr(self.status, "gripper_holding", False),
             },
         )
-        return bool(cleanup_ok)
+        return True
 
     def _run_queue_step(self, reason, step_fn, failure_reason, event_type, message):
         if recovery_restart_requested(self.config) or self._paused_or_exiting():
