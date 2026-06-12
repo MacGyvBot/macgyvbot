@@ -66,8 +66,35 @@ sys.modules.setdefault("rclpy", rclpy_module)
 sys.modules.setdefault("rclpy.action", rclpy_action_module)
 
 from macgyvbot_manipulation.moveit_controller import (  # noqa: E402
+    MoveItController,
     _negative_first_equivalent_values,
 )
+
+
+class FakeLogger:
+    def __init__(self):
+        self.errors = []
+
+    def error(self, message):
+        self.errors.append(message)
+
+
+class FakeDrawerCollisionScene:
+    def __init__(self, ready=True):
+        self.ready = ready
+        self.profile_keys = []
+        self.ready_profiles = []
+
+    def profile_for_scene_key(self, scene_key):
+        self.profile_keys.append(scene_key)
+        return "drawer_only"
+
+    def is_ready(self, profile):
+        self.ready_profiles.append(profile)
+        return self.ready
+
+    def ensure_ready_for_scene_key(self, *_args, **_kwargs):
+        raise AssertionError("planning precondition must not refresh drawer scene")
 
 
 def test_positive_final_angle_prefers_negative_rotation_candidate():
@@ -112,3 +139,41 @@ def test_drawer_equivalent_candidates_include_opposite_positive_rotation():
     assert math.isclose(deltas[0], -220.0)
     assert any(math.isclose(delta, -220.0) for delta in deltas)
     assert any(math.isclose(delta, 140.0) for delta in deltas)
+
+
+def test_drawer_scene_precondition_checks_scene_key_without_refresh():
+    drawer_scene = FakeDrawerCollisionScene(ready=True)
+    controller = MoveItController(
+        robot=None,
+        arm=None,
+        params=None,
+        drawer_collision_scene=drawer_scene,
+        enable_gripper_self_collision_acm=False,
+    )
+
+    assert controller._ensure_drawer_collision_scene_ready(
+        FakeLogger(),
+        collision_scene_key="handoff/move_to_user",
+    )
+    assert drawer_scene.profile_keys == ["handoff/move_to_user"]
+    assert drawer_scene.ready_profiles == ["drawer_only"]
+
+
+def test_drawer_scene_precondition_blocks_when_initial_scene_missing():
+    drawer_scene = FakeDrawerCollisionScene(ready=False)
+    logger = FakeLogger()
+    controller = MoveItController(
+        robot=None,
+        arm=None,
+        params=None,
+        drawer_collision_scene=drawer_scene,
+        enable_gripper_self_collision_acm=False,
+    )
+
+    assert not controller._ensure_drawer_collision_scene_ready(
+        logger,
+        collision_scene_key="drawer/approach_to_close",
+    )
+    assert drawer_scene.profile_keys == ["drawer/approach_to_close"]
+    assert drawer_scene.ready_profiles == ["drawer_only"]
+    assert logger.errors

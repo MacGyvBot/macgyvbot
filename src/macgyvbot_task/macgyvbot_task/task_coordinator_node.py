@@ -415,15 +415,8 @@ class TaskCoordinatorNode(Node):
             self,
             moveit_robot=self.robot,
         )
-        self._drawer_collision_scene_retries_remaining = 0
-        self._drawer_collision_scene_timer = None
         if self.enable_drawer_collision_scene:
             self._apply_drawer_collision_scene()
-            self._drawer_collision_scene_retries_remaining = 3
-            self._drawer_collision_scene_timer = self.create_timer(
-                1.0,
-                self._retry_drawer_collision_scene,
-            )
         self.depth_projector = DepthProjector(self._base_to_camera_matrix)
         self.hand_grasp_adapter = HandGraspResultAdapter(
             self.state,
@@ -556,16 +549,6 @@ class TaskCoordinatorNode(Node):
 
     def _apply_drawer_collision_scene(self):
         return self.drawer_collision_scene.apply(self.get_logger())
-
-    def _retry_drawer_collision_scene(self):
-        if self._drawer_collision_scene_retries_remaining <= 0:
-            if self._drawer_collision_scene_timer is not None:
-                self.destroy_timer(self._drawer_collision_scene_timer)
-                self._drawer_collision_scene_timer = None
-            return
-
-        self._apply_drawer_collision_scene()
-        self._drawer_collision_scene_retries_remaining -= 1
 
     def _preload_vlm_after_startup(self):
         if self._vlm_preload_timer is not None:
