@@ -15,9 +15,10 @@ typed request/response contract instead of a streamed topic.
 | Topic | Type | Publisher | Subscriber | Payload |
 | --- | --- | --- | --- | --- |
 | `/stt_text` | `macgyvbot_interfaces/msg/CommandText` | `macgyvbot_ui` operator UI, optional STT source | `macgyvbot_command` | Typed recognized or operator-entered text |
+| `/tts_text` | `macgyvbot_interfaces/msg/CommandText` | `macgyvbot_ui` bot chat renderer | `macgyvbot_command` TTS | Bot chat text that was actually rendered in the GUI and should be spoken |
 | `/tool_command` | `macgyvbot_interfaces/msg/ToolCommand` | `macgyvbot_command` | `macgyvbot_task`, `macgyvbot_ui` | Tool command including `bring`, `return`, `release`, and idle-only `home` |
 | `/task_request` | `macgyvbot_interfaces/msg/TaskRequest` | `macgyvbot_task` main router | `macgyvbot_task` coordinator | Typed task execution request routed from command handling to task execution |
-| `/command_feedback` | `macgyvbot_interfaces/msg/CommandFeedback` | `macgyvbot_command` | `macgyvbot_command` TTS, `macgyvbot_ui` | Command interpretation feedback |
+| `/command_feedback` | `macgyvbot_interfaces/msg/CommandFeedback` | `macgyvbot_command` | `macgyvbot_ui` | Command interpretation feedback rendered by the GUI; GUI-rendered bot text is forwarded to `/tts_text` |
 | `/task_control` | `macgyvbot_interfaces/msg/RobotTaskControl` | `macgyvbot_command`, operator/manual tools | `macgyvbot_task` | `cancel` clears current work/queue and remains idle, while `exit` also returns Home and reports terminal status for UI shutdown |
 | `/command_shutdown` | `macgyvbot_interfaces/msg/CommandShutdown` | `macgyvbot_ui` | `macgyvbot_command` | UI lifecycle signal only; closes the headless command node without issuing robot task control |
 

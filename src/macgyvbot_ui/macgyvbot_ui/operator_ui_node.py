@@ -24,6 +24,7 @@ from macgyvbot_config.topics import (
     TASK_CONTROL_TOPIC,
     TOOL_DROP_TOPIC,
     TOOL_COMMAND_TOPIC,
+    TTS_TEXT_TOPIC,
 )
 from macgyvbot_config.ui import (
     UI_CAMERA_TIMEOUT_SEC,
@@ -185,6 +186,7 @@ class OperatorUiNode(Node):
         super().__init__('operator_ui_node')
 
         self.declare_parameter('stt_text_topic', STT_TEXT_TOPIC)
+        self.declare_parameter('tts_text_topic', TTS_TEXT_TOPIC)
         self.declare_parameter('tool_command_topic', TOOL_COMMAND_TOPIC)
         self.declare_parameter('command_feedback_topic', COMMAND_FEEDBACK_TOPIC)
         self.declare_parameter('robot_status_topic', ROBOT_STATUS_TOPIC)
@@ -210,6 +212,7 @@ class OperatorUiNode(Node):
             )
 
         stt_text_topic = self.get_parameter('stt_text_topic').value
+        tts_text_topic = self.get_parameter('tts_text_topic').value
         tool_command_topic = self.get_parameter('tool_command_topic').value
         command_feedback_topic = self.get_parameter('command_feedback_topic').value
         robot_status_topic = self.get_parameter('robot_status_topic').value
@@ -272,6 +275,7 @@ class OperatorUiNode(Node):
         )
 
         self._stt_pub = self.create_publisher(CommandText, stt_text_topic, 10)
+        self._tts_pub = self.create_publisher(CommandText, tts_text_topic, 10)
         self._command_shutdown_pub = self.create_publisher(
             CommandShutdown,
             COMMAND_SHUTDOWN_TOPIC,
@@ -1524,6 +1528,17 @@ class OperatorUiNode(Node):
     def _append_bot(self, text):
         if self.window is not None:
             self.window.append_bot(text)
+            self._publish_tts_text(text)
+
+    def _publish_tts_text(self, text):
+        message = str(text or '').strip()
+        if not message:
+            return
+
+        msg = CommandText()
+        msg.text = message
+        msg.source = 'operator_ui_chat'
+        self._tts_pub.publish(msg)
 
     def _append_event_chat(self, event, text, force=False):
         message = str(text or '').strip()
