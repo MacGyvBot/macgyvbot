@@ -33,6 +33,15 @@ OBSERVATION_JOINTS = {
     "joint_6": math.radians(90.0),
 }
 
+RECOVERY_INSPECTION_JOINTS = {
+    "joint_1": math.radians(0.0),
+    "joint_2": math.radians(-25.38),
+    "joint_3": math.radians(44.24),
+    "joint_4": math.radians(0.0),
+    "joint_5": math.radians(133.39),
+    "joint_6": math.radians(90.0),
+}
+
 DEFAULT_TRAJECTORY_ACTION_NAME = "/dsr_moveit_controller/follow_joint_trajectory"
 POSE_GOAL_IK_TIMEOUT_SEC = 0.1
 POSE_GOAL_IK_MAX_SEEDS = 10

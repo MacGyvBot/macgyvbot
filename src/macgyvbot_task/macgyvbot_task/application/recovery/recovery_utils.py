@@ -7,10 +7,13 @@ from dataclasses import dataclass
 import time
 from typing import Any
 
+from moveit.core.robot_state import RobotState
+
 from macgyvbot_config.grasp import GRASP_RETRY_LIMIT
 from macgyvbot_config.hand_grasp import HAND_GRASP_MASK_LOCK_TIMEOUT_SEC
 from macgyvbot_config.handoff import HANDOFF_WAIT_POLL_SEC
 from macgyvbot_config.pick import PICK_PREGRASP_REOPEN_WAIT_SEC
+from macgyvbot_config.robot import RECOVERY_INSPECTION_JOINTS
 from macgyvbot_manipulation.grasp_verifier import GraspVerifier
 from macgyvbot_manipulation.handover_targeting import move_to_observation_pose
 from macgyvbot_manipulation.robot_safezone import SAFE_Z_MIN
@@ -93,7 +96,7 @@ def clear_recovery_perception_lock(status, logger=None):
 
 
 def move_to_inspection_pose(motion_controller, config: RecoveryConfig):
-    """Move to the existing hand inspection pose used by return handoff."""
+    """Move to the recovery-specific inspection joint pose."""
     logger = _logger(config)
     if config.robot is None:
         log_error(
@@ -105,12 +108,24 @@ def move_to_inspection_pose(motion_controller, config: RecoveryConfig):
         )
         return False
 
-    ok, _start_pose = move_to_observation_pose(
-        motion_controller,
-        config.robot,
+    state_goal = RobotState(config.robot.get_robot_model())
+    state_goal.joint_positions = dict(RECOVERY_INSPECTION_JOINTS)
+    state_goal.update()
+
+    log_info(
         logger,
+        "move to recovery inspection pose",
+        step="recovery",
+        event="start",
+        joints="j1=0,j2=-25.38,j3=44.24,j4=0,j5=133.39,j6=90.0",
     )
-    return bool(ok)
+    return bool(
+        motion_controller.plan_and_execute(
+            logger,
+            state_goal=state_goal,
+            collision_scene_key="recovery/inspection_pose",
+        )
+    )
 
 
 def run_recovery_step_with_pause_retry(
