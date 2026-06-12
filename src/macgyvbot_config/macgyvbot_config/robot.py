@@ -7,6 +7,8 @@ BASE_FRAME = "base_link"
 WORLD_FRAME = "world"
 EE_LINK = "link_6"
 WRIST_JOINT_NAME = "joint_6"
+WRIST_JOINT_LOWER_LIMIT_RAD = -2.0 * math.pi
+WRIST_JOINT_UPPER_LIMIT_RAD = 2.0 * math.pi
 
 SAFE_X_MIN = 0.0
 SAFE_Y_MIN = -0.3
