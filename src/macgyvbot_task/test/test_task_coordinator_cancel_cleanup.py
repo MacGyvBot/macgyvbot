@@ -1,0 +1,287 @@
+import sys
+import threading
+import types
+from collections import deque
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+for package_path in (
+    REPO_ROOT / "src" / "macgyvbot_task",
+    REPO_ROOT / "src" / "macgyvbot_config",
+    REPO_ROOT / "src" / "macgyvbot_domain",
+    REPO_ROOT / "src" / "macgyvbot_manipulation",
+    REPO_ROOT / "src" / "macgyvbot_perception",
+    REPO_ROOT / "src" / "macgyvbot_resources",
+):
+    sys.path.insert(0, str(package_path))
+
+
+class FakeLogger:
+    def debug(self, *_args, **_kwargs):
+        pass
+
+    def info(self, *_args, **_kwargs):
+        pass
+
+    def warn(self, *_args, **_kwargs):
+        pass
+
+    def error(self, *_args, **_kwargs):
+        pass
+
+
+class FakeMotion:
+    def __init__(self):
+        self.cancel_reasons = []
+
+    def cancel_current_goal(self, _logger, reason):
+        self.cancel_reasons.append(reason)
+
+
+class FakeToolHoldMonitor:
+    def __init__(self):
+        self.stop_reasons = []
+
+    def stop(self, reason):
+        self.stop_reasons.append(reason)
+
+
+def _module(name, **attrs):
+    module = types.ModuleType(name)
+    for key, value in attrs.items():
+        setattr(module, key, value)
+    return module
+
+
+def _class(name):
+    return type(name, (), {})
+
+
+def _install_task_coordinator_import_stubs(monkeypatch):
+    rclpy_module = _module(
+        "rclpy",
+        ok=lambda: True,
+        init=lambda *args, **kwargs: None,
+        shutdown=lambda: None,
+    )
+    monkeypatch.setitem(sys.modules, "rclpy", rclpy_module)
+    monkeypatch.setitem(
+        sys.modules,
+        "rclpy.node",
+        _module("rclpy.node", Node=_class("Node")),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "rclpy.executors",
+        _module(
+            "rclpy.executors",
+            MultiThreadedExecutor=_class("MultiThreadedExecutor"),
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "cv_bridge",
+        _module("cv_bridge", CvBridge=_class("CvBridge")),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "geometry_msgs",
+        _module("geometry_msgs"),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "geometry_msgs.msg",
+        _module("geometry_msgs.msg", WrenchStamped=_class("WrenchStamped")),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "sensor_msgs",
+        _module("sensor_msgs"),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "sensor_msgs.msg",
+        _module(
+            "sensor_msgs.msg",
+            CameraInfo=_class("CameraInfo"),
+            Image=_class("Image"),
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "moveit",
+        _module("moveit"),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "moveit.planning",
+        _module(
+            "moveit.planning",
+            MoveItPy=_class("MoveItPy"),
+            PlanRequestParameters=_class("PlanRequestParameters"),
+        ),
+    )
+
+    msg_module = _module(
+        "macgyvbot_interfaces.msg",
+        HumanGraspResult=_class("HumanGraspResult"),
+        RobotTaskControl=_class("RobotTaskControl"),
+        RobotTaskStatus=_class("RobotTaskStatus"),
+        TaskRequest=_class("TaskRequest"),
+        ToolCommand=_class("ToolCommand"),
+        ToolDropEvent=_class("ToolDropEvent"),
+        ToolMaskLock=_class("ToolMaskLock"),
+    )
+    srv_module = _module("macgyvbot_interfaces.srv", SetGripper=_class("SetGripper"))
+    interfaces_module = _module(
+        "macgyvbot_interfaces",
+        msg=msg_module,
+        srv=srv_module,
+    )
+    monkeypatch.setitem(sys.modules, "macgyvbot_interfaces", interfaces_module)
+    monkeypatch.setitem(sys.modules, "macgyvbot_interfaces.msg", msg_module)
+    monkeypatch.setitem(sys.modules, "macgyvbot_interfaces.srv", srv_module)
+
+    stubs = {
+        "macgyvbot_manipulation.drawer_collision_scene": {
+            "DrawerCollisionSceneManager": _class("DrawerCollisionSceneManager")
+        },
+        "macgyvbot_manipulation.drawer_motion": {
+            "DrawerMotionFlow": _class("DrawerMotionFlow")
+        },
+        "macgyvbot_manipulation.gripper_collision_scene": {
+            "GripperSelfCollisionManager": _class("GripperSelfCollisionManager")
+        },
+        "macgyvbot_manipulation.moveit_controller": {
+            "MoveItController": _class("MoveItController")
+        },
+        "macgyvbot_manipulation.onrobot_gripper": {"RG": _class("RG")},
+        "macgyvbot_manipulation.robot_pose": {
+            "get_ee_matrix": lambda *_args, **_kwargs: None,
+            "orientation_from_joint_positions": lambda *_args, **_kwargs: None,
+        },
+        "macgyvbot_perception.depth_projection": {
+            "DepthProjector": _class("DepthProjector")
+        },
+        "macgyvbot_perception.grasp_point.grasp_point_selector": {
+            "GraspPointSelector": _class("GraspPointSelector"),
+            "normalize_grasp_point_mode": lambda mode, _logger=None: mode,
+        },
+        "macgyvbot_perception.pick_target_resolver": {
+            "PickTargetResolver": _class("PickTargetResolver")
+        },
+        "macgyvbot_perception.yolo_detector": {"YoloDetector": _class("YoloDetector")},
+        "macgyvbot_resources.calibration": {
+            "resolve_calibration_file": lambda filename: filename
+        },
+        "macgyvbot_task.application.adapters.sam_yaw_service_client": {
+            "SAMYawServiceClient": _class("SAMYawServiceClient")
+        },
+        "macgyvbot_task.application.adapters.vlm_grasp_service_client": {
+            "VLMGraspServiceClient": _class("VLMGraspServiceClient")
+        },
+        "macgyvbot_task.application.display.debug_display": {
+            "DebugDisplay": _class("DebugDisplay")
+        },
+        "macgyvbot_task.application.pick_flow.pick_frame_processor": {
+            "PickFrameProcessor": _class("PickFrameProcessor")
+        },
+        "macgyvbot_task.application.pick_flow.pick_sequence": {
+            "PickSequenceRunner": _class("PickSequenceRunner")
+        },
+        "macgyvbot_task.application.return_flow.return_perception_adapter": {
+            "ReturnPerceptionAdapter": _class("ReturnPerceptionAdapter")
+        },
+        "macgyvbot_task.application.return_flow.return_sequence": {
+            "ReturnSequenceRunner": _class("ReturnSequenceRunner")
+        },
+        "macgyvbot_task.application.robot.robot_home_initializer": {
+            "RobotHomeInitializer": _class("RobotHomeInitializer")
+        },
+    }
+    for module_name, attrs in stubs.items():
+        monkeypatch.setitem(sys.modules, module_name, _module(module_name, **attrs))
+
+    monkeypatch.delitem(
+        sys.modules,
+        "macgyvbot_task.task_coordinator_node",
+        raising=False,
+    )
+
+
+def _make_cancel_node(TaskCoordinatorNode, *, active_step=False):
+    node = object.__new__(TaskCoordinatorNode)
+    node.handoff_retry_req = threading.Event()
+    node.handoff_fallback_req = threading.Event()
+    node.handoff_decision_pending = threading.Event()
+    node.exit_req = threading.Event()
+    node.pause_req = threading.Event()
+    node.resume_req = threading.Event()
+    node._queue_lock = threading.RLock()
+    node._queue = deque([("pick", object())])
+    node._current_step = object() if active_step else None
+    node._current_task_name = "pick" if active_step else None
+    node._step_thread = None
+    node._suspended_step = object()
+    node._suspended_task_name = "pick"
+    node.motion = FakeMotion()
+    node.tool_hold_monitor = FakeToolHoldMonitor()
+    node.state = types.SimpleNamespace(
+        picking=True,
+        target_label="screwdriver",
+        human_grasped_tool=True,
+        current_command={"action": "bring", "tool_name": "screwdriver"},
+        drawer_prepared_tool="screwdriver",
+        drawer_preparing_tool="screwdriver",
+        grasp_detection_mask_images=["mask"],
+        grasp_detection_mask_target="screwdriver",
+        grasp_detection_yaw_deg=10.0,
+        grasp_detection_yaw_target="screwdriver",
+        grasp_detection_width_mm=20.0,
+        grasp_detection_width_target="screwdriver",
+    )
+    node._task_log = lambda *_args, **_kwargs: FakeLogger()
+    node._motion_log = lambda *_args, **_kwargs: FakeLogger()
+    node.published_statuses = []
+    node._publish_robot_status = (
+        lambda status, **kwargs: node.published_statuses.append((status, kwargs))
+    )
+    return node
+
+
+def test_cancel_cleans_paused_suspended_state_without_active_step(monkeypatch):
+    _install_task_coordinator_import_stubs(monkeypatch)
+    from macgyvbot_task.task_coordinator_node import TaskCoordinatorNode
+
+    node = _make_cancel_node(TaskCoordinatorNode, active_step=False)
+
+    assert node._handle_cancel("취소")
+
+    assert not node.exit_req.is_set()
+    assert node.state.picking is False
+    assert node.state.target_label is None
+    assert node.state.current_command is None
+    assert node._queue == deque()
+    assert node._suspended_step is None
+    assert node._suspended_task_name is None
+    assert node.motion.cancel_reasons == ["취소"]
+    assert node.tool_hold_monitor.stop_reasons == ["task_queue_finished"]
+    assert node.published_statuses[-1][0] == "cancelled"
+
+
+def test_cancel_defers_cleanup_while_step_is_active(monkeypatch):
+    _install_task_coordinator_import_stubs(monkeypatch)
+    from macgyvbot_task.task_coordinator_node import TaskCoordinatorNode
+
+    node = _make_cancel_node(TaskCoordinatorNode, active_step=True)
+
+    assert node._handle_cancel("취소")
+
+    assert node.exit_req.is_set()
+    assert node.state.picking is True
+    assert node._queue == deque()
+    assert node._suspended_step is None
+    assert node._suspended_task_name is None
+    assert node.tool_hold_monitor.stop_reasons == []
+    assert node.published_statuses[-1][0] == "cancelled"
