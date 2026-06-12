@@ -54,8 +54,12 @@ Python/runtime 의존성 설치:
 
 ```bash
 sudo apt update
-sudo apt install -y portaudio19-dev ffmpeg && python3 -m pip install -r requirements.txt
+sudo apt install -y portaudio19-dev ffmpeg python3-pyqt5
+python3 -m pip install -r requirements.txt
 ```
+
+`python3-pyqt5`는 operator GUI 실행에 필요합니다. pip 환경을 따로 쓰는 경우에는
+`python3 -m pip install PyQt5`로 설치해도 됩니다.
 
 TTS 음성 출력은 기본적으로 `edge-tts`를 우선 사용하고, 실패 시
 `espeak-ng`로 fallback할 수 있습니다. `edge-tts`는 `requirements.txt`에
@@ -96,6 +100,10 @@ curl -fsSL https://ollama.com/install.sh | sh
 ollama pull gemma3:1b
 ollama serve
 ```
+
+`ollama serve`는 MacGyvBot launch 전에 별도 터미널에서 실행해 둡니다. LLM이
+응답하지 않으면 command parser는 규칙 기반 fallback을 사용하지만, 자연어 표현
+coverage는 줄어들 수 있습니다.
 
 빌드:
 

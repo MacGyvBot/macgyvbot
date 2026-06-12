@@ -32,7 +32,9 @@ from macgyvbot_config.robot import (
     POSE_GOAL_IK_SEED_PERTURB_RAD,
     POSE_GOAL_IK_TIMEOUT_SEC,
     POSE_GOAL_MAX_JOINT_DELTA_RAD,
+    WRIST_JOINT_LOWER_LIMIT_RAD,
     WRIST_JOINT_NAME,
+    WRIST_JOINT_UPPER_LIMIT_RAD,
 )
 from macgyvbot_config.structured_logging import format_structured_log
 from macgyvbot_manipulation.robot_pose import normalize_angle_deg
@@ -112,6 +114,49 @@ def _nearest_equivalent_positions(current_positions, target_positions):
             for current, target in zip(current_positions, target_positions)
         ],
         dtype=float,
+    )
+
+
+def _wrist_equivalent_goal_position_candidates(
+    joint_names,
+    current_positions,
+    target_positions,
+):
+    goal_positions = _nearest_equivalent_positions(
+        current_positions,
+        target_positions,
+    )
+    if WRIST_JOINT_NAME not in joint_names:
+        return [goal_positions]
+
+    wrist_index = joint_names.index(WRIST_JOINT_NAME)
+    if wrist_index >= len(goal_positions):
+        return [goal_positions]
+
+    candidates = []
+    seen = set()
+    for wrist_value in _equivalent_values(
+        current_positions[wrist_index],
+        target_positions[wrist_index],
+    ):
+        if not _wrist_joint_value_within_limits(wrist_value):
+            continue
+        candidate = np.array(goal_positions, copy=True)
+        candidate[wrist_index] = wrist_value
+        key = tuple(round(float(value), 6) for value in candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append(candidate)
+
+    return candidates
+
+
+def _wrist_joint_value_within_limits(value, tolerance_rad=1e-6):
+    return (
+        WRIST_JOINT_LOWER_LIMIT_RAD - tolerance_rad
+        <= float(value)
+        <= WRIST_JOINT_UPPER_LIMIT_RAD + tolerance_rad
     )
 
 
@@ -270,49 +315,50 @@ def _pose_goal_to_near_current_state_goal(robot, pose_goal, logger):
             ik_state.get_joint_group_positions(GROUP_NAME),
             dtype=float,
         )
-        goal_positions = _nearest_equivalent_positions(
+        for goal_positions in _wrist_equivalent_goal_position_candidates(
+            joint_names,
             current_positions,
             raw_positions,
-        )
-        candidate_key = tuple(round(float(value), 6) for value in goal_positions)
-        if candidate_key in candidate_keys:
-            continue
-        candidate_keys.add(candidate_key)
+        ):
+            candidate_key = tuple(round(float(value), 6) for value in goal_positions)
+            if candidate_key in candidate_keys:
+                continue
+            candidate_keys.add(candidate_key)
 
-        goal_state = RobotState(robot_model)
-        goal_state.set_joint_group_positions(GROUP_NAME, goal_positions)
-        goal_state.update()
-        if not _state_satisfies_bounds(goal_state, jmg):
-            logger.warn(
-                "pose_goal IK 후보가 joint bounds를 벗어나 제외합니다: "
-                + _format_joint_deltas(
-                    joint_names,
-                    current_positions,
+            goal_state = RobotState(robot_model)
+            goal_state.set_joint_group_positions(GROUP_NAME, goal_positions)
+            goal_state.update()
+            if not _state_satisfies_bounds(goal_state, jmg):
+                logger.warn(
+                    "pose_goal IK 후보가 joint bounds를 벗어나 제외합니다: "
+                    + _format_joint_deltas(
+                        joint_names,
+                        current_positions,
+                        raw_positions,
+                        goal_positions,
+                    )
+                )
+                continue
+
+            deltas = goal_positions - current_positions
+            abs_deltas = np.abs(deltas)
+            limited_abs_deltas = abs_deltas[delta_limit_mask]
+            max_limited_delta = (
+                float(np.max(limited_abs_deltas))
+                if len(limited_abs_deltas) > 0
+                else 0.0
+            )
+            total_delta = float(np.sum(abs_deltas))
+            candidates.append(
+                (
+                    max_limited_delta,
+                    total_delta,
+                    seed_index,
+                    goal_state,
                     raw_positions,
                     goal_positions,
                 )
             )
-            continue
-
-        deltas = goal_positions - current_positions
-        abs_deltas = np.abs(deltas)
-        limited_abs_deltas = abs_deltas[delta_limit_mask]
-        max_limited_delta = (
-            float(np.max(limited_abs_deltas))
-            if len(limited_abs_deltas) > 0
-            else 0.0
-        )
-        total_delta = float(np.sum(abs_deltas))
-        candidates.append(
-            (
-                max_limited_delta,
-                total_delta,
-                seed_index,
-                goal_state,
-                raw_positions,
-                goal_positions,
-            )
-        )
 
     if not candidates:
         logger.warn(
@@ -1038,6 +1084,25 @@ class MoveItController:
             current_j6,
             target_j6_rad,
         )
+        unfiltered_count = len(target_candidates)
+        target_candidates = [
+            target_j6
+            for target_j6 in target_candidates
+            if _wrist_joint_value_within_limits(target_j6)
+        ]
+        if len(target_candidates) < unfiltered_count:
+            logger.warn(
+                format_structured_log(
+                    pkg="manipulation",
+                    pipe="moveit",
+                    msg="wrist joint target candidates outside limits removed",
+                    joint=WRIST_JOINT_NAME,
+                    removed=unfiltered_count - len(target_candidates),
+                    remaining=len(target_candidates),
+                    lower_deg=math.degrees(WRIST_JOINT_LOWER_LIMIT_RAD),
+                    upper_deg=math.degrees(WRIST_JOINT_UPPER_LIMIT_RAD),
+                )
+            )
         if not target_candidates:
             logger.warn(
                 format_structured_log(

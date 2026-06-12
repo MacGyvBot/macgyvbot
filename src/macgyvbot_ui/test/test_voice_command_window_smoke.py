@@ -64,6 +64,15 @@ class VoiceCommandWindowSmokeTest(unittest.TestCase):
             ),
         )
 
+    def test_task_log_accepts_runtime_structured_log(self):
+        structured = (
+            '[pkg] ui              | [pipe] operator_ui'
+            '                   | [msg] "GUI 연결 완료"'
+        )
+        self.window.append_task_log("info", structured)
+
+        self.assertEqual(self.window._task_log.text(), structured)
+
     def test_chat_and_quick_reply_paths_publish_user_text(self):
         self.window.append_bot("손이 인식되었습니다!")
         self.window.append_system("Detector 영상: 수신 중")
@@ -80,6 +89,11 @@ class VoiceCommandWindowSmokeTest(unittest.TestCase):
         pixmap = self.window._avatar.pixmap()
         self.assertIsNotNone(pixmap)
         self.assertFalse(pixmap.isNull())
+
+    def test_current_status_box_has_label_and_left_aligned_text(self):
+        self.assertEqual(self.window._current_status_label.text(), "로봇 상태:")
+        self.assertEqual(self.window._current_status.text(), "대기")
+        self.assertTrue(self.window._current_status.alignment() & 1)
 
 
 if __name__ == "__main__":

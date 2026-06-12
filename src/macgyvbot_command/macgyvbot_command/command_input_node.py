@@ -507,7 +507,7 @@ class CommandInputNode(Node):
         state = str(status.get("status", status.get("state", "unknown"))).lower()
         self._last_robot_state = state
         if state in self._spoken_robot_statuses():
-            message = str(status.get("message") or "").strip()
+            message = self._robot_status_speech_message(status)
             if not message:
                 message = self._robot_status_default_message(state)
             spoken_key = (
@@ -620,7 +620,33 @@ class CommandInputNode(Node):
 
         return ""
 
+    def _robot_status_speech_message(self, status):
+        state = str(status.get("status", status.get("state", "unknown"))).lower()
+        message = str(status.get("message") or "").strip()
+        reason = str(status.get("reason") or "").strip()
+        if state not in ("failed", "error"):
+            return message
+
+        tool_name = str(status.get("tool_name") or "").strip() or "공구"
+        if reason == "pick_drawer_tool_not_found":
+            return f"{tool_name}를 서랍에서 찾지 못했습니다."
+        if reason in {"drawer_prepare_failed", "drawer_open_failed"}:
+            return "서랍을 여는 중 문제가 발생했습니다."
+        if reason in {"pose_goal_plan_failed", "planning_failed"}:
+            return "이동 경로를 찾지 못했습니다."
+        if reason in {"handoff_pose_unavailable", "handoff_target_unavailable"}:
+            return "전달 위치를 계산하지 못했습니다."
+        if reason in {"home_motion_failed", "home_pose_unavailable"}:
+            return "홈 위치 복귀에 실패했습니다."
+        if reason in {"tool_mask_lock_failed", "mask_lock_failed"}:
+            return "공구 추적 준비에 실패했습니다."
+        if message:
+            return self._limit_words(message.splitlines()[0].strip(), 7)
+        return ""
+
     def _build_rejected_message(self, reason, message):
+        if reason == "resume_without_paused_task":
+            return "재개할 작업이 없습니다. 다음 명령을 기다리겠습니다."
         if reason == "llm_failed":
             return (
                 "문장을 끝까지 이해하지 못했습니다. "
@@ -629,7 +655,7 @@ class CommandInputNode(Node):
         if reason == "unknown_tool":
             return (
                 "어떤 공구인지 잘 모르겠습니다. "
-                "드릴, 플라이어, 망치, 줄자 중에서 다시 말해 주세요."
+                "드라이버, 플라이어, 망치, 줄자, 렌치 중에서 다시 말해 주세요."
             )
         if reason == "unknown_action":
             return (
@@ -733,6 +759,15 @@ class CommandInputNode(Node):
             'vlm_warning': 'VLM 모델 상태를 확인해야 합니다.',
             'vlm_error': 'VLM 모델 처리 중 오류가 발생했습니다.',
         }.get(state, '')
+
+    @staticmethod
+    def _limit_words(text, max_words):
+        words = str(text or "").strip().split()
+        if not words:
+            return ""
+        if len(words) <= max_words:
+            return " ".join(words)
+        return " ".join(words[:max_words])
 
     def _speak_bot(self, text):
         self._remember_bot_text(text)

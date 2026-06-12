@@ -89,7 +89,7 @@ def normal_robot_status_chat(status, action="", reason=""):
         if normalized_status == "searching_hand":
             return BRING_WAIT_HANDOFF_MESSAGE
         if normalized_status == "waiting_handoff":
-            return ""
+            return HAND_DETECTED_MESSAGE
         if normalized_status in {"done", "completed", "success"}:
             return BRING_DONE_MESSAGE
         if normalized_status == "returned":

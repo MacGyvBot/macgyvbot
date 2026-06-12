@@ -1264,6 +1264,7 @@ class TaskCoordinatorNode(Node):
             return True
 
         should_dispatch = False
+        resume_available = False
         with self._queue_lock:
             if (
                 not self.pause_req.is_set()
@@ -1272,9 +1273,26 @@ class TaskCoordinatorNode(Node):
             ):
                 self.resume_req.clear()
             else:
+                resume_available = True
                 self.resume_req.set()
                 if self._current_step is None and not self._step_thread_alive():
                     should_dispatch = self._resume_suspended_step_locked()
+
+        if not resume_available:
+            self._task_log("control").info(
+                "task queue resume ignored because no paused task exists",
+                step="task_control",
+                event="resume",
+                reason=reason or "resume_without_paused_task",
+            )
+            self._publish_robot_status(
+                "rejected",
+                action="resume",
+                message="재개할 작업이 없습니다. 다음 명령을 기다리겠습니다.",
+                reason="resume_without_paused_task",
+                command=self.state.current_command,
+            )
+            return False
 
         self._publish_robot_status(
             "resumed",
@@ -1298,18 +1316,19 @@ class TaskCoordinatorNode(Node):
             event="cancel",
             reason=reason or "cancel_requested",
         )
-        task_running = self.is_running() or self.state.picking
         self.exit_req.set()
         self.pause_req.clear()
         self.drop_req.clear()
         self.resume_req.clear()
         self.motion.cancel_current_goal(self._motion_log(), reason=reason or "cancel")
         with self._queue_lock:
+            active_step = self._current_step is not None or self._step_thread_alive()
             self._queue.clear()
             self._suspended_step = None
             self._suspended_task_name = None
 
-        if not task_running:
+        if not active_step:
+            self._run_cleanup_callbacks()
             self.exit_req.clear()
             self._clear_task_state()
 

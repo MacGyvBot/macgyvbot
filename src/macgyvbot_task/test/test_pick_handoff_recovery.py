@@ -216,9 +216,11 @@ class FakeDrawerFlow:
         self.close_result = close_result
         self.events = events
         self.closed = []
+        self.prepare_wrist_values = []
 
-    def close_drawer(self, drawer_id, logger):
+    def close_drawer(self, drawer_id, logger, prepare_wrist=False):
         self.closed.append(drawer_id)
+        self.prepare_wrist_values.append(prepare_wrist)
         if self.events is not None:
             self.events.append("close")
         return self.close_result
@@ -385,6 +387,7 @@ def test_handoff_timeout_return_closes_drawer():
     assert runner.handoff.lift_from_current is True
     assert runner.handoff.grasp_wrist_joint_rad is None
     assert runner.drawer_flow.closed == [1]
+    assert runner.drawer_flow.prepare_wrist_values == [True]
     assert runner.handoff.events == ["return", "close", "home"]
     assert runner.state.statuses[-1][0] == "returned"
     assert runner.state.statuses[-1][1]["reason"] == "handoff_timeout"

@@ -1042,7 +1042,7 @@ class CommandLlmParser:
                     raw_text=raw_text,
                     reason='unsupported_tool',
                     message=(
-                        '현재 사용할 수 있는 공구는 드라이버, 플라이어, 망치, 줄자입니다. '
+                        '현재 사용할 수 있는 공구는 드라이버, 플라이어, 망치, 줄자, 렌치입니다. '
                         '그중 하나로 다시 말해주세요.'
                     ),
                     command=candidate_command,
@@ -1258,7 +1258,7 @@ class CommandLlmParser:
                     reason='unknown_tool',
                     message=(
                         '어떤 공구인지 확실하지 않습니다. '
-                        '드라이버, 플라이어, 망치, 줄자 중에서 다시 말해주세요.'
+                        '드라이버, 플라이어, 망치, 줄자, 렌치 중에서 다시 말해주세요.'
                     ),
                     command=candidate_command,
                 ),

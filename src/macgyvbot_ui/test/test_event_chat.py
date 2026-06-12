@@ -8,6 +8,7 @@ from macgyvbot_ui.event_chat import (
     BRING_RETURNED_HOME_MESSAGE,
     BRING_WAIT_HANDOFF_MESSAGE,
     GRASP_RETRY_MESSAGE,
+    HAND_DETECTED_MESSAGE,
     HAND_NOT_FOUND_MESSAGE,
     PARSE_FAILED_MESSAGE,
     RETURN_DONE_MESSAGE,
@@ -68,7 +69,7 @@ class EventChatTest(unittest.TestCase):
         )
         self.assertEqual(
             normal_robot_status_chat("waiting_handoff", "bring"),
-            "",
+            HAND_DETECTED_MESSAGE,
         )
         self.assertEqual(
             normal_robot_status_chat("done", "bring"),
