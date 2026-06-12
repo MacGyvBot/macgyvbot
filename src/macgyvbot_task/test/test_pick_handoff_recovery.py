@@ -134,6 +134,8 @@ class FakeState:
         self.current_command = {"action": "bring"}
         self.target_label = "screwdriver"
         self.statuses = []
+        self.tool_mask_locked = True
+        self.last_tool_mask_lock_result = {"locked": True}
 
     def logger(self):
         return FakeLogger()
@@ -320,6 +322,26 @@ def test_return_tool_to_original_position_restores_grasp_wrist_before_xy_move(
         (grasp_wrist_joint_rad, "handoff/return_restore_grasp_wrist")
     ]
     assert len(motion.targets) == 5
+
+
+def test_release_to_human_clears_tool_mask_lock_after_open(monkeypatch):
+    monkeypatch.setattr(pick_sequence, "cooperative_wait", lambda _duration: None)
+    gripper = FakeGripper()
+    state = FakeState()
+    runner = PickSequenceRunner(
+        robot=object(),
+        motion_controller=FakeMotion(),
+        gripper=gripper,
+        state=state,
+    )
+
+    assert runner._release_to_human()
+
+    assert gripper.open_calls == 1
+    assert state.tool_mask_locked is False
+    assert state.last_tool_mask_lock_result is None
+    assert state.statuses[-1][0] == "released_to_human"
+    assert state.statuses[-1][1]["action"] == "bring"
 
 
 def test_return_tool_to_original_position_falls_back_to_home_when_current_lift_fails(

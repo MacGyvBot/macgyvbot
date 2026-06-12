@@ -687,6 +687,17 @@ class HandGraspDetectionNode(Node):
             self.get_logger().info("Robot grasp success received. Tool mask lock requested.")
             return
 
+        if status == "released_to_human":
+            self._reset_tool_mask_state()
+            self.mask_tracking_active = False
+            if self.ml_classifier is not None:
+                self.ml_classifier.reset()
+            self._publish_tool_mask_unlock("released_to_human")
+            self.get_logger().info(
+                "Tool handoff release received. Tool mask/depth lock cleared."
+            )
+            return
+
         if status in {"accepted", "opening_drawer", "observing_drawer"}:
             self._set_active_tool_label(requested_tool_label)
             self._reset_tool_mask_state(clear_active_label=False)
@@ -1212,6 +1223,16 @@ class HandGraspDetectionNode(Node):
         msg = ToolMaskLock()
         msg.locked = False
         msg.mask_source = "DEPTH_LOCKED_TOOL"
+        msg.has_tool_roi = False
+        msg.tool_roi = [0, 0, 0, 0]
+        msg.has_reason = True
+        msg.reason = reason
+        self.mask_lock_pub.publish(msg)
+
+    def _publish_tool_mask_unlock(self, reason: str) -> None:
+        msg = ToolMaskLock()
+        msg.locked = False
+        msg.mask_source = "NONE"
         msg.has_tool_roi = False
         msg.tool_roi = [0, 0, 0, 0]
         msg.has_reason = True
