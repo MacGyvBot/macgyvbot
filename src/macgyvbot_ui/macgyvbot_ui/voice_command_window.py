@@ -1162,17 +1162,17 @@ else:
                     background-color: #F5F8FC;
                 }
                 QPushButton#powerButton {
-                    background-color: #FFFFFF;
-                    color: #D64545;
-                    border: 1px solid #F1C8C8;
+                    background-color: #E5484D;
+                    color: #FFFFFF;
+                    border: 1px solid #C9363D;
                     border-radius: 19px;
                     padding: 0px;
                     font-size: 20px;
                     font-weight: 900;
                 }
                 QPushButton#powerButton:hover {
-                    background-color: #FFF1F1;
-                    border: 1px solid #E9A6A6;
+                    background-color: #D93D43;
+                    border: 1px solid #B82F35;
                 }
                 '''
             )
