@@ -1628,6 +1628,13 @@ class TaskCoordinatorNode(Node):
             )
             if should_dispatch:
                 self._dispatch_next()
+        elif not ok and not pending_drop_recovery:
+            self._clear_failed_drop_recovery_queue()
+            self.pause_req.clear()
+            self.drop_req.clear()
+            self.resume_req.clear()
+            self._run_cleanup_callbacks()
+            self._clear_task_state()
         else:
             self.drop_req.set()
             self.resume_req.clear()
@@ -1678,6 +1685,15 @@ class TaskCoordinatorNode(Node):
         self._drop_recovery_thread = None
         self._start_drop_recovery(payload)
         return True
+
+    def _clear_failed_drop_recovery_queue(self):
+        with self._queue_lock:
+            self._queue.clear()
+            self._suspended_step = None
+            self._suspended_task_name = None
+            self._current_step = None
+            self._current_task_name = None
+            self._step_thread = None
 
     def _build_recovery_config(self, snapshot):
         command = snapshot["command"]
