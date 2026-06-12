@@ -117,6 +117,21 @@ class GripperPanelSmokeTest(unittest.TestCase):
             [("pause", "멈춰"), ("resume", "재개")],
         )
 
+    def test_cancel_status_button_publishes_control_action(self):
+        self.window._cancel_button.click()
+
+        self.assertEqual(self.published_texts, [])
+        self.assertEqual(self.control_actions, [("cancel", "취소")])
+
+    def test_power_button_publishes_exit_text(self):
+        self.window._power_button.click()
+
+        self.assertEqual(self.published_texts, ["종료"])
+        self.assertEqual(self.control_actions, [])
+
+    def test_gripper_width_input_has_label(self):
+        self.assertEqual(self.window._gripper_width_label.text(), "그리퍼 폭:")
+
     def test_handoff_fallback_button_publishes_cancel_control_action(self):
         self.window.append_control_actions((("복귀", "복귀", "cancel"),))
         buttons = [

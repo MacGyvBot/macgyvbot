@@ -101,9 +101,19 @@ else:
             self._home_button.clicked.connect(
                 lambda _checked=False: self._send_control_text('홈위치로 가')
             )
-            self._exit_button = QPushButton('종료')
-            self._exit_button.setObjectName('exitControlButton')
-            self._exit_button.clicked.connect(
+            self._cancel_button = QPushButton('취소')
+            self._cancel_button.setObjectName('cancelControlButton')
+            self._cancel_button.clicked.connect(
+                lambda _checked=False: self._send_control_action(
+                    action='cancel',
+                    text='취소',
+                )
+            )
+            self._power_button = QPushButton('⏻')
+            self._power_button.setObjectName('powerButton')
+            self._power_button.setToolTip('안전 종료')
+            self._power_button.setFixedSize(38, 38)
+            self._power_button.clicked.connect(
                 lambda _checked=False: self._send_control_text('종료')
             )
             pause_resume_button_layout = QHBoxLayout()
@@ -115,7 +125,7 @@ else:
             control_button_layout.setContentsMargins(0, 0, 0, 0)
             control_button_layout.setSpacing(8)
             control_button_layout.addWidget(self._home_button)
-            control_button_layout.addWidget(self._exit_button)
+            control_button_layout.addWidget(self._cancel_button)
             self._task_log_entries = []
             self._title = QLabel('MacGyvBot Assistant')
             self._subtitle = QLabel('음성 명령 기반 공구 전달 로봇')
@@ -130,15 +140,27 @@ else:
             input_layout.addWidget(self._input)
             input_layout.addWidget(self._send_button)
 
-            header_layout = QVBoxLayout()
+            header_center = QWidget()
+            header_center_layout = QVBoxLayout()
+            header_center_layout.setContentsMargins(0, 0, 0, 0)
+            header_center_layout.setSpacing(2)
+            header_center.setLayout(header_center_layout)
+            header_center_layout.addWidget(self._avatar)
+            header_center_layout.addWidget(self._title)
+            header_center_layout.addWidget(self._subtitle)
+            header_center_layout.setAlignment(self._avatar, Qt.AlignHCenter)
+            header_center_layout.setAlignment(self._title, Qt.AlignHCenter)
+            header_center_layout.setAlignment(self._subtitle, Qt.AlignHCenter)
+
+            header_layout = QGridLayout()
             header_layout.setContentsMargins(0, 14, 0, 10)
-            header_layout.setSpacing(2)
-            header_layout.addWidget(self._avatar)
-            header_layout.addWidget(self._title)
-            header_layout.addWidget(self._subtitle)
-            header_layout.setAlignment(self._avatar, Qt.AlignHCenter)
-            header_layout.setAlignment(self._title, Qt.AlignHCenter)
-            header_layout.setAlignment(self._subtitle, Qt.AlignHCenter)
+            header_layout.setHorizontalSpacing(0)
+            header_layout.setVerticalSpacing(0)
+            header_layout.addWidget(header_center, 0, 1, Qt.AlignHCenter)
+            header_layout.addWidget(self._power_button, 0, 2, Qt.AlignRight | Qt.AlignTop)
+            header_layout.setColumnStretch(0, 1)
+            header_layout.setColumnStretch(1, 0)
+            header_layout.setColumnStretch(2, 1)
 
             status_title = QLabel('Robot Status')
             status_title.setObjectName('statusPanelTitle')
@@ -195,6 +217,9 @@ else:
             gripper_width_layout = QHBoxLayout()
             gripper_width_layout.setContentsMargins(0, 0, 0, 0)
             gripper_width_layout.setSpacing(8)
+            self._gripper_width_label = QLabel('그리퍼 폭:')
+            self._gripper_width_label.setObjectName('gripperWidthLabel')
+            gripper_width_layout.addWidget(self._gripper_width_label)
             gripper_width_layout.addStretch(1)
             gripper_width_layout.addWidget(self._gripper_width_input)
 
@@ -291,37 +316,26 @@ else:
             log_panel_layout.addWidget(log_title)
             log_panel_layout.addWidget(log_scroll, 1)
 
-            left_workspace = QWidget()
-            left_workspace_layout = QVBoxLayout()
-            left_workspace_layout.setContentsMargins(0, 0, 0, 0)
-            left_workspace_layout.setSpacing(18)
-            left_workspace.setLayout(left_workspace_layout)
-
             workspace_grid = QGridLayout()
             workspace_grid.setContentsMargins(0, 0, 0, 0)
             workspace_grid.setHorizontalSpacing(14)
             workspace_grid.setVerticalSpacing(14)
             workspace_grid.addWidget(status_panel, 0, 0)
             workspace_grid.addWidget(detector_panel, 0, 1)
+            workspace_grid.addWidget(chat_panel, 0, 2)
             workspace_grid.addWidget(gripper_panel, 1, 0)
-            workspace_grid.addWidget(log_panel, 1, 1)
+            workspace_grid.addWidget(log_panel, 1, 1, 1, 2)
             workspace_grid.setColumnStretch(0, 0)
             workspace_grid.setColumnStretch(1, 1)
+            workspace_grid.setColumnStretch(2, 1)
             workspace_grid.setRowStretch(0, 0)
             workspace_grid.setRowStretch(1, 1)
-            left_workspace_layout.addLayout(workspace_grid, 1)
-
-            content_layout = QHBoxLayout()
-            content_layout.setContentsMargins(0, 0, 0, 0)
-            content_layout.setSpacing(14)
-            content_layout.addWidget(left_workspace, 0)
-            content_layout.addWidget(chat_panel, 1)
 
             layout = QVBoxLayout()
             layout.setContentsMargins(16, 8, 16, 10)
             layout.setSpacing(10)
             layout.addLayout(header_layout)
-            layout.addLayout(content_layout, 1)
+            layout.addLayout(workspace_grid, 1)
 
             root = QWidget()
             root.setLayout(layout)
@@ -1000,6 +1014,11 @@ else:
                     font-size: 15px;
                     font-weight: 900;
                 }
+                QLabel#gripperWidthLabel {
+                    color: #284A6A;
+                    font-size: 13px;
+                    font-weight: 800;
+                }
                 QSpinBox#gripperWidthInput {
                     background-color: #FFFFFF;
                     color: #163B5C;
@@ -1127,7 +1146,7 @@ else:
                 QPushButton#pauseControlButton,
                 QPushButton#resumeControlButton,
                 QPushButton#homeControlButton,
-                QPushButton#exitControlButton {
+                QPushButton#cancelControlButton {
                     background-color: #FFFFFF;
                     color: #223B5C;
                     border: 1px solid #D3DFEA;
@@ -1138,8 +1157,21 @@ else:
                 QPushButton#pauseControlButton:hover,
                 QPushButton#resumeControlButton:hover,
                 QPushButton#homeControlButton:hover,
-                QPushButton#exitControlButton:hover {
+                QPushButton#cancelControlButton:hover {
                     background-color: #F5F8FC;
+                }
+                QPushButton#powerButton {
+                    background-color: #FFFFFF;
+                    color: #D64545;
+                    border: 1px solid #F1C8C8;
+                    border-radius: 19px;
+                    padding: 0px;
+                    font-size: 20px;
+                    font-weight: 900;
+                }
+                QPushButton#powerButton:hover {
+                    background-color: #FFF1F1;
+                    border: 1px solid #E9A6A6;
                 }
                 '''
             )
