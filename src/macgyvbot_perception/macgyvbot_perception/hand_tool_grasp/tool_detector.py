@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional, Tuple
 
-from macgyvbot_config.models import YOLO_MODEL_NAME
+from macgyvbot_config.models import YOLO_CONFIDENCE_THRESHOLD, YOLO_MODEL_NAME
 from macgyvbot_perception.model_paths import (
     resolve_weight_path,
 )
@@ -42,7 +42,7 @@ class ToolDetector:
         model_path: str = DEFAULT_MODEL_PATH,
         target_classes: Iterable[str] = DEFAULT_TOOL_CLASSES,
         grasp_point_classes: Iterable[str] = DEFAULT_GRASP_POINT_CLASSES,
-        confidence_threshold: float = 0.20,
+        confidence_threshold: float = YOLO_CONFIDENCE_THRESHOLD,
         image_size: int = 640,
     ) -> None:
         from ultralytics import YOLO
@@ -89,6 +89,9 @@ class ToolDetector:
 
         for box in result.boxes:
             confidence = float(box.conf[0])
+            if confidence < self.confidence_threshold:
+                continue
+
             class_id = int(box.cls[0])
             label = self._normalize_label(names.get(class_id, class_id))
             x1, y1, x2, y2 = box.xyxy[0].tolist()

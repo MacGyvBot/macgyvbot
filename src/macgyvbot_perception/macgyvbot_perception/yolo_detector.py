@@ -1,6 +1,6 @@
 """YOLO detector construction and model path resolution."""
 
-from macgyvbot_config.models import YOLO_MODEL_NAME
+from macgyvbot_config.models import YOLO_CONFIDENCE_THRESHOLD, YOLO_MODEL_NAME
 from macgyvbot_perception.model_paths import resolve_weight_path
 
 DEFAULT_MODEL_PATH = YOLO_MODEL_NAME
@@ -13,7 +13,7 @@ def resolve_model_path(model_name):
 class YoloDetector:
     """Small wrapper around Ultralytics YOLO to keep node wiring thin."""
 
-    def __init__(self, model_name, confidence_threshold=0.20):
+    def __init__(self, model_name, confidence_threshold=YOLO_CONFIDENCE_THRESHOLD):
         from ultralytics import YOLO
 
         self.model_path = resolve_model_path(model_name)

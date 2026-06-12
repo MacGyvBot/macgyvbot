@@ -52,7 +52,6 @@ from macgyvbot_config.hand_grasp import (
     HAND_GRASP_SAM_TRACK_MAX_AREA_RATIO,
     HAND_GRASP_SAM_TRACK_MAX_CENTER_SHIFT_PX,
     HAND_GRASP_SAM_TRACK_MIN_AREA_RATIO,
-    HAND_GRASP_YOLO_CONFIDENCE,
     HAND_GRASP_YOLO_IMAGE_SIZE,
 )
 from macgyvbot_config.topics import (
@@ -544,7 +543,7 @@ def generate_launch_description():
                         "show_return_close_roi": False,
                         "yolo_model": LaunchConfiguration("yolo_model"),
                         "tool_classes": "hammer,pliers,screwdriver,tape_measure,wrench",
-                        "yolo_conf": HAND_GRASP_YOLO_CONFIDENCE,
+                        "yolo_conf": yolo_conf,
                         "yolo_imgsz": HAND_GRASP_YOLO_IMAGE_SIZE,
                         "max_hands": HAND_GRASP_MAX_HANDS,
                         "depth_diff_threshold_mm": (
