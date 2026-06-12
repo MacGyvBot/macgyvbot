@@ -250,6 +250,33 @@ def _make_cancel_node(TaskCoordinatorNode, *, active_step=False):
     return node
 
 
+def _make_resume_node(TaskCoordinatorNode):
+    node = object.__new__(TaskCoordinatorNode)
+    node.pause_req = threading.Event()
+    node.drop_req = threading.Event()
+    node.resume_req = threading.Event()
+    node._queue_lock = threading.RLock()
+    node._current_step = None
+    node._suspended_step = None
+    node._task_log = lambda *_args, **_kwargs: FakeLogger()
+    node._step_thread_alive = lambda: False
+    node._resume_suspended_step_locked = lambda: False
+
+    def _dispatch_next():
+        raise AssertionError("idle resume must not dispatch task queue")
+
+    node._dispatch_next = _dispatch_next
+    node.state = types.SimpleNamespace(
+        current_command=None,
+        recovery_mode=False,
+    )
+    node.published_statuses = []
+    node._publish_robot_status = (
+        lambda status, **kwargs: node.published_statuses.append((status, kwargs))
+    )
+    return node
+
+
 def test_cancel_cleans_paused_suspended_state_without_active_step(monkeypatch):
     _install_task_coordinator_import_stubs(monkeypatch)
     from macgyvbot_task.task_coordinator_node import TaskCoordinatorNode
@@ -285,3 +312,19 @@ def test_cancel_defers_cleanup_while_step_is_active(monkeypatch):
     assert node._suspended_task_name is None
     assert node.tool_hold_monitor.stop_reasons == []
     assert node.published_statuses[-1][0] == "cancelled"
+
+
+def test_resume_without_paused_task_returns_to_idle(monkeypatch):
+    _install_task_coordinator_import_stubs(monkeypatch)
+    from macgyvbot_task.task_coordinator_node import TaskCoordinatorNode
+
+    node = _make_resume_node(TaskCoordinatorNode)
+    node.resume_req.set()
+
+    assert node._handle_resume("재개") is False
+
+    assert not node.resume_req.is_set()
+    assert node.published_statuses[-1][0] == "rejected"
+    assert node.published_statuses[-1][1]["action"] == "resume"
+    assert node.published_statuses[-1][1]["reason"] == "resume_without_paused_task"
+    assert "재개할 작업이 없습니다" in node.published_statuses[-1][1]["message"]

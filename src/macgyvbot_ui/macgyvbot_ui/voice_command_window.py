@@ -141,27 +141,17 @@ else:
             input_layout.addWidget(self._input)
             input_layout.addWidget(self._send_button)
 
-            header_center = QWidget()
-            header_center_layout = QVBoxLayout()
-            header_center_layout.setContentsMargins(0, 0, 0, 0)
-            header_center_layout.setSpacing(2)
-            header_center.setLayout(header_center_layout)
-            header_center_layout.addWidget(self._avatar)
-            header_center_layout.addWidget(self._title)
-            header_center_layout.addWidget(self._subtitle)
-            header_center_layout.setAlignment(self._avatar, Qt.AlignHCenter)
-            header_center_layout.setAlignment(self._title, Qt.AlignHCenter)
-            header_center_layout.setAlignment(self._subtitle, Qt.AlignHCenter)
-
-            header_layout = QGridLayout()
+            header_layout = QHBoxLayout()
             header_layout.setContentsMargins(0, 14, 0, 10)
-            header_layout.setHorizontalSpacing(0)
-            header_layout.setVerticalSpacing(0)
-            header_layout.addWidget(header_center, 0, 1, Qt.AlignHCenter)
-            header_layout.addWidget(self._power_button, 0, 2, Qt.AlignRight | Qt.AlignTop)
-            header_layout.setColumnStretch(0, 1)
-            header_layout.setColumnStretch(1, 0)
-            header_layout.setColumnStretch(2, 1)
+            header_layout.setSpacing(10)
+            header_layout.addStretch(1)
+            header_layout.addWidget(self._avatar, 0, Qt.AlignRight | Qt.AlignVCenter)
+            header_layout.addWidget(self._title, 0, Qt.AlignRight | Qt.AlignVCenter)
+            header_layout.addWidget(
+                self._power_button,
+                0,
+                Qt.AlignRight | Qt.AlignVCenter,
+            )
 
             status_title = QLabel('Robot Status')
             status_title.setObjectName('statusPanelTitle')
@@ -1162,17 +1152,17 @@ else:
                     background-color: #F5F8FC;
                 }
                 QPushButton#powerButton {
-                    background-color: #E5484D;
-                    color: #FFFFFF;
-                    border: 1px solid #C9363D;
+                    background-color: #FFFFFF;
+                    color: #E5484D;
+                    border: 1px solid #F1C8C8;
                     border-radius: 19px;
                     padding: 0px;
                     font-size: 20px;
                     font-weight: 900;
                 }
                 QPushButton#powerButton:hover {
-                    background-color: #D93D43;
-                    border: 1px solid #B82F35;
+                    background-color: #FFF2F2;
+                    border: 1px solid #E9A6A6;
                 }
                 '''
             )

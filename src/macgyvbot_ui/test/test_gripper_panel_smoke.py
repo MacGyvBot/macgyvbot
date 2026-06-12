@@ -129,6 +129,9 @@ class GripperPanelSmokeTest(unittest.TestCase):
         self.assertEqual(self.published_texts, ["종료"])
         self.assertEqual(self.control_actions, [])
 
+    def test_power_button_uses_packaged_icon(self):
+        self.assertFalse(self.window._power_button.icon().isNull())
+
     def test_gripper_width_input_has_label(self):
         self.assertEqual(self.window._gripper_width_label.text(), "그리퍼 폭:")
 
