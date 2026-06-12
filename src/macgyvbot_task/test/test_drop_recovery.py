@@ -60,6 +60,7 @@ from macgyvbot_task.application.recovery.recovery_utils import (  # noqa: E402
     attempt_grasp,
     detect_target_tool,
     normalize_tool_name,
+    run_recovery_step_with_pause_retry,
 )
 import macgyvbot_task.application.recovery.recovery_utils as recovery_utils  # noqa: E402
 from macgyvbot_task.application.recovery import drop_recovery  # noqa: E402
@@ -82,6 +83,8 @@ class FakeLogger:
 class FakeRecoveryGripper:
     def __init__(self):
         self.events = []
+        self.move_calls = []
+        self.max_width = 800
 
     def open_gripper(self):
         self.events.append("open")
@@ -89,11 +92,18 @@ class FakeRecoveryGripper:
     def close_gripper(self):
         self.events.append("close")
 
+    def move_gripper(self, width_raw):
+        self.move_calls.append(width_raw)
+        self.events.append(("move", width_raw))
+
     def get_status(self):
         return [False, True]
 
     def get_width(self):
         return 24.0
+
+    def get_depth(self):
+        return 12.0
 
 
 class FakeStatus:
@@ -102,8 +112,6 @@ class FakeStatus:
         self.held_tool = "pliers"
         self.target_tool = "wrench"
         self.target_label = "screwdriver"
-        self.drawer_open = False
-        self.opened_drawer_id = None
         self.gripper_holding = False
         self.tool_mask_locked = True
         self.last_tool_mask_lock_result = {"locked": True}
@@ -111,6 +119,8 @@ class FakeStatus:
         self.grasp_detection_mask_target = "pliers"
         self.grasp_detection_yaw_deg = 17.0
         self.grasp_detection_yaw_target = "pliers"
+        self.grasp_detection_width_mm = 20.0
+        self.grasp_detection_width_target = "pliers"
         self.status_updates = []
 
     def logger(self):
@@ -118,26 +128,6 @@ class FakeStatus:
 
     def _publish_robot_status(self, status, **kwargs):
         self.status_updates.append((status, kwargs))
-
-
-class FakeDrawer:
-    def __init__(self):
-        self.events = []
-
-    def drawer_id_for_tool(self, tool_name):
-        return {"pliers": 0, "wrench": 2}.get(tool_name)
-
-    def open_drawer(self, drawer_id, _logger):
-        self.events.append(("open", drawer_id))
-        return True
-
-    def observe_drawer(self, drawer_id, _logger):
-        self.events.append(("observe", drawer_id))
-        return True
-
-    def close_drawer(self, drawer_id, _logger):
-        self.events.append(("close", drawer_id))
-        return True
 
 
 class FakeMotion:
@@ -166,17 +156,6 @@ class FakeMotion:
         return True
 
 
-class FakeRecoveryPlanner:
-    def plan(self, *_args, **_kwargs):
-        return types.SimpleNamespace(
-            target_x=0.31,
-            target_y=0.12,
-            drawer_wall_clearance_z=0.42,
-            grasp_z=0.25,
-            should_descend_to_grasp=True,
-        )
-
-
 class FakeGripper:
     def __init__(self):
         self.open_calls = 0
@@ -191,6 +170,20 @@ class FakeMonitor:
 
     def start(self, tool_name, action, command=None):
         self.starts.append((tool_name, action, command))
+
+
+class FakeEvent:
+    def __init__(self, set_initially=False):
+        self._set = bool(set_initially)
+
+    def is_set(self):
+        return self._set
+
+    def set(self):
+        self._set = True
+
+    def clear(self):
+        self._set = False
 
 
 def test_normalize_tool_name_uses_unknown_for_missing_values():
@@ -232,11 +225,92 @@ def test_detect_target_tool_retries_until_timeout(monkeypatch):
     assert calls == [0.0, 1.0, 2.0, 3.0, 4.0]
 
 
+def test_recovery_step_retries_after_pause_resume():
+    status = FakeStatus()
+    logger = FakeLogger()
+    pause = FakeEvent()
+    resume = FakeEvent()
+    calls = []
+
+    def wait(_duration):
+        pause.clear()
+        resume.set()
+
+    def step():
+        calls.append("step")
+        if len(calls) == 1:
+            pause.set()
+            return False
+        return True
+
+    ok = run_recovery_step_with_pause_retry(
+        RecoveryConfig(
+            state=status,
+            pause_event=pause,
+            resume_event=resume,
+            wait_fn=wait,
+        ),
+        status,
+        logger,
+        "wrench",
+        "moving_to_recovery_inspection",
+        step,
+    )
+
+    assert ok
+    assert calls == ["step", "step"]
+    assert not pause.is_set()
+    assert not resume.is_set()
+    assert [update[0] for update in status.status_updates] == [
+        "paused",
+        "recovering",
+    ]
+
+
+def test_recovery_step_stops_for_restart_even_if_step_returns_success():
+    status = FakeStatus()
+    logger = FakeLogger()
+    drop = FakeEvent()
+
+    def step():
+        drop.set()
+        return True
+
+    ok = run_recovery_step_with_pause_retry(
+        RecoveryConfig(
+            state=status,
+            drop_event=drop,
+            wait_fn=lambda _duration: None,
+        ),
+        status,
+        logger,
+        "wrench",
+        "recovery_grasp_started",
+        step,
+    )
+
+    assert not ok
+    assert drop.is_set()
+
+
 def test_recovery_grasp_rotates_yaw_before_xy_align_and_z_descent(monkeypatch):
     monkeypatch.setattr(
         recovery_utils,
         "current_ee_orientation",
         lambda _robot: {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+    )
+    monkeypatch.setattr(
+        recovery_utils,
+        "PickTargetPlanner",
+        lambda _robot: types.SimpleNamespace(
+            plan=lambda *_args, **_kwargs: types.SimpleNamespace(
+                target_x=0.31,
+                target_y=0.12,
+                drawer_wall_clearance_z=0.42,
+                grasp_z=0.25,
+                should_descend_to_grasp=True,
+            )
+        ),
     )
     motion = FakeMotion()
     gripper = FakeRecoveryGripper()
@@ -249,7 +323,6 @@ def test_recovery_grasp_rotates_yaw_before_xy_align_and_z_descent(monkeypatch):
     ok = attempt_grasp(
         detection,
         motion,
-        FakeRecoveryPlanner(),
         gripper,
         config=RecoveryConfig(robot=object(), wait_fn=lambda _duration: None),
         target_tool="wrench",
@@ -260,39 +333,91 @@ def test_recovery_grasp_rotates_yaw_before_xy_align_and_z_descent(monkeypatch):
         ("yaw", 37.0),
         ("move", "recovery/grasp_xy_align", 0.31, 0.12, 0.42),
         ("move", "recovery/grasp_descent", 0.31, 0.12, 0.25),
+        ("move", "recovery/pregrasp_depth_adjust", 0.31, 0.12, 0.238),
     ]
-    assert gripper.events == ["open", "close"]
+    assert gripper.events == ["open", "close", "open", "close"]
+
+
+def test_recovery_grasp_applies_limited_width_before_each_descent_close(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        recovery_utils,
+        "current_ee_orientation",
+        lambda _robot: {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+    )
+    monkeypatch.setattr(
+        recovery_utils,
+        "PickTargetPlanner",
+        lambda _robot: types.SimpleNamespace(
+            plan=lambda *_args, **_kwargs: types.SimpleNamespace(
+                target_x=0.31,
+                target_y=0.12,
+                drawer_wall_clearance_z=0.42,
+                grasp_z=0.25,
+                should_descend_to_grasp=True,
+            )
+        ),
+    )
+    motion = FakeMotion()
+    gripper = FakeRecoveryGripper()
+    status = FakeStatus()
+    detection = types.SimpleNamespace(
+        found=True,
+        base_xyz=(0.30, 0.10, 0.20),
+        yaw_deg=37.0,
+    )
+
+    ok = attempt_grasp(
+        detection,
+        motion,
+        gripper,
+        config=RecoveryConfig(
+            robot=object(),
+            state=status,
+            wait_fn=lambda _duration: None,
+        ),
+        target_tool="pliers",
+    )
+
+    assert ok
+    assert gripper.move_calls == [300, 300]
+    assert gripper.events == [
+        ("move", 300),
+        "close",
+        ("move", 300),
+        "close",
+    ]
 
 
 def test_return_recovery_prefers_held_tool_and_returns_home(monkeypatch):
     status = FakeStatus()
-    drawer = FakeDrawer()
     gripper = FakeGripper()
     logger = FakeLogger()
     detection = types.SimpleNamespace(found=True, base_xyz=(0.3, 0.1, 0.2))
     config = RecoveryConfig(
+        robot=object(),
         state=status,
-        inspection_pose_fn=lambda *_args: True,
         detect_target_fn=lambda target: detection,
     )
 
+    monkeypatch.setattr(
+        recovery_utils,
+        "move_to_observation_pose",
+        lambda *_args: (True, None),
+    )
     monkeypatch.setattr(drop_recovery, "is_graspable", lambda *_args: True)
     monkeypatch.setattr(drop_recovery, "attempt_grasp", lambda *_args, **_kwargs: True)
     ok = drop_recovery.run_drop_recovery(
         status,
-        [],
-        None,
         FakeMotion(),
-        None,
         gripper,
-        drawer,
         config,
         logger,
         task_type="return",
     )
 
     assert ok
-    assert drawer.events == []
     assert gripper.open_calls == 1
     assert status.held_tool == "pliers"
     assert status.gripper_holding is True
@@ -315,7 +440,6 @@ def test_return_recovery_updates_label_then_redetects_with_grasp_yaw(monkeypatch
     status.held_tool = "unknown"
     status.target_tool = "wrench"
     status.target_label = None
-    drawer = FakeDrawer()
     gripper = FakeGripper()
     motion = FakeMotion()
     monitor = FakeMonitor()
@@ -332,9 +456,9 @@ def test_return_recovery_updates_label_then_redetects_with_grasp_yaw(monkeypatch
     )
     calls = []
     config = RecoveryConfig(
+        robot=object(),
         state=status,
         command={"tool_name": "wrench", "action": "return"},
-        inspection_pose_fn=lambda *_args: True,
         initial_detect_target_fn=lambda target: calls.append(("initial", target))
         or first_detection,
         target_observe_fn=lambda detection, target, _logger: calls.append(
@@ -347,6 +471,11 @@ def test_return_recovery_updates_label_then_redetects_with_grasp_yaw(monkeypatch
         tool_hold_monitor=monitor,
     )
 
+    monkeypatch.setattr(
+        recovery_utils,
+        "move_to_observation_pose",
+        lambda *_args: (True, None),
+    )
     monkeypatch.setattr(drop_recovery, "is_graspable", lambda *_args: True)
 
     def fake_attempt_grasp(detection, *_args, **kwargs):
@@ -356,12 +485,8 @@ def test_return_recovery_updates_label_then_redetects_with_grasp_yaw(monkeypatch
     monkeypatch.setattr(drop_recovery, "attempt_grasp", fake_attempt_grasp)
     ok = drop_recovery.run_drop_recovery(
         status,
-        [],
-        None,
         motion,
-        None,
         gripper,
-        drawer,
         config,
         logger,
         task_type="return",
@@ -374,18 +499,14 @@ def test_return_recovery_updates_label_then_redetects_with_grasp_yaw(monkeypatch
         ("final", "pliers"),
         ("grasp", "pliers", 31.0),
     ]
-    assert drawer.events == []
     assert gripper.open_calls == 1
     assert monitor.starts == [("pliers", "return", config.command)]
     assert status.held_tool == "pliers"
 
 
-def test_return_recovery_skips_drawer_open_when_drawer_already_open(monkeypatch):
+def test_return_recovery_uses_recovery_only_state(monkeypatch):
     status = FakeStatus()
     status.held_tool = "pliers"
-    status.drawer_open = True
-    status.opened_drawer_id = 0
-    drawer = FakeDrawer()
     gripper = FakeGripper()
     monitor = FakeMonitor()
     logger = FakeLogger()
@@ -396,9 +517,9 @@ def test_return_recovery_skips_drawer_open_when_drawer_already_open(monkeypatch)
     )
     calls = []
     config = RecoveryConfig(
+        robot=object(),
         state=status,
         command={"tool_name": "unknown", "action": "return"},
-        inspection_pose_fn=lambda *_args: True,
         initial_detect_target_fn=lambda target: calls.append(("initial", target))
         or detection,
         target_observe_fn=lambda _detection, target, _logger: calls.append(
@@ -410,24 +531,23 @@ def test_return_recovery_skips_drawer_open_when_drawer_already_open(monkeypatch)
         tool_hold_monitor=monitor,
     )
 
+    monkeypatch.setattr(
+        recovery_utils,
+        "move_to_observation_pose",
+        lambda *_args: (True, None),
+    )
     monkeypatch.setattr(drop_recovery, "is_graspable", lambda *_args: True)
     monkeypatch.setattr(drop_recovery, "attempt_grasp", lambda *_args, **_kwargs: True)
     ok = drop_recovery.run_drop_recovery(
         status,
-        [],
-        None,
         FakeMotion(),
-        None,
         gripper,
-        drawer,
         config,
         logger,
         task_type="return",
     )
 
     assert ok
-    assert drawer.events == [("close", 0)]
-    assert ("open", 0) not in drawer.events
     assert calls == [
         ("initial", "pliers"),
         ("observe_target", "pliers"),
@@ -436,12 +556,44 @@ def test_return_recovery_skips_drawer_open_when_drawer_already_open(monkeypatch)
     assert gripper.open_calls == 1
 
 
+def test_recovery_cleanup_returns_home(monkeypatch):
+    status = FakeStatus()
+    gripper = FakeGripper()
+    logger = FakeLogger()
+    detection = types.SimpleNamespace(found=True, base_xyz=(0.3, 0.1, 0.2))
+    config = RecoveryConfig(
+        robot=object(),
+        state=status,
+        detect_target_fn=lambda target: detection,
+    )
+
+    monkeypatch.setattr(
+        recovery_utils,
+        "move_to_observation_pose",
+        lambda *_args: (True, None),
+    )
+    monkeypatch.setattr(drop_recovery, "is_graspable", lambda *_args: True)
+    monkeypatch.setattr(drop_recovery, "attempt_grasp", lambda *_args, **_kwargs: True)
+
+    ok = drop_recovery.run_drop_recovery(
+        status,
+        FakeMotion(),
+        gripper,
+        config,
+        logger,
+        task_type="pick",
+    )
+
+    assert ok
+    assert status.gripper_holding is True
+    assert status.recovery_mode is False
+
+
 def test_pick_recovery_observes_target_then_returns_home(monkeypatch):
     status = FakeStatus()
     status.target_tool = "wrench"
     status.target_label = "wrench"
     status.held_tool = "pliers"
-    drawer = FakeDrawer()
     gripper = FakeGripper()
     motion = FakeMotion()
     monitor = FakeMonitor()
@@ -458,9 +610,9 @@ def test_pick_recovery_observes_target_then_returns_home(monkeypatch):
     )
     calls = []
     config = RecoveryConfig(
+        robot=object(),
         state=status,
         command={"tool_name": "wrench", "action": "bring"},
-        inspection_pose_fn=lambda *_args: True,
         initial_detect_target_fn=lambda target: calls.append(("initial", target))
         or first_detection,
         target_observe_fn=lambda detection, target, _logger: calls.append(
@@ -472,6 +624,11 @@ def test_pick_recovery_observes_target_then_returns_home(monkeypatch):
         tool_hold_monitor=monitor,
     )
 
+    monkeypatch.setattr(
+        recovery_utils,
+        "move_to_observation_pose",
+        lambda *_args: (True, None),
+    )
     monkeypatch.setattr(drop_recovery, "is_graspable", lambda *_args: True)
 
     def fake_attempt_grasp(detection, *_args, **kwargs):
@@ -482,12 +639,8 @@ def test_pick_recovery_observes_target_then_returns_home(monkeypatch):
 
     ok = drop_recovery.run_drop_recovery(
         status,
-        [],
-        None,
         motion,
-        None,
         gripper,
-        drawer,
         config,
         logger,
         task_type="pick",
@@ -501,7 +654,6 @@ def test_pick_recovery_observes_target_then_returns_home(monkeypatch):
         ("grasp", "wrench", 42.0),
     ]
     assert monitor.starts == [("wrench", "bring", config.command)]
-    assert drawer.events == []
     assert gripper.open_calls == 1
     assert motion.wrist_rotations == []
     assert status.held_tool == "wrench"

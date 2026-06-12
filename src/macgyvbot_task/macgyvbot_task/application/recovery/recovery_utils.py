@@ -8,14 +8,21 @@ import time
 from typing import Any
 
 from macgyvbot_config.grasp import GRASP_RETRY_LIMIT
+from macgyvbot_config.pick import PICK_PREGRASP_REOPEN_WAIT_SEC
 from macgyvbot_manipulation.grasp_verifier import GraspVerifier
 from macgyvbot_manipulation.handover_targeting import move_to_observation_pose
+from macgyvbot_manipulation.robot_safezone import SAFE_Z_MIN
 from macgyvbot_manipulation.robot_pose import current_ee_orientation, make_safe_pose
 from macgyvbot_manipulation.timing import cooperative_wait
 from macgyvbot_task.application.logging_utils import (
     log_error,
     log_info,
     log_warn,
+)
+from macgyvbot_task.application.pick_flow.pick_grasp_flow import (
+    PickGraspFlow,
+    calculate_limited_grasp_width_mm,
+    calculate_pregrasp_extra_descent,
 )
 from macgyvbot_task.application.pick_flow.pick_target_planner import PickTargetPlanner
 
@@ -31,45 +38,21 @@ class RecoveryConfig:
     state: Any = None
     command: dict | None = None
     task_type: str = "unknown"
-    inspection_pose_fn: Callable[[Any, Any, Any], bool] | None = None
-    home_fn: Callable[[Any, Any], bool] | None = None
     initial_detect_target_fn: Callable[[str], Any] | None = None
     detect_target_fn: Callable[[str], Any] | None = None
     target_observe_fn: Callable[[Any, str, Any], bool] | None = None
     observed_tool_label_fn: Callable[[], str | None] | None = None
-    grasp_fn: Callable[[Any, str, Any], bool] | None = None
     tool_hold_monitor: Any = None
+    pause_event: Any = None
+    resume_event: Any = None
+    drop_event: Any = None
+    exit_event: Any = None
     wait_fn: Callable[[float], None] = cooperative_wait
     max_detection_retry: int = 3
     max_grasp_retry: int = GRASP_RETRY_LIMIT
     detection_retry_wait_sec: float = 0.2
     detection_timeout_sec: float = RECOVERY_INSPECTION_SEARCH_TIMEOUT_SEC
-
-
-def clear_remaining_tasks(task_queue):
-    """Clear queued work using the existing queue or cancel interface."""
-    if task_queue is None:
-        return True
-
-    if hasattr(task_queue, "clear_remaining_tasks"):
-        return bool(task_queue.clear_remaining_tasks())
-    if hasattr(task_queue, "cancel_remaining_tasks"):
-        return bool(task_queue.cancel_remaining_tasks())
-    if callable(task_queue):
-        return bool(task_queue())
-
-    if isinstance(task_queue, tuple) and len(task_queue) == 2:
-        queue, lock = task_queue
-        with lock:
-            queue.clear()
-        return True
-
-    if hasattr(task_queue, "clear"):
-        task_queue.clear()
-        return True
-
-    return False
-
+    pause_poll_sec: float = 0.1
 
 def set_recovery_mode(status, enabled: bool):
     if status is not None:
@@ -87,6 +70,8 @@ def clear_recovery_perception_lock(status, logger=None):
         "grasp_detection_mask_target",
         "grasp_detection_yaw_deg",
         "grasp_detection_yaw_target",
+        "grasp_detection_width_mm",
+        "grasp_detection_width_target",
         "hand_grasp_image",
         "last_grasp_result",
     ):
@@ -107,9 +92,6 @@ def clear_recovery_perception_lock(status, logger=None):
 def move_to_inspection_pose(motion_controller, config: RecoveryConfig):
     """Move to the existing hand inspection pose used by return handoff."""
     logger = _logger(config)
-    if config.inspection_pose_fn is not None:
-        return bool(config.inspection_pose_fn(motion_controller, config, logger))
-
     if config.robot is None:
         log_error(
             logger,
@@ -126,6 +108,88 @@ def move_to_inspection_pose(motion_controller, config: RecoveryConfig):
         logger,
     )
     return bool(ok)
+
+
+def run_recovery_step_with_pause_retry(
+    config: RecoveryConfig,
+    status,
+    logger,
+    target_tool,
+    reason,
+    step_fn,
+):
+    """Run one recovery action, retrying it when pause interrupted the action."""
+    while True:
+        if recovery_restart_requested(config):
+            return False
+
+        if not wait_for_recovery_resume_if_paused(
+            config,
+            status,
+            logger,
+            target_tool,
+            reason,
+        ):
+            return False
+
+        step_ok = bool(step_fn())
+        if recovery_restart_requested(config):
+            return False
+        if step_ok:
+            return True
+
+        if not _event_is_set(getattr(config, "pause_event", None)):
+            return False
+
+
+def wait_for_recovery_resume_if_paused(
+    config: RecoveryConfig,
+    status,
+    logger,
+    target_tool,
+    reason,
+):
+    pause_event = getattr(config, "pause_event", None)
+    if not _event_is_set(pause_event):
+        return True
+
+    log_recovery_event(
+        logger,
+        "RECOVERY_PAUSED",
+        "drop recovery paused",
+        {"target_tool": target_tool, "reason": reason},
+    )
+    publish_recovery_status(
+        status,
+        "paused",
+        target_tool,
+        "drop recovery paused.",
+        reason=reason,
+    )
+
+    wait_fn = getattr(config, "wait_fn", cooperative_wait)
+    while _event_is_set(pause_event):
+        if _event_is_set(getattr(config, "exit_event", None)):
+            return False
+        wait_fn(float(getattr(config, "pause_poll_sec", 0.1)))
+
+    if _event_is_set(getattr(config, "resume_event", None)):
+        getattr(config, "resume_event").clear()
+
+    log_recovery_event(
+        logger,
+        "RECOVERY_RESUMED",
+        "drop recovery resumed",
+        {"target_tool": target_tool, "reason": "resume_requested"},
+    )
+    publish_recovery_status(
+        status,
+        "recovering",
+        target_tool,
+        "drop recovery resumed.",
+        reason="drop_recovery_resumed",
+    )
+    return True
 
 
 def open_gripper_after_inspection(gripper, config: RecoveryConfig, logger=None):
@@ -228,17 +292,12 @@ def is_graspable(detection, motion_controller, grasp_planner, config) -> bool:
 def attempt_grasp(
     detection,
     motion_controller,
-    grasp_planner,
     gripper,
-    max_retry: int = 3,
     config: RecoveryConfig | None = None,
     target_tool: str = "unknown",
 ) -> bool:
     """Attempt a recovery grasp using existing planner and verifier helpers."""
     logger = _logger(config)
-    if config is not None and config.grasp_fn is not None:
-        return bool(config.grasp_fn(detection, target_tool, logger))
-
     base_xyz = getattr(detection, "base_xyz", None)
     if base_xyz is None:
         return False
@@ -254,7 +313,7 @@ def attempt_grasp(
         )
         return False
 
-    planner = grasp_planner or PickTargetPlanner(robot)
+    planner = PickTargetPlanner(robot)
     plan = planner.plan(*base_xyz, logger)
 
     yaw_deg = getattr(detection, "yaw_deg", None)
@@ -276,7 +335,12 @@ def attempt_grasp(
 
     ori = current_ee_orientation(robot)
 
-    if hasattr(gripper, "open_gripper"):
+    if not _set_limited_gripper_width_for_recovery(
+        gripper,
+        config,
+        target_tool,
+        logger,
+    ) and hasattr(gripper, "open_gripper"):
         gripper.open_gripper()
 
     if not motion_controller.plan_and_execute(
@@ -305,46 +369,159 @@ def attempt_grasp(
     ):
         return False
 
+    if not _pregrasp_depth_adjust_for_recovery(
+        plan,
+        ori,
+        motion_controller,
+        gripper,
+        config,
+        target_tool,
+        logger,
+    ):
+        return False
+
     verifier = GraspVerifier(
         gripper,
         getattr(config, "wait_fn", cooperative_wait),
-        interrupted=lambda: False,
+        interrupted=lambda: _recovery_interrupted(config),
     )
-    # GraspVerifier owns the package retry policy. max_retry is kept in the
-    # wrapper signature so a future interrupt/resume recovery issue can pass a
-    # per-recovery limit without changing callers.
-    _ = max_retry
     return bool(verifier.try_grasp(logger, failure_prefix="recovery grasp"))
 
 
-def close_drawer_if_open(drawer_controller, status):
-    """Close an open drawer if status or drawer controller records one."""
-    if drawer_controller is None:
+def _pregrasp_depth_adjust_for_recovery(
+    plan,
+    ori,
+    motion_controller,
+    gripper,
+    config,
+    target_tool,
+    logger,
+):
+    grasp_flow = PickGraspFlow(
+        gripper,
+        getattr(config, "state", None),
+        getattr(config, "wait_fn", cooperative_wait),
+        interrupted=lambda: _recovery_interrupted(config),
+    )
+    measurement = grasp_flow.measure_pregrasp_depth(logger)
+    if measurement is None:
+        return False
+
+    depth_mm = measurement.get("depth_mm")
+    extra_descent_m = calculate_pregrasp_extra_descent(depth_mm)
+    if extra_descent_m is None:
+        log_warn(
+            logger,
+            "recovery pregrasp depth unavailable",
+            step="recovery_pregrasp",
+            event="fail",
+            reason="depth_missing",
+        )
+        return False
+
+    recovery_safe_z_min = SAFE_Z_MIN
+    redescend_min_z = recovery_safe_z_min - extra_descent_m
+    target_z = max(plan.grasp_z - extra_descent_m, redescend_min_z)
+    actual_descent_m = plan.grasp_z - target_z
+    log_info(
+        logger,
+        "recovery pregrasp descent calculated",
+        step="recovery_pregrasp",
+        event="calculated",
+        width_mm=measurement.get("width_mm"),
+        depth_mm=depth_mm,
+        extra_descent_m=extra_descent_m,
+        target_z=target_z,
+        recovery_safe_z_min=recovery_safe_z_min,
+        redescend_min_z=redescend_min_z,
+    )
+
+    if not _set_limited_gripper_width_for_recovery(
+        gripper,
+        config,
+        target_tool,
+        logger,
+    ) and hasattr(gripper, "open_gripper"):
+        gripper.open_gripper()
+    getattr(config, "wait_fn", cooperative_wait)(PICK_PREGRASP_REOPEN_WAIT_SEC)
+
+    if actual_descent_m <= 0.0:
+        log_info(
+            logger,
+            "recovery pregrasp descent skipped",
+            step="recovery_pregrasp",
+            event="skip",
+            reason="z_limit",
+        )
         return True
 
-    drawer_id = getattr(status, "opened_drawer_id", None)
-    if drawer_id is None:
-        opened = getattr(drawer_controller, "_opened_drawers", None)
-        if opened:
-            drawer_id = next(iter(opened))
+    return motion_controller.plan_and_execute(
+        logger,
+        pose_goal=make_safe_pose(
+            plan.target_x,
+            plan.target_y,
+            target_z,
+            ori,
+            logger,
+        ),
+        min_z=redescend_min_z,
+        collision_scene_key="recovery/pregrasp_depth_adjust",
+    )
 
-    if drawer_id is None:
-        return True
 
-    logger = status.logger() if hasattr(status, "logger") else None
-    if logger is None:
-        logger = _NullLogger()
-    ok = bool(drawer_controller.close_drawer(drawer_id, logger))
-    if ok and status is not None:
-        status.drawer_open = False
-        status.opened_drawer_id = None
-    return ok
+def _set_limited_gripper_width_for_recovery(gripper, config, target_tool, logger):
+    width_mm = _current_recovery_limited_grasp_width_mm(
+        gripper,
+        config,
+        target_tool,
+    )
+    if width_mm is None:
+        return False
+
+    move_gripper = getattr(gripper, "move_gripper", None)
+    if move_gripper is None:
+        return False
+
+    try:
+        move_gripper(int(round(float(width_mm) * 10.0)))
+    except Exception as exc:
+        log_warn(
+            logger,
+            "recovery limited grasp width command failed",
+            step="recovery_gripper_width",
+            event="fail",
+            reason=str(exc) or type(exc).__name__,
+            width_mm=width_mm,
+        )
+        return False
+
+    log_info(
+        logger,
+        "recovery limited grasp width applied",
+        step="recovery_gripper_width",
+        event="applied",
+        target=target_tool,
+        width_mm=width_mm,
+    )
+    return True
+
+
+def _current_recovery_limited_grasp_width_mm(gripper, config, target_tool):
+    state = getattr(config, "state", None)
+    if state is None:
+        return None
+    width_target = getattr(state, "grasp_detection_width_target", None)
+    if width_target != target_tool:
+        return None
+    mask_width_mm = getattr(state, "grasp_detection_width_mm", None)
+    if mask_width_mm is None:
+        return None
+    max_width_mm = float(getattr(gripper, "max_width", 0) or 0) / 10.0
+    return calculate_limited_grasp_width_mm(mask_width_mm, max_width_mm)
 
 
 def return_home(motion_controller, config):
     logger = _logger(config)
-    if getattr(config, "home_fn", None) is not None:
-        return bool(config.home_fn(motion_controller, logger))
     return bool(motion_controller.move_to_home_joints(logger))
 
 
@@ -387,7 +564,6 @@ def normalize_tool_name(tool_name) -> str:
 
 def cleanup_after_recovery(
     status,
-    drawer_controller,
     motion_controller,
     config,
     logger,
@@ -395,24 +571,13 @@ def cleanup_after_recovery(
     target_tool,
     reason=None,
 ):
-    drawer_closed = close_drawer_if_open(drawer_controller, status)
-    if not drawer_closed:
-        log_recovery_event(
-            logger,
-            "DRAWER_CLOSE_FAILED",
-            "복구 중 열린 서랍 닫기에 실패했습니다.",
-            {
-                "task_type": task_type,
-                "target_tool": target_tool,
-                "reason": "drawer_close_failed",
-            },
-        )
+    """Finish recovery by returning home."""
     home_ok = return_home(motion_controller, config)
     if not home_ok:
         log_recovery_event(
             logger,
             "RECOVERY_FAILED",
-            "복구 후 Home 복귀에 실패했습니다.",
+            "recovery Home return failed",
             {
                 "task_type": task_type,
                 "target_tool": target_tool,
@@ -424,17 +589,16 @@ def cleanup_after_recovery(
         log_recovery_event(
             logger,
             "RECOVERY_FINISHED",
-            "복구 절차를 종료했습니다.",
+            "recovery cleanup finished",
             {
                 "task_type": task_type,
                 "target_tool": target_tool,
                 "reason": reason,
-                "drawer_closed": drawer_closed,
                 "home_ok": home_ok,
+                "gripper_holding": getattr(status, "gripper_holding", False),
             },
         )
-    return drawer_closed and home_ok
-
+    return bool(home_ok)
 
 def _call_detector(detector, target):
     if detector is None:
@@ -450,6 +614,22 @@ def _call_detector(detector, target):
 
 def _detection_found(detection):
     return detection is not None and bool(getattr(detection, "found", True))
+
+
+def _event_is_set(event):
+    return event is not None and bool(event.is_set())
+
+
+def _recovery_interrupted(config):
+    return (
+        _event_is_set(getattr(config, "pause_event", None))
+        or _event_is_set(getattr(config, "drop_event", None))
+        or _event_is_set(getattr(config, "exit_event", None))
+    )
+
+
+def recovery_restart_requested(config):
+    return _event_is_set(getattr(config, "drop_event", None))
 
 
 def _logger(config):

@@ -103,7 +103,7 @@ from macgyvbot_manipulation.robot_pose import (
     make_safe_pose,
     orientation_from_joint_positions,
 )
-from macgyvbot_manipulation.robot_safezone import safe_z_min_for_drawer
+from macgyvbot_manipulation.robot_safezone import SAFE_Z_MIN, safe_z_min_for_drawer
 from macgyvbot_manipulation.timing import cooperative_wait
 from macgyvbot_perception.depth_projection import DepthProjector
 from macgyvbot_perception.grasp_point.grasp_point_selector import (
@@ -1137,7 +1137,7 @@ class TaskCoordinatorNode(Node):
         reason = str(msg.reason or "").strip()
         if not action:
             return
-        if self.state.recovery_mode:
+        if self.state.recovery_mode and action not in {"pause", "resume"}:
             self._task_log("control").warn(
                 "task control ignored during drop recovery",
                 step="task_control",
@@ -1252,6 +1252,17 @@ class TaskCoordinatorNode(Node):
             event="resume",
             reason=reason or "resume_requested",
         )
+        if self.state.recovery_mode:
+            self.resume_req.set()
+            self.pause_req.clear()
+            self._publish_robot_status(
+                "resumed",
+                message="drop recovery를 재개합니다.",
+                reason=reason or "resume_requested",
+                command=self.state.current_command,
+            )
+            return True
+
         should_dispatch = False
         with self._queue_lock:
             if (
@@ -1464,6 +1475,8 @@ class TaskCoordinatorNode(Node):
                 tool=payload.get("tool_name", "unknown"),
             )
             self._pending_drop_recovery_payload = payload
+            self.drop_req.set()
+            self.resume_req.clear()
             self.motion.cancel_current_goal(
                 self._motion_log(),
                 reason=f"{reason}_during_recovery",
@@ -1547,6 +1560,7 @@ class TaskCoordinatorNode(Node):
 
         self.drop_req.clear()
         self.resume_req.clear()
+        self._clear_recovery_queue()
         self.state.picking = True
         self.state.current_command = snapshot["command"]
         self.state.target_tool = snapshot["tool_name"]
@@ -1566,16 +1580,27 @@ class TaskCoordinatorNode(Node):
             action = "return"
         ok = run_drop_recovery(
             self.state,
-            self._keep_recovery_queue,
-            self.detector,
             self.motion,
-            None,
             self.gripper,
-            self.drawer_flow,
             recovery_config,
             log,
             task_type="pick" if is_pick_drop_recovery else "return",
         )
+
+        if self._pending_drop_recovery_payload is not None and not ok:
+            self._publish_robot_status(
+                "recovering",
+                tool_name=snapshot["tool_name"],
+                action=action,
+                message="drop recovery 중 다시 drop이 감지되어 새 recovery를 시작합니다.",
+                reason="drop_recovery_restart_requested",
+                command=snapshot["command"],
+            )
+            self._restore_drop_recovery_resume_state(snapshot)
+            self.drop_req.set()
+            self.resume_req.clear()
+            self._restart_pending_drop_recovery()
+            return
 
         self._publish_robot_status(
             "returned" if ok else "failed",
@@ -1660,10 +1685,6 @@ class TaskCoordinatorNode(Node):
             self._queue.clear()
             self._suspended_step = None
             self._suspended_task_name = None
-        return True
-
-    def _keep_recovery_queue(self):
-        return True
 
     def _build_recovery_config(self, snapshot):
         command = snapshot["command"]
@@ -1686,6 +1707,10 @@ class TaskCoordinatorNode(Node):
                 target_tool,
                 apply_pca_yaw=True,
             ),
+            pause_event=self.pause_req,
+            resume_event=self.resume_req,
+            drop_event=self.drop_req,
+            exit_event=self.exit_req,
         )
 
     def _resolve_recovery_initial_target(
@@ -1740,12 +1765,10 @@ class TaskCoordinatorNode(Node):
         if base_xyz is None:
             return False
 
-        drawer_id = self.drawer_flow.drawer_id_for_tool(target_tool)
-        safe_z_min = safe_z_min_for_drawer(drawer_id)
         plan = self.pick_runner.target_planner.plan(
             *base_xyz,
             logger,
-            safe_z_min=safe_z_min,
+            safe_z_min=SAFE_Z_MIN,
         )
         observe_x = plan.target_x - TOOL_OBSERVE_X_BACKOFF_M
         observe_y = plan.target_y
@@ -1755,7 +1778,6 @@ class TaskCoordinatorNode(Node):
             step="recovery_observe",
             event="start",
             target=target_tool,
-            drawer_id=drawer_id,
             observe_x=f"{observe_x:.3f}",
             observe_y=f"{observe_y:.3f}",
             observe_z=f"{observe_z:.3f}",
@@ -1781,13 +1803,10 @@ class TaskCoordinatorNode(Node):
         if boxes is None:
             return None
 
-        supported = self.drawer_flow.supported_tool_labels()
         best_label = None
         best_conf = -1.0
         for box in boxes:
             label = self._box_label(box)
-            if label not in supported:
-                continue
             conf = self._box_confidence(box)
             if conf > best_conf:
                 best_conf = conf

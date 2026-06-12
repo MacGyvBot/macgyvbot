@@ -7,7 +7,6 @@ from macgyvbot_task.application.recovery.recovery_utils import (
     attempt_grasp,
     cleanup_after_recovery,
     clear_recovery_perception_lock,
-    clear_remaining_tasks,
     detect_target_tool,
     is_graspable,
     log_recovery_event,
@@ -15,25 +14,21 @@ from macgyvbot_task.application.recovery.recovery_utils import (
     normalize_tool_name,
     open_gripper_after_inspection,
     publish_recovery_status,
+    recovery_restart_requested,
+    run_recovery_step_with_pause_retry,
     set_recovery_mode,
 )
 
 
 def run_drop_recovery(
     status,
-    task_queue,
-    yolo_detector,
     motion_controller,
-    grasp_planner,
     gripper,
-    drawer_controller,
     config,
     logger,
     task_type,
 ) -> bool:
     """Recover a dropped tool by re-grasping it, then returning home."""
-    task_type = _normalize_task_type(task_type)
-    config = _ensure_config(config, status, task_type)
     target_tool = _select_target_tool(status, config, task_type)
 
     log_recovery_event(
@@ -42,7 +37,6 @@ def run_drop_recovery(
         f"{task_type} recovery started",
         {"task_type": task_type, "target_tool": target_tool},
     )
-    clear_remaining_tasks(task_queue)
     set_recovery_mode(status, True)
     clear_recovery_perception_lock(status, logger)
     publish_recovery_status(
@@ -60,10 +54,16 @@ def run_drop_recovery(
         "Moving to inspection pose to find the dropped tool.",
         reason="moving_to_recovery_inspection",
     )
-    if not move_to_inspection_pose(motion_controller, config):
+    if not run_recovery_step_with_pause_retry(
+        config,
+        status,
+        logger,
+        target_tool,
+        "moving_to_recovery_inspection",
+        lambda: move_to_inspection_pose(motion_controller, config),
+    ):
         return _fail(
             status,
-            drawer_controller,
             motion_controller,
             config,
             logger,
@@ -74,10 +74,16 @@ def run_drop_recovery(
             f"{task_type} recovery inspection pose move failed",
         )
 
-    if not open_gripper_after_inspection(gripper, config, logger):
+    if not run_recovery_step_with_pause_retry(
+        config,
+        status,
+        logger,
+        target_tool,
+        "inspection_gripper_open",
+        lambda: open_gripper_after_inspection(gripper, config, logger),
+    ):
         return _fail(
             status,
-            drawer_controller,
             motion_controller,
             config,
             logger,
@@ -95,11 +101,26 @@ def run_drop_recovery(
         "Searching dropped tool bbox again.",
         reason="detecting_recovery_target",
     )
-    detection = _detect_target(config, yolo_detector, target_tool)
+    detection = None
+
+    def detect_initial_target():
+        nonlocal detection
+        detection = _detect_target(config, target_tool)
+        return detection is not None
+
+    detection_ok = run_recovery_step_with_pause_retry(
+        config,
+        status,
+        logger,
+        target_tool,
+        "detecting_recovery_target",
+        detect_initial_target,
+    )
+    if not detection_ok:
+        detection = None
     if detection is None:
         return _fail(
             status,
-            drawer_controller,
             motion_controller,
             config,
             logger,
@@ -118,10 +139,16 @@ def run_drop_recovery(
             "Moving to target observe pose.",
             reason="moving_to_recovery_target_observe",
         )
-        if not config.target_observe_fn(detection, target_tool, logger):
+        if not run_recovery_step_with_pause_retry(
+            config,
+            status,
+            logger,
+            target_tool,
+            "moving_to_recovery_target_observe",
+            lambda: config.target_observe_fn(detection, target_tool, logger),
+        ):
             return _fail(
                 status,
-                drawer_controller,
                 motion_controller,
                 config,
                 logger,
@@ -140,11 +167,26 @@ def run_drop_recovery(
                 target_tool,
             )
 
-        detection = _redetect_target(config, yolo_detector, target_tool)
+        detection = None
+
+        def redetect_target():
+            nonlocal detection
+            detection = _redetect_target(config, target_tool)
+            return detection is not None
+
+        redetect_ok = run_recovery_step_with_pause_retry(
+            config,
+            status,
+            logger,
+            target_tool,
+            "redetecting_recovery_target",
+            redetect_target,
+        )
+        if not redetect_ok:
+            detection = None
         if detection is None:
             return _fail(
                 status,
-                drawer_controller,
                 motion_controller,
                 config,
                 logger,
@@ -162,10 +204,16 @@ def run_drop_recovery(
             reason="recovery_target_redetected",
         )
 
-    if not is_graspable(detection, motion_controller, grasp_planner, config):
+    if not run_recovery_step_with_pause_retry(
+        config,
+        status,
+        logger,
+        target_tool,
+        "checking_recovery_graspability",
+        lambda: is_graspable(detection, motion_controller, None, config),
+    ):
         return _fail(
             status,
-            drawer_controller,
             motion_controller,
             config,
             logger,
@@ -183,18 +231,22 @@ def run_drop_recovery(
         "Applying yaw PCA and attempting recovery grasp.",
         reason="recovery_grasp_started",
     )
-    if not attempt_grasp(
-        detection,
-        motion_controller,
-        grasp_planner,
-        gripper,
-        max_retry=config.max_grasp_retry,
-        config=config,
-        target_tool=target_tool,
+    if not run_recovery_step_with_pause_retry(
+        config,
+        status,
+        logger,
+        target_tool,
+        "recovery_grasp_started",
+        lambda: attempt_grasp(
+            detection,
+            motion_controller,
+            gripper,
+            config=config,
+            target_tool=target_tool,
+        ),
     ):
         return _fail(
             status,
-            drawer_controller,
             motion_controller,
             config,
             logger,
@@ -210,15 +262,21 @@ def run_drop_recovery(
     if config.tool_hold_monitor is not None:
         config.tool_hold_monitor.start(target_tool, _monitor_action(task_type), config.command)
 
-    cleanup_ok = cleanup_after_recovery(
-        status,
-        drawer_controller,
-        motion_controller,
+    cleanup_ok = run_recovery_step_with_pause_retry(
         config,
+        status,
         logger,
-        task_type,
         target_tool,
-        reason="recovery_succeeded",
+        "recovery_cleanup",
+        lambda: cleanup_after_recovery(
+            status,
+            motion_controller,
+            config,
+            logger,
+            task_type,
+            target_tool,
+            reason="recovery_succeeded",
+        ),
     )
     log_recovery_event(
         logger,
@@ -229,20 +287,18 @@ def run_drop_recovery(
     return bool(cleanup_ok)
 
 
-def _detect_target(config, yolo_detector, target_tool):
+def _detect_target(config, target_tool):
     return detect_target_tool(
-        config.initial_detect_target_fn or config.detect_target_fn or yolo_detector,
+        config.initial_detect_target_fn or config.detect_target_fn,
         target_tool,
         max_retry=config.max_detection_retry,
         retry_wait_sec=config.detection_retry_wait_sec,
         timeout_sec=config.detection_timeout_sec,
         wait_fn=config.wait_fn,
     )
-
-
-def _redetect_target(config, yolo_detector, target_tool):
+def _redetect_target(config, target_tool):
     return detect_target_tool(
-        config.detect_target_fn or yolo_detector,
+        config.detect_target_fn,
         target_tool,
         max_retry=config.max_detection_retry,
         retry_wait_sec=config.detection_retry_wait_sec,
@@ -297,7 +353,6 @@ def _select_target_tool(status, config, task_type):
 
 def _fail(
     status,
-    drawer_controller,
     motion_controller,
     config,
     logger,
@@ -307,6 +362,16 @@ def _fail(
     event_type,
     message,
 ):
+    if recovery_restart_requested(config):
+        log_recovery_event(
+            logger,
+            "RECOVERY_RESTART_REQUESTED",
+            "drop recovery restart requested by a new drop event",
+            {"task_type": task_type, "target_tool": target_tool, "reason": reason},
+        )
+        set_recovery_mode(status, False)
+        return False
+
     log_recovery_event(
         logger,
         event_type,
@@ -315,7 +380,6 @@ def _fail(
     )
     cleanup_after_recovery(
         status,
-        drawer_controller,
         motion_controller,
         config,
         logger,
@@ -332,25 +396,7 @@ def _fail(
     return False
 
 
-def _ensure_config(config, status, task_type):
-    if config is None:
-        return RecoveryConfig(state=status, task_type=task_type)
-    if isinstance(config, RecoveryConfig):
-        if config.state is None:
-            config.state = status
-        config.task_type = task_type
-        return config
-    return RecoveryConfig(state=status, task_type=task_type)
-
-
 def _monitor_action(task_type):
     if task_type == "return":
         return "return"
     return "bring"
-
-
-def _normalize_task_type(task_type):
-    task_type = str(task_type or "").strip().lower()
-    if task_type == "return":
-        return "return"
-    return "pick"
