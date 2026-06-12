@@ -2,7 +2,10 @@ import numpy as np
 
 from macgyvbot_domain.mask_models import LockedToolMask
 from macgyvbot_perception.hand_tool_grasp.calculations import build_depth_grasp_info
-from macgyvbot_perception.hand_tool_grasp.tool_detector import ToolDetector
+from macgyvbot_perception.hand_tool_grasp.tool_detector import (
+    DEFAULT_TOOL_CLASSES,
+    ToolDetector,
+)
 from macgyvbot_perception.hand_tool_grasp.ml_grasp_classifier import (
     FEATURE_COUNT,
     extract_ml_features,
@@ -45,6 +48,12 @@ class _FakeYoloModel:
             },
         )()
         return [result]
+
+
+def test_default_tool_classes_exclude_unsupported_drill():
+    assert "drill" not in DEFAULT_TOOL_CLASSES
+    assert "wrench" in DEFAULT_TOOL_CLASSES
+    assert "screwdriver" in DEFAULT_TOOL_CLASSES
 
 
 def test_extract_ml_features_returns_normalized_xyz_triplets():

@@ -1407,7 +1407,6 @@ class OperatorUiNode(Node):
             'pliers': '플라이어',
             'hammer': '망치',
             'tape_measure': '줄자',
-            'drill': '드릴',
             'wrench': '렌치',
             'unknown': '공구',
         }

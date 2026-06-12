@@ -629,7 +629,7 @@ class CommandInputNode(Node):
         if reason == "unknown_tool":
             return (
                 "어떤 공구인지 잘 모르겠습니다. "
-                "드릴, 플라이어, 망치, 줄자 중에서 다시 말해 주세요."
+                "드라이버, 플라이어, 망치, 줄자, 렌치 중에서 다시 말해 주세요."
             )
         if reason == "unknown_action":
             return (
