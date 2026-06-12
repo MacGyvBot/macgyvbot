@@ -32,7 +32,9 @@ from macgyvbot_config.robot import (
     POSE_GOAL_IK_SEED_PERTURB_RAD,
     POSE_GOAL_IK_TIMEOUT_SEC,
     POSE_GOAL_MAX_JOINT_DELTA_RAD,
+    WRIST_JOINT_LOWER_LIMIT_RAD,
     WRIST_JOINT_NAME,
+    WRIST_JOINT_UPPER_LIMIT_RAD,
 )
 from macgyvbot_config.structured_logging import format_structured_log
 from macgyvbot_manipulation.robot_pose import normalize_angle_deg
@@ -137,6 +139,8 @@ def _wrist_equivalent_goal_position_candidates(
         current_positions[wrist_index],
         target_positions[wrist_index],
     ):
+        if not _wrist_joint_value_within_limits(wrist_value):
+            continue
         candidate = np.array(goal_positions, copy=True)
         candidate[wrist_index] = wrist_value
         key = tuple(round(float(value), 6) for value in candidate)
@@ -145,7 +149,15 @@ def _wrist_equivalent_goal_position_candidates(
         seen.add(key)
         candidates.append(candidate)
 
-    return candidates or [goal_positions]
+    return candidates
+
+
+def _wrist_joint_value_within_limits(value, tolerance_rad=1e-6):
+    return (
+        WRIST_JOINT_LOWER_LIMIT_RAD - tolerance_rad
+        <= float(value)
+        <= WRIST_JOINT_UPPER_LIMIT_RAD + tolerance_rad
+    )
 
 
 def _principal_joint_positions(positions):
