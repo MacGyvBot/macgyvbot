@@ -156,6 +156,13 @@ class FakeMotion:
         self.wrist_rotations.append(yaw_deg)
         return True
 
+    def current_wrist_joint_rad(self, _logger):
+        return 0.5
+
+    def move_wrist_to_joint_rad(self, target_j6_rad, _logger, **_kwargs):
+        self.events.append(("wrist_target", target_j6_rad))
+        return True
+
     def plan_and_execute(
         self,
         _logger,
@@ -732,11 +739,69 @@ def test_drop_recovery_builds_queue_steps():
         "recovery/move_to_target_observe",
         "recovery/redetect_target",
         "recovery/check_graspability",
-        "recovery/attempt_grasp",
+        "recovery/prepare_grasp_plan_and_yaw",
+        "recovery/apply_grasp_yaw",
+        "recovery/execute_grasp",
         "recovery/wait_tool_mask_lock",
         "recovery/cleanup",
     ]
     assert all(step.retry_on_pause for step in steps[1:])
+
+
+def test_drop_recovery_prepares_and_applies_yaw_in_separate_steps(monkeypatch):
+    status = FakeStatus()
+    logger = FakeLogger()
+    motion = FakeMotion()
+    detection = types.SimpleNamespace(
+        found=True,
+        base_xyz=(0.3, 0.1, 0.2),
+        yaw_deg=30.0,
+    )
+    config = RecoveryConfig(
+        robot=FakeRobot(),
+        state=status,
+        detect_target_fn=lambda _target: detection,
+    )
+    plan = types.SimpleNamespace(
+        target_x=0.3,
+        target_y=0.1,
+        drawer_wall_clearance_z=0.42,
+        grasp_z=0.25,
+        should_descend_to_grasp=True,
+    )
+
+    class FakePlanner:
+        def __init__(self, _robot):
+            pass
+
+        def plan(self, *_args, **_kwargs):
+            return plan
+
+    monkeypatch.setattr(drop_recovery_sequence, "PickTargetPlanner", FakePlanner)
+    monkeypatch.setattr(
+        drop_recovery_sequence,
+        "current_ee_orientation",
+        lambda _robot: {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+    )
+
+    steps = drop_recovery_sequence.build_drop_recovery_steps(
+        status,
+        motion,
+        FakeGripper(),
+        config,
+        logger,
+        task_type="pick",
+    )
+    step_by_name = {step.name: step for step in steps}
+    runner = step_by_name["recovery/prepare_grasp_plan_and_yaw"].execute.__self__
+    runner.detection = detection
+
+    assert step_by_name["recovery/prepare_grasp_plan_and_yaw"].execute()
+    assert motion.events == []
+    assert math.isclose(runner.grasp_wrist_target_rad, 0.5 + math.radians(30.0))
+
+    assert step_by_name["recovery/apply_grasp_yaw"].execute()
+    assert motion.events == [("wrist_target", 0.5 + math.radians(30.0))]
 
 
 def test_drop_recovery_queue_step_returns_immediately_when_paused(monkeypatch):
