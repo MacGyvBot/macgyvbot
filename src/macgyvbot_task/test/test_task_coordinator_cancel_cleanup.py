@@ -186,6 +186,7 @@ def _install_task_coordinator_import_stubs(monkeypatch):
         "macgyvbot_manipulation.robot_pose": {
             "get_ee_matrix": lambda *_args, **_kwargs: None,
             "make_safe_pose": lambda *args, **_kwargs: args,
+            "normalize_angle_deg": lambda angle: angle,
             "orientation_from_joint_positions": lambda *_args, **_kwargs: None,
         },
         "macgyvbot_perception.depth_projection": {
@@ -224,6 +225,7 @@ def _install_task_coordinator_import_stubs(monkeypatch):
             "ReturnSequenceRunner": _class("ReturnSequenceRunner")
         },
         "macgyvbot_task.application.recovery": {
+            "build_drop_recovery_steps": lambda *_args, **_kwargs: [],
             "run_drop_recovery": lambda *_args, **_kwargs: None,
         },
         "macgyvbot_task.application.recovery.recovery_utils": {
@@ -502,3 +504,132 @@ def test_drawer_prepare_step_suspends_on_pause(monkeypatch):
         "action": "bring",
         "tool_name": "screwdriver",
     }
+
+
+def test_drop_recovery_uses_separate_resume_slots(monkeypatch):
+    _install_task_coordinator_import_stubs(monkeypatch)
+    from macgyvbot_task.application.task_control.task_step import TaskStep
+    from macgyvbot_task.task_coordinator_node import TaskCoordinatorNode
+
+    node = _make_bring_node(TaskCoordinatorNode)
+    original_step = TaskStep("pick/grasp_tool", lambda: False)
+    recovery_step = TaskStep("recovery/attempt_grasp", lambda: False)
+    node._drop_recovery_resume_step = original_step
+    node._drop_recovery_resume_task_name = "pick"
+    node.drop_req.set()
+
+    node._finish_step("pick", original_step, False, None)
+
+    assert node._suspended_step is None
+    assert node._drop_recovery_resume_step is original_step
+    assert node._drop_recovery_resume_task_name == "pick"
+
+    node.drop_req.clear()
+    node.pause_req.set()
+    node._current_step = recovery_step
+    node._current_task_name = "recovery"
+
+    node._finish_step("recovery", recovery_step, False, None)
+
+    assert node._suspended_step is recovery_step
+    assert node._suspended_task_name == "recovery"
+    assert node._drop_recovery_resume_step is original_step
+    assert node._drop_recovery_resume_task_name == "pick"
+
+
+def test_paused_recovery_step_keeps_recovery_mode(monkeypatch):
+    _install_task_coordinator_import_stubs(monkeypatch)
+    from macgyvbot_task.application.task_control.task_step import TaskStep
+    from macgyvbot_task.task_coordinator_node import TaskCoordinatorNode
+
+    node = _make_bring_node(TaskCoordinatorNode)
+    recovery_step = TaskStep("recovery/cleanup", lambda: False)
+    node.state.recovery_mode = False
+    node.pause_req.set()
+
+    node._finish_step("recovery", recovery_step, False, None)
+
+    assert node.state.recovery_mode is True
+    assert node._suspended_step is recovery_step
+    assert node._suspended_task_name == "recovery"
+
+
+def test_recovery_step_false_after_fast_resume_is_requeued(monkeypatch):
+    _install_task_coordinator_import_stubs(monkeypatch)
+    from macgyvbot_task.application.task_control.task_step import TaskStep
+    from macgyvbot_task.task_coordinator_node import TaskCoordinatorNode
+
+    node = _make_bring_node(TaskCoordinatorNode)
+    recovery_step = TaskStep("recovery/return_home", lambda: False)
+    dispatched = []
+    node.state.recovery_mode = True
+    node.resume_req.set()
+    node._dispatch_next = lambda: dispatched.append(True)
+
+    node._finish_step("recovery", recovery_step, False, None)
+
+    assert list(node._queue) == [("recovery", recovery_step)]
+    assert node._suspended_step is None
+    assert node._suspended_task_name is None
+    assert not node.pause_req.is_set()
+    assert not node.resume_req.is_set()
+    assert dispatched == [True]
+
+
+def test_recovery_resume_keeps_pause_until_active_step_suspends(monkeypatch):
+    _install_task_coordinator_import_stubs(monkeypatch)
+    from macgyvbot_task.application.task_control.task_step import TaskStep
+    from macgyvbot_task.task_coordinator_node import TaskCoordinatorNode
+
+    node = _make_bring_node(TaskCoordinatorNode)
+    node.state.recovery_mode = True
+    node.state.current_command = {"action": "bring", "tool_name": "wrench"}
+    node.pause_req.set()
+    node._current_step = TaskStep("recovery/wait_tool_mask_lock", lambda: False)
+    node._current_task_name = "recovery"
+    node._step_thread_alive = lambda: True
+    node._resume_suspended_step_locked = (
+        lambda: (_ for _ in ()).throw(
+            AssertionError("active recovery step must suspend itself before resume")
+        )
+    )
+
+    assert node._handle_resume("resume_requested")
+
+    assert node.pause_req.is_set()
+    assert node.resume_req.is_set()
+    assert node.published_statuses[-1][0] == "resumed"
+
+
+def test_drop_recovery_success_restores_original_step_before_tail(monkeypatch):
+    _install_task_coordinator_import_stubs(monkeypatch)
+    from macgyvbot_task.application.task_control.task_step import TaskStep
+    from macgyvbot_task.task_coordinator_node import TaskCoordinatorNode
+
+    node = _make_bring_node(TaskCoordinatorNode)
+    original_step = TaskStep("pick/grasp_tool", lambda: True)
+    tail_step = TaskStep("pick/lift", lambda: True)
+    node._active_drop_recovery_snapshot = {
+        "action": "bring",
+        "task_name": "pick",
+        "tool_name": "screwdriver",
+        "command": {"action": "bring", "tool_name": "screwdriver"},
+        "resume_state": {
+            "picking": True,
+            "target_label": "screwdriver",
+            "target_tool": "screwdriver",
+            "current_command": {"action": "bring", "tool_name": "screwdriver"},
+        },
+    }
+    node._pending_drop_recovery_payload = None
+    node._drop_recovery_resume_step = original_step
+    node._drop_recovery_resume_task_name = "pick"
+    node._drop_recovery_resume_queue = [("pick", tail_step)]
+
+    assert node._finish_drop_recovery_queue_locked(True)
+
+    assert list(node._queue) == [("pick", original_step), ("pick", tail_step)]
+    assert node._drop_recovery_resume_step is None
+    assert node._drop_recovery_resume_task_name is None
+    assert node._drop_recovery_resume_queue is None
+    assert node._active_drop_recovery_snapshot is None
