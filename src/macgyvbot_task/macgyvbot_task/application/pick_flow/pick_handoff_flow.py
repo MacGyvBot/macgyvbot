@@ -143,6 +143,7 @@ class PickHandoffFlow:
         if self.tool_hold_monitor is not None:
             self.tool_hold_monitor.stop("return_to_original_position")
         self.gripper.open_gripper()
+        self._publish_tool_mask_release_after_return()
         self.wait_fn(HANDOFF_RELEASE_WAIT_SEC)
 
         logger.info("반환 5단계: 공구를 놓은 뒤 서랍 접근 안전 높이로 복귀")
@@ -187,6 +188,20 @@ class PickHandoffFlow:
             return False
 
         return True
+
+    def _publish_tool_mask_release_after_return(self):
+        if hasattr(self.state, "tool_mask_locked"):
+            self.state.tool_mask_locked = False
+        if hasattr(self.state, "last_tool_mask_lock_result"):
+            self.state.last_tool_mask_lock_result = None
+        self.state._publish_robot_status(
+            "tool_mask_released",
+            tool_name=self.state.target_label,
+            action="bring",
+            message="공구를 원래 위치에 내려놓아 mask lock을 해제합니다.",
+            reason="return_to_original_position",
+            command=self.state.current_command,
+        )
 
     def _recover_lift_from_home(self, drawer_wall_clearance_z, ori, logger):
         logger.warn(
