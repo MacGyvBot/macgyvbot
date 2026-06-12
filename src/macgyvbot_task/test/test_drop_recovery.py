@@ -678,6 +678,33 @@ def test_recovery_cleanup_returns_home(monkeypatch):
     assert status.recovery_mode is False
 
 
+def test_recovery_cleanup_pause_keeps_recovery_mode(monkeypatch):
+    status = FakeStatus()
+    status.recovery_mode = True
+    logger = FakeLogger()
+    pause_event = types.SimpleNamespace(is_set=lambda: True)
+    config = RecoveryConfig(
+        robot=FakeRobot(),
+        state=status,
+        pause_event=pause_event,
+    )
+
+    monkeypatch.setattr(recovery_utils, "return_home", lambda *_args: False)
+
+    ok = recovery_utils.cleanup_after_recovery(
+        status,
+        FakeMotion(),
+        config,
+        logger,
+        task_type="pick",
+        target_tool="wrench",
+        reason="recovery_succeeded",
+    )
+
+    assert not ok
+    assert status.recovery_mode is True
+
+
 def test_recovery_not_found_closes_open_drawer_then_returns_home(monkeypatch):
     status = FakeStatus()
     status.drawer_open = True

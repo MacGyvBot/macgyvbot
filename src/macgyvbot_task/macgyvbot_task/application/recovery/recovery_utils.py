@@ -713,7 +713,9 @@ def cleanup_after_recovery(
                 "reason": "return_home_failed",
             },
         )
-    set_recovery_mode(status, False)
+    interrupted = _recovery_interrupted(config)
+    if not interrupted:
+        set_recovery_mode(status, False)
     if reason is not None:
         log_recovery_event(
             logger,
@@ -724,6 +726,7 @@ def cleanup_after_recovery(
                 "target_tool": target_tool,
                 "reason": reason,
                 "home_ok": home_ok,
+                "interrupted": interrupted,
                 "gripper_holding": getattr(status, "gripper_holding", False),
             },
         )
