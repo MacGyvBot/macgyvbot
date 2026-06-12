@@ -68,6 +68,31 @@ def _format_operator_ros_log(message):
     )
 
 
+def _source_to_log_labels(source):
+    source_text = str(source or "").strip()
+    if not source_text:
+        return "ui", "operator"
+    source_map = {
+        "ui.operator": ("ui", "operator"),
+        "ui.control": ("ui", "control"),
+        "ui.chat": ("ui", "operator"),
+        "ui.connection": ("ui", "system"),
+        "command.stt": ("command", "input"),
+        "command.parser": ("command", "input"),
+        "task.status": ("task", "task"),
+        "perception.hand": ("perception", "hand_grasp"),
+        "perception.detector": ("perception", "perception"),
+        "manipulation.gripper": ("manipulation", "gripper"),
+        "camera.rgb": ("ui", "camera"),
+    }
+    if source_text in source_map:
+        return source_map[source_text]
+    if "." in source_text:
+        pkg, pipe = source_text.split(".", 1)
+        return pkg or "ui", pipe or "operator"
+    return source_text, "operator"
+
+
 class _StructuredLoggerAdapter:
     def __init__(self, logger):
         self._logger = logger
@@ -988,6 +1013,8 @@ class OperatorUiNode(Node):
         return '미수신'
 
     def _build_rejected_message(self, reason, message):
+        if reason == 'resume_without_paused_task':
+            return '재개할 작업이 없습니다. 다음 명령을 기다리겠습니다.'
         if reason == 'llm_failed':
             return '다시 말씀해주세요.'
         if reason == 'unknown_tool':
@@ -1122,10 +1149,10 @@ class OperatorUiNode(Node):
             return '손이 인식되지 않았습니다. 움직여서 카메라에 나오게 하세요!'
         if state == 'tool_dropped':
             return '공구를 떨어트렸습니다. inspection하여 다시 찾습니다.'
+        if state in ('failed', 'error'):
+            return self._short_error_chat(target_label, raw_message, reason)
 
         if raw_message:
-            if state in ('failed', 'error') and reason and reason not in raw_message:
-                return f'{raw_message} 원인: {reason}'
             return raw_message
 
         templates = {
@@ -1174,16 +1201,38 @@ class OperatorUiNode(Node):
             'vlm_error': 'VLM grasp 모델 처리 중 오류가 발생했습니다.',
         }
         message = templates.get(state, f'현재 작업 상태는 {state}입니다.')
-        if state in ('failed', 'error') and reason:
-            return f'{message} 원인: {reason}'
         return message
+
+    @staticmethod
+    def _short_error_chat(target_label, raw_message, reason):
+        reason_key = str(reason or '').strip()
+        message = str(raw_message or '').strip()
+
+        if reason_key == 'pick_drawer_tool_not_found':
+            return f'{target_label}를 서랍에서 찾지 못했습니다.'
+        if reason_key in {'drawer_prepare_failed', 'drawer_open_failed'}:
+            return '서랍을 여는 중 문제가 발생했습니다.'
+        if reason_key in {'pose_goal_plan_failed', 'planning_failed'}:
+            return '이동 경로를 찾지 못했습니다.'
+        if reason_key in {'handoff_pose_unavailable', 'handoff_target_unavailable'}:
+            return '전달 위치를 계산하지 못했습니다.'
+        if reason_key in {'home_motion_failed', 'home_pose_unavailable'}:
+            return '홈 위치 복귀에 실패했습니다.'
+        if reason_key in {'tool_mask_lock_failed', 'mask_lock_failed'}:
+            return '공구 추적 준비에 실패했습니다.'
+
+        if message:
+            first_line = message.splitlines()[0].strip()
+            if first_line:
+                return OperatorUiNode._limit_words(first_line, 7)
+        return '작업 중 문제가 발생했습니다.'
 
     @staticmethod
     def _robot_panel_status(state, message):
         return {
             'accepted': '요청 확인',
-            'searching_drawer': '공구함 탐색',
-            'moving_to_drawer': '공구함 이동',
+            'searching_drawer': '서랍 탐색 중',
+            'moving_to_drawer': '서랍 이동 중',
             'searching_drawer_handle': '손잡이 탐색',
             'opening_drawer': '서랍 열기',
             'closing_drawer': '서랍 닫기',
@@ -1192,18 +1241,18 @@ class OperatorUiNode(Node):
             'approaching_tool': '공구 접근',
             'grasping': '공구 파지',
             'grasp_success': '파지 성공',
-            'lifting_tool': '공구 들어올림',
+            'lifting_tool': '공구상승',
             'moving_to_handoff': '전달 위치 이동',
             'searching_hand': '손 탐색',
             'waiting_handoff': '전달 대기',
-            'handoff_inspection_pending': '손 인식 선택 대기',
+            'handoff_inspection_pending': '재시도 선택 대기',
             'handoff_complete': '전달 완료',
             'waiting_return_handoff': '반납 대기',
             'moving_return_grasp_pose': '반납 위치 이동',
             'checking_return_target': '반납 위치 확인',
-            'return_hand_detected': '손 위치 수령',
+            'return_hand_detected': '공구 수령 중',
             'placing_return_tool': '공구 보관',
-            'returning_home': 'Home 복귀',
+            'returning_home': '홈 복귀 중',
             'done': '완료',
             'completed': '완료',
             'success': '완료',
@@ -1211,17 +1260,17 @@ class OperatorUiNode(Node):
             'error': '오류',
             'busy': '작업 중',
             'paused': '일시정지',
-            'resumed': '재개',
+            'resumed': '작업 재개',
             'cancelled': '취소',
             'returned': '반납 완료',
             'rejected': '거절',
-            'tool_dropped': '공구 낙하 감지',
+            'tool_dropped': '공구낙하',
             'vlm_loading': 'VLM 로드 중',
-            'vlm_inferencing': 'VLM 탐색 중',
+            'vlm_inferencing': '파지점 탐색',
             'vlm_ready': 'VLM 준비 완료',
             'vlm_warning': 'VLM 경고',
             'vlm_error': 'VLM 오류',
-        }.get(state, message)
+        }.get(state, OperatorUiNode._compact_status_text(message))
 
     @staticmethod
     def _robot_stage_text(state, message):
@@ -1407,7 +1456,6 @@ class OperatorUiNode(Node):
             'pliers': '플라이어',
             'hammer': '망치',
             'tape_measure': '줄자',
-            'drill': '드릴',
             'wrench': '렌치',
             'unknown': '공구',
         }
@@ -1510,13 +1558,17 @@ class OperatorUiNode(Node):
         if not message:
             return
 
+        gui_message = self._format_gui_log_message(
+            level,
+            message,
+            source=source,
+            event=event,
+            detail=detail,
+        )
         if self.window is not None and hasattr(self.window, 'append_task_log'):
             self.window.append_task_log(
                 level,
-                message,
-                source=source,
-                event=event,
-                detail=detail,
+                gui_message,
             )
 
         if not ros:
@@ -1533,11 +1585,81 @@ class OperatorUiNode(Node):
 
     def _set_status(self, text):
         if self.window is not None:
-            self.window.set_status(text)
+            self.window.set_status(self._compact_status_text(text))
 
     def _set_task_status(self, target_text, stage_text):
         if self.window is not None and hasattr(self.window, 'set_task_status'):
             self.window.set_task_status(target_text, stage_text)
+
+    @staticmethod
+    def _format_gui_log_message(
+        level,
+        message,
+        source='ui.operator',
+        event='EVENT',
+        detail='',
+    ):
+        text = str(message or '').strip()
+        if not text or text.startswith('[pkg] '):
+            return text
+        pkg, pipe = _source_to_log_labels(source)
+        return format_structured_log(
+            pkg=pkg,
+            pipe=pipe,
+            msg=text,
+            level=str(level or 'info').upper(),
+            event_name=str(event or 'EVENT').strip().upper() or 'EVENT',
+            detail=str(detail or '').strip(),
+        )
+
+    @staticmethod
+    def _compact_status_text(text):
+        raw = str(text or '').strip()
+        if not raw:
+            return '대기'
+        normalized = raw.replace(' ', '').lower()
+        mapping = {
+            '명령대기': '대기',
+            '대기': '대기',
+            '로봇동작중': '로봇 동작 중',
+            '로봇노드실행대기중입니다': '로봇 노드 대기',
+            '입력수신': '입력 받음',
+            '정지요청전달': '정지 요청 전달',
+            '재개대기': '재개 대기',
+            '손인식재시도': '손 인식 재시도',
+            '작업취소처리중': '작업 취소 중',
+            '종료처리중': '종료 처리 중',
+            '명령해석완료': '명령 해석 완료',
+            '확인응답대기': '확인 응답 대기',
+            '명령취소': '명령취소',
+            '대화응답': '응답 완료',
+            '재입력필요': '재입력 필요',
+            '종료': '종료',
+            '종료실패': '종료실패',
+            'home복귀': '홈 복귀',
+            'home복귀요청': '홈 복귀 요청',
+            'home복귀중': '홈 복귀 중',
+            'vlm로드중': 'VLM 로드 중',
+            'vlm탐색중': '파지점 탐색',
+            'vlm준비완료': 'VLM 준비 완료',
+            'vlm경고': 'VLM 경고',
+            'vlm오류': 'VLM 오류',
+        }
+        compact = mapping.get(normalized)
+        if compact:
+            return compact
+        koreanized = raw.replace('Home', '홈').replace('VLM', '모델')
+        koreanized = ' '.join(koreanized.split())
+        return OperatorUiNode._limit_words(koreanized, 7)
+
+    @staticmethod
+    def _limit_words(text, max_words):
+        words = str(text or '').strip().split()
+        if not words:
+            return ''
+        if len(words) <= max_words:
+            return ' '.join(words)
+        return ' '.join(words[:max_words])
 
     def request_manual_gripper_width(self, width_mm):
         try:

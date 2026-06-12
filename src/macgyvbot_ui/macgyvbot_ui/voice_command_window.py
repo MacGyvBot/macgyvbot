@@ -4,8 +4,8 @@ from datetime import datetime
 from pathlib import Path
 
 try:
-    from PyQt5.QtCore import Qt, QTimer
-    from PyQt5.QtGui import QImage, QPixmap
+    from PyQt5.QtCore import QSize, Qt, QTimer
+    from PyQt5.QtGui import QIcon, QImage, QPixmap
     from PyQt5.QtWidgets import (
         QApplication,
         QFrame,
@@ -75,7 +75,10 @@ else:
             self._camera_connection_status = QLabel('카메라 노드: 미확인')
             self._detector_connection_status = QLabel('Detector 영상: 대기 중')
             self._gui_connection_status = QLabel('GUI 노드: 연결됨')
-            self._current_status = QLabel('현재 상태: 명령 대기')
+            self._current_status = QLabel('대기')
+            self._current_status.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            self._current_status_label = QLabel('로봇 상태:')
+            self._current_status_label.setObjectName('currentStatusLabel')
             self._task_target_status = QLabel('작업 대상: 없음')
             self._pause_button = QPushButton('멈춤')
             self._pause_button.setObjectName('pauseControlButton')
@@ -98,9 +101,20 @@ else:
             self._home_button.clicked.connect(
                 lambda _checked=False: self._send_control_text('홈위치로 가')
             )
-            self._exit_button = QPushButton('종료')
-            self._exit_button.setObjectName('exitControlButton')
-            self._exit_button.clicked.connect(
+            self._cancel_button = QPushButton('취소')
+            self._cancel_button.setObjectName('cancelControlButton')
+            self._cancel_button.clicked.connect(
+                lambda _checked=False: self._send_control_action(
+                    action='cancel',
+                    text='취소',
+                )
+            )
+            self._power_button = QPushButton('')
+            self._power_button.setObjectName('powerButton')
+            self._power_button.setToolTip('안전 종료')
+            self._power_button.setFixedSize(38, 38)
+            self._apply_power_icon()
+            self._power_button.clicked.connect(
                 lambda _checked=False: self._send_control_text('종료')
             )
             pause_resume_button_layout = QHBoxLayout()
@@ -112,7 +126,7 @@ else:
             control_button_layout.setContentsMargins(0, 0, 0, 0)
             control_button_layout.setSpacing(8)
             control_button_layout.addWidget(self._home_button)
-            control_button_layout.addWidget(self._exit_button)
+            control_button_layout.addWidget(self._cancel_button)
             self._task_log_entries = []
             self._title = QLabel('MacGyvBot Assistant')
             self._subtitle = QLabel('음성 명령 기반 공구 전달 로봇')
@@ -127,15 +141,27 @@ else:
             input_layout.addWidget(self._input)
             input_layout.addWidget(self._send_button)
 
-            header_layout = QVBoxLayout()
+            header_center = QWidget()
+            header_center_layout = QVBoxLayout()
+            header_center_layout.setContentsMargins(0, 0, 0, 0)
+            header_center_layout.setSpacing(2)
+            header_center.setLayout(header_center_layout)
+            header_center_layout.addWidget(self._avatar)
+            header_center_layout.addWidget(self._title)
+            header_center_layout.addWidget(self._subtitle)
+            header_center_layout.setAlignment(self._avatar, Qt.AlignHCenter)
+            header_center_layout.setAlignment(self._title, Qt.AlignHCenter)
+            header_center_layout.setAlignment(self._subtitle, Qt.AlignHCenter)
+
+            header_layout = QGridLayout()
             header_layout.setContentsMargins(0, 14, 0, 10)
-            header_layout.setSpacing(2)
-            header_layout.addWidget(self._avatar)
-            header_layout.addWidget(self._title)
-            header_layout.addWidget(self._subtitle)
-            header_layout.setAlignment(self._avatar, Qt.AlignHCenter)
-            header_layout.setAlignment(self._title, Qt.AlignHCenter)
-            header_layout.setAlignment(self._subtitle, Qt.AlignHCenter)
+            header_layout.setHorizontalSpacing(0)
+            header_layout.setVerticalSpacing(0)
+            header_layout.addWidget(header_center, 0, 1, Qt.AlignHCenter)
+            header_layout.addWidget(self._power_button, 0, 2, Qt.AlignRight | Qt.AlignTop)
+            header_layout.setColumnStretch(0, 1)
+            header_layout.setColumnStretch(1, 0)
+            header_layout.setColumnStretch(2, 1)
 
             status_title = QLabel('Robot Status')
             status_title.setObjectName('statusPanelTitle')
@@ -156,6 +182,7 @@ else:
             status_panel_layout.addWidget(self._detector_connection_status)
             status_panel_layout.addWidget(self._gui_connection_status)
             status_panel_layout.addSpacing(12)
+            status_panel_layout.addWidget(self._current_status_label)
             status_panel_layout.addWidget(self._current_status)
             status_panel_layout.addWidget(self._task_target_status)
             status_panel_layout.addStretch(1)
@@ -166,9 +193,6 @@ else:
             gripper_title.setObjectName('gripperPanelTitle')
             self._gripper_status = QLabel('비활성화: 안전한 제어 인터페이스 없음')
             self._gripper_status.setObjectName('gripperStatus')
-            self._gripper_value = QLabel('폭: 80 mm')
-            self._gripper_value.setObjectName('gripperValue')
-
             self._gripper_slider = QSlider(Qt.Horizontal)
             self._gripper_slider.setObjectName('gripperSlider')
             self._gripper_slider.setRange(0, 80)
@@ -194,7 +218,10 @@ else:
             gripper_width_layout = QHBoxLayout()
             gripper_width_layout.setContentsMargins(0, 0, 0, 0)
             gripper_width_layout.setSpacing(8)
-            gripper_width_layout.addWidget(self._gripper_value)
+            self._gripper_width_label = QLabel('그리퍼 폭:')
+            self._gripper_width_label.setObjectName('gripperWidthLabel')
+            gripper_width_layout.addWidget(self._gripper_width_label)
+            gripper_width_layout.addStretch(1)
             gripper_width_layout.addWidget(self._gripper_width_input)
 
             gripper_scale_layout = QHBoxLayout()
@@ -290,37 +317,26 @@ else:
             log_panel_layout.addWidget(log_title)
             log_panel_layout.addWidget(log_scroll, 1)
 
-            left_workspace = QWidget()
-            left_workspace_layout = QVBoxLayout()
-            left_workspace_layout.setContentsMargins(0, 0, 0, 0)
-            left_workspace_layout.setSpacing(18)
-            left_workspace.setLayout(left_workspace_layout)
-
             workspace_grid = QGridLayout()
             workspace_grid.setContentsMargins(0, 0, 0, 0)
             workspace_grid.setHorizontalSpacing(14)
             workspace_grid.setVerticalSpacing(14)
             workspace_grid.addWidget(status_panel, 0, 0)
             workspace_grid.addWidget(detector_panel, 0, 1)
+            workspace_grid.addWidget(chat_panel, 0, 2)
             workspace_grid.addWidget(gripper_panel, 1, 0)
-            workspace_grid.addWidget(log_panel, 1, 1)
+            workspace_grid.addWidget(log_panel, 1, 1, 1, 2)
             workspace_grid.setColumnStretch(0, 0)
             workspace_grid.setColumnStretch(1, 1)
+            workspace_grid.setColumnStretch(2, 1)
             workspace_grid.setRowStretch(0, 0)
             workspace_grid.setRowStretch(1, 1)
-            left_workspace_layout.addLayout(workspace_grid, 1)
-
-            content_layout = QHBoxLayout()
-            content_layout.setContentsMargins(0, 0, 0, 0)
-            content_layout.setSpacing(14)
-            content_layout.addWidget(left_workspace, 0)
-            content_layout.addWidget(chat_panel, 1)
 
             layout = QVBoxLayout()
             layout.setContentsMargins(16, 8, 16, 10)
             layout.setSpacing(10)
             layout.addLayout(header_layout)
-            layout.addLayout(content_layout, 1)
+            layout.addLayout(workspace_grid, 1)
 
             root = QWidget()
             root.setLayout(layout)
@@ -365,7 +381,8 @@ else:
             self._append_command_card(command)
 
         def set_status(self, text):
-            self._current_status.setText(f'현재 상태: {text}')
+            text = str(text or '').strip() or '대기'
+            self._current_status.setText(text)
 
         def set_connection_status(
             self,
@@ -432,7 +449,6 @@ else:
 
         def _set_gripper_width_value(self, value, *, source):
             width_mm = int(value)
-            self._gripper_value.setText(f'폭: {width_mm} mm')
 
             if source != 'slider' and self._gripper_slider.value() != width_mm:
                 self._gripper_slider.blockSignals(True)
@@ -464,15 +480,18 @@ else:
             if not message:
                 return
 
-            source = str(source or 'ui').strip() or 'ui'
-            event = str(event or 'EVENT').strip().upper() or 'EVENT'
-            detail = str(detail or '').strip()
-            entry = (
-                f'[{datetime.now().strftime("%H:%M:%S")}] '
-                f'[{source}] [{level}] {event} - {message}'
-            )
-            if detail:
-                entry = f'{entry} | {detail}'
+            if message.startswith('[pkg] '):
+                entry = message
+            else:
+                source = str(source or 'ui').strip() or 'ui'
+                event = str(event or 'EVENT').strip().upper() or 'EVENT'
+                detail = str(detail or '').strip()
+                entry = (
+                    f'[{datetime.now().strftime("%H:%M:%S")}] '
+                    f'[{source}] [{level}] {event} - {message}'
+                )
+                if detail:
+                    entry = f'{entry} | {detail}'
             self._task_log_entries.append(entry)
             self._task_log_entries = self._task_log_entries[-80:]
             self._task_log.setText('\n'.join(self._task_log_entries))
@@ -996,8 +1015,8 @@ else:
                     font-size: 15px;
                     font-weight: 900;
                 }
-                QLabel#gripperValue {
-                    color: #34536F;
+                QLabel#gripperWidthLabel {
+                    color: #284A6A;
                     font-size: 13px;
                     font-weight: 800;
                 }
@@ -1048,6 +1067,12 @@ else:
                 QLabel#statusPanelSubtitle {
                     color: #6A7E96;
                     font-size: 12px;
+                }
+                QLabel#currentStatusLabel {
+                    color: #6A7E96;
+                    font-size: 12px;
+                    font-weight: 800;
+                    padding: 0px 2px;
                 }
                 QFrame#taskLogPanel {
                     background-color: #F8FBFF;
@@ -1122,7 +1147,7 @@ else:
                 QPushButton#pauseControlButton,
                 QPushButton#resumeControlButton,
                 QPushButton#homeControlButton,
-                QPushButton#exitControlButton {
+                QPushButton#cancelControlButton {
                     background-color: #FFFFFF;
                     color: #223B5C;
                     border: 1px solid #D3DFEA;
@@ -1133,8 +1158,21 @@ else:
                 QPushButton#pauseControlButton:hover,
                 QPushButton#resumeControlButton:hover,
                 QPushButton#homeControlButton:hover,
-                QPushButton#exitControlButton:hover {
+                QPushButton#cancelControlButton:hover {
                     background-color: #F5F8FC;
+                }
+                QPushButton#powerButton {
+                    background-color: #E5484D;
+                    color: #FFFFFF;
+                    border: 1px solid #C9363D;
+                    border-radius: 19px;
+                    padding: 0px;
+                    font-size: 20px;
+                    font-weight: 900;
+                }
+                QPushButton#powerButton:hover {
+                    background-color: #D93D43;
+                    border: 1px solid #B82F35;
                 }
                 '''
             )
@@ -1172,13 +1210,13 @@ else:
             )
             self._current_status.setStyleSheet(
                 '''
-                background-color: #FFFFFF;
-                border: 1px solid #D5E2F0;
+                background-color: #FFF8D6;
+                border: 1px solid #F1DA8A;
                 border-radius: 10px;
                 padding: 8px 12px;
-                color: #49677F;
+                color: #5B4B16;
                 font-size: 13px;
-                font-weight: 600;
+                font-weight: 800;
                 '''
             )
             task_style = '''
@@ -1211,6 +1249,19 @@ else:
                     Qt.SmoothTransformation,
                 )
             )
+
+        def _apply_power_icon(self):
+            asset_path = (
+                Path(__file__).resolve().parent
+                / 'assets'
+                / 'power_icon.png'
+            )
+            icon = QIcon(str(asset_path))
+            if icon.isNull():
+                self._power_button.setText('⏻')
+                return
+            self._power_button.setIcon(icon)
+            self._power_button.setIconSize(QSize(20, 20))
 
         @staticmethod
         def _gripper_status_style(enabled):

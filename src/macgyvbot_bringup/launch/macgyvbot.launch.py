@@ -542,7 +542,7 @@ def generate_launch_description():
                         "display": False,
                         "show_return_close_roi": False,
                         "yolo_model": LaunchConfiguration("yolo_model"),
-                        "tool_classes": "drill,hammer,pliers,screwdriver,tape_measure,wrench",
+                        "tool_classes": "hammer,pliers,screwdriver,tape_measure,wrench",
                         "yolo_conf": HAND_GRASP_YOLO_CONFIDENCE,
                         "yolo_imgsz": HAND_GRASP_YOLO_IMAGE_SIZE,
                         "max_hands": HAND_GRASP_MAX_HANDS,

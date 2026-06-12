@@ -13,7 +13,6 @@ Rect = Tuple[int, int, int, int]
 
 DEFAULT_MODEL_PATH = YOLO_MODEL_NAME
 DEFAULT_TOOL_CLASSES = (
-    "drill",
     "hammer",
     "pliers",
     "screwdriver",
