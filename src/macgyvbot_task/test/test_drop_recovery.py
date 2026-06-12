@@ -217,6 +217,19 @@ def test_recovery_config_searches_inspection_for_four_seconds():
     assert RECOVERY_INSPECTION_SEARCH_TIMEOUT_SEC == 4.0
 
 
+def test_recovery_failure_messages_classify_not_found_and_ik_failures():
+    assert drop_recovery._recovery_failure_message_for_event(
+        "target_detection_failed",
+        "TARGET_NOT_FOUND",
+        drawer_open=True,
+    ) == "공구를 못찾겠습니다. 서랍을 닫고 홈 위치로 복귀합니다."
+    assert drop_recovery._recovery_failure_message_for_event(
+        "unknown_motion_reason",
+        "PLANNING_FAILED",
+        drawer_open=True,
+    ) == "공구를 못잡겠습니다. 서랍을 닫고 홈 위치로 복귀합니다."
+
+
 def test_detect_target_tool_retries_until_timeout(monkeypatch):
     now = {"value": 0.0}
     calls = []
