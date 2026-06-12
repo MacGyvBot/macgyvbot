@@ -93,6 +93,7 @@ class FakeMotion:
         self.collision_scene_keys = []
         self.home_calls = 0
         self.wrist_targets = []
+        self.current_wrist_rad = 0.0
 
     def plan_and_execute(
         self,
@@ -119,6 +120,9 @@ class FakeMotion:
     ):
         self.wrist_targets.append((target_j6_rad, collision_scene_key))
         return True
+
+    def current_wrist_joint_rad(self, logger):
+        return self.current_wrist_rad
 
 
 class FakeGripper:
@@ -636,15 +640,19 @@ def test_pregrasp_depth_adjust_allows_target_below_global_safe_z_min():
 def test_refine_failure_applies_fallback_pca_yaw(monkeypatch):
     class RotateMotion:
         def __init__(self):
-            self.yaws = []
+            self.wrist_targets = []
+            self.current_wrist_rad = math.radians(10.0)
 
-        def rotate_wrist_by_yaw_deg(
+        def current_wrist_joint_rad(self, logger):
+            return self.current_wrist_rad
+
+        def move_wrist_to_joint_rad(
             self,
-            yaw_deg,
+            target_j6_rad,
             logger,
             collision_scene_key=None,
         ):
-            self.yaws.append((yaw_deg, collision_scene_key))
+            self.wrist_targets.append((target_j6_rad, collision_scene_key))
             return True
 
     runner = PickSequenceRunner.__new__(PickSequenceRunner)
@@ -681,5 +689,67 @@ def test_refine_failure_applies_fallback_pca_yaw(monkeypatch):
     )
 
     assert runner._refine_target_and_apply_grasp_yaw_step(context)
-    assert runner.motion.yaws == [(37.5, "pick/apply_wrist_yaw")]
+    assert runner.motion.wrist_targets == [
+        (math.radians(47.5), "pick/apply_wrist_yaw")
+    ]
     assert context["ori"] == "rotated_ori"
+
+
+def test_pick_yaw_prepare_and_apply_are_separate_steps(monkeypatch):
+    runner = PickSequenceRunner.__new__(PickSequenceRunner)
+    runner.state = FakeState()
+    runner.robot = object()
+    runner.motion = FakeMotion()
+    runner.motion.current_wrist_rad = math.radians(20.0)
+    runner.refine_pick_target = lambda _target_label: PickTarget(
+        found=False,
+        label="screwdriver",
+        pixel=None,
+        base_xyz=None,
+        depth_m=None,
+        yaw_deg=None,
+        reason="vlm_service_failed",
+    )
+    refine_calls = []
+
+    def estimate_yaw(target_label):
+        refine_calls.append(target_label)
+        return 30.0
+
+    runner.estimate_grasp_yaw = estimate_yaw
+
+    context = {
+        "plan": types.SimpleNamespace(
+            target_x=0.30,
+            target_y=0.10,
+            drawer_wall_clearance_z=0.40,
+            grasp_z=0.25,
+        ),
+        "ori": "old_ori",
+        "safe_z_min": safe_z_min_for_drawer(1),
+        "grasp_yaw_deg": None,
+    }
+
+    monkeypatch.setattr(
+        pick_sequence,
+        "current_ee_orientation",
+        lambda _robot: "rotated_ori",
+    )
+
+    assert runner._refine_target_and_prepare_grasp_yaw_step(context)
+    assert refine_calls == ["screwdriver"]
+    assert math.isclose(context["grasp_wrist_target_rad"], math.radians(50.0))
+
+    runner.motion.current_wrist_rad = math.radians(28.0)
+    assert runner._apply_grasp_yaw_step(context)
+    assert runner._apply_grasp_yaw_step(context)
+
+    assert refine_calls == ["screwdriver"]
+    assert [key for _target, key in runner.motion.wrist_targets] == [
+        "pick/apply_wrist_yaw",
+        "pick/apply_wrist_yaw",
+    ]
+    assert all(
+        math.isclose(target, math.radians(50.0))
+        for target, _key in runner.motion.wrist_targets
+    )
