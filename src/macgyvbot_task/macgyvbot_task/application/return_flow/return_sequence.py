@@ -307,7 +307,11 @@ class ReturnSequenceRunner:
             f"{observed_tool} 보관 서랍을 엽니다.",
             context["command"],
         )
-        return self.drawer_flow.open_drawer(drawer_id, self.state.logger())
+        ok = self.drawer_flow.open_drawer(drawer_id, self.state.logger())
+        if ok:
+            self.state.drawer_open = True
+            self.state.opened_drawer_id = drawer_id
+        return ok
 
     def _observe_open_drawer(self, context):
         drawer_id = context.get("drawer_id")
@@ -401,6 +405,9 @@ class ReturnSequenceRunner:
                     logger,
                 )
                 return False
+
+            self.state.drawer_open = False
+            self.state.opened_drawer_id = None
 
         self.reporter.publish(
             "returning_home",
@@ -543,11 +550,15 @@ class ReturnSequenceRunner:
             f"{observed_tool} 보관 서랍을 닫습니다.",
             context["command"],
         )
-        return self.drawer_flow.close_drawer(
+        ok = self.drawer_flow.close_drawer(
             drawer_id,
             self.state.logger(),
             prepare_wrist=True,
         )
+        if ok:
+            self.state.drawer_open = False
+            self.state.opened_drawer_id = None
+        return ok
 
     def _home_after_drawer_close(self, context):
         drawer_id = context.get("drawer_id")

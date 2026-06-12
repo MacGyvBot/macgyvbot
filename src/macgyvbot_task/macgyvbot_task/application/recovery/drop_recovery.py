@@ -480,6 +480,6 @@ def _recovery_failure_message_for_event(reason, event_type, drawer_open=False):
         }
     ):
         return "공구를 못잡겠습니다. 서랍을 닫고 홈 위치로 복귀합니다."
-    if drawer_open and str(event_type).endswith("FAILED"):
+    if drawer_open:
         return "recovery가 실패했습니다. 서랍을 닫고 홈 위치로 복귀합니다."
     return _recovery_failure_message(reason)

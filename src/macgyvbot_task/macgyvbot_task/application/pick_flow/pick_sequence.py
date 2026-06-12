@@ -816,6 +816,8 @@ class PickSequenceRunner:
         if not drawer_closed:
             return True, False, False
 
+        self.state.drawer_open = False
+        self.state.opened_drawer_id = None
         home_ok = self.handoff.move_home_after_handoff(
             log,
             publish_on_failure=False,
@@ -866,7 +868,11 @@ class PickSequenceRunner:
             message=f"{self.state.target_label}가 있던 서랍을 닫습니다.",
             command=self.state.current_command,
         )
-        return self.drawer_flow.close_drawer(drawer_id, log)
+        if not self.drawer_flow.close_drawer(drawer_id, log):
+            return False
+        self.state.drawer_open = False
+        self.state.opened_drawer_id = None
+        return True
 
     def _publish_done(self):
         log_info(self.state.logger(), "pick sequence done", step="done", event="done")

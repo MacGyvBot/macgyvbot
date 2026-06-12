@@ -2214,6 +2214,8 @@ class TaskCoordinatorNode(Node):
             )
             ok = self.drawer_flow.open_drawer(drawer_id, log)
             if ok:
+                self.state.drawer_open = True
+                self.state.opened_drawer_id = drawer_id
                 self._publish_robot_status(
                     "observing_drawer",
                     tool_name=target_label,
@@ -2365,6 +2367,8 @@ class TaskCoordinatorNode(Node):
             self.state.current_command = None
             return False
 
+        self.state.drawer_open = False
+        self.state.opened_drawer_id = None
         self._publish_robot_status(
             "returning_home",
             tool_name=target_label,

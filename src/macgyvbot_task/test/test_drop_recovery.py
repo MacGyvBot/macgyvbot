@@ -767,7 +767,7 @@ def test_recovery_failed_event_with_open_drawer_uses_fallback_cleanup(monkeypatc
     assert len(drawer_closer.calls) == 1
     assert ("recovering", {
         "tool_name": "wrench",
-        "message": "recovery가 실패했습니다. 서랍을 닫고 홈 위치로 복귀합니다.",
+        "message": "공구를 못잡겠습니다. 서랍을 닫고 홈 위치로 복귀합니다.",
         "reason": "motion_planning_failed",
     }) in status.status_updates
 
