@@ -37,6 +37,7 @@ from macgyvbot_config.command import (
 from macgyvbot_config.models import (
     HAND_GRASP_MODEL_NAME,
     HAND_GRASP_SAM_CHECKPOINT_NAME,
+    YOLO_CONFIDENCE_THRESHOLD,
     YOLO_MODEL_NAME,
 )
 from macgyvbot_config.robot import BASE_FRAME
@@ -51,7 +52,6 @@ from macgyvbot_config.hand_grasp import (
     HAND_GRASP_SAM_TRACK_MAX_AREA_RATIO,
     HAND_GRASP_SAM_TRACK_MAX_CENTER_SHIFT_PX,
     HAND_GRASP_SAM_TRACK_MIN_AREA_RATIO,
-    HAND_GRASP_YOLO_CONFIDENCE,
     HAND_GRASP_YOLO_IMAGE_SIZE,
 )
 from macgyvbot_config.topics import (
@@ -238,7 +238,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "yolo_conf",
-                default_value="0.20",
+                default_value=str(YOLO_CONFIDENCE_THRESHOLD),
                 description="YOLO confidence threshold for runtime detectors.",
             ),
             DeclareLaunchArgument(
@@ -543,7 +543,7 @@ def generate_launch_description():
                         "show_return_close_roi": False,
                         "yolo_model": LaunchConfiguration("yolo_model"),
                         "tool_classes": "hammer,pliers,screwdriver,tape_measure,wrench",
-                        "yolo_conf": HAND_GRASP_YOLO_CONFIDENCE,
+                        "yolo_conf": yolo_conf,
                         "yolo_imgsz": HAND_GRASP_YOLO_IMAGE_SIZE,
                         "max_hands": HAND_GRASP_MAX_HANDS,
                         "depth_diff_threshold_mm": (

@@ -71,7 +71,7 @@ def test_tool_detector_filters_detection_to_requested_label():
     detector.model = _FakeYoloModel()
     detector.target_classes = {"hammer", "wrench"}
     detector.grasp_point_classes = {"grasp_point"}
-    detector.confidence_threshold = 0.20
+    detector.confidence_threshold = 0.40
     detector.image_size = 640
 
     detection = detector.detect(np.zeros((32, 32, 3), dtype=np.uint8), "wrench")
@@ -88,7 +88,7 @@ def test_tool_detector_keeps_best_tool_but_records_best_grasp_point_separately()
     detector.model = _FakeYoloModel()
     detector.target_classes = {"hammer", "wrench"}
     detector.grasp_point_classes = {"grasp_point"}
-    detector.confidence_threshold = 0.20
+    detector.confidence_threshold = 0.40
     detector.image_size = 640
 
     detection = detector.detect(np.zeros((32, 32, 3), dtype=np.uint8))
@@ -98,6 +98,19 @@ def test_tool_detector_keeps_best_tool_but_records_best_grasp_point_separately()
     assert detection.roi == (1, 2, 11, 12)
     assert detector.last_grasp_point_detection.label == "grasp_point"
     assert detector.last_grasp_point_detection.roi == (14, 15, 18, 19)
+
+
+def test_tool_detector_rejects_boxes_below_confidence_threshold():
+    detector = ToolDetector.__new__(ToolDetector)
+    detector.model = _FakeYoloModel()
+    detector.target_classes = {"hammer", "wrench"}
+    detector.grasp_point_classes = {"grasp_point"}
+    detector.confidence_threshold = 0.41
+    detector.image_size = 640
+
+    detection = detector.detect(np.zeros((32, 32, 3), dtype=np.uint8), "wrench")
+
+    assert detection is None
 
 
 def test_compute_mask_contact_confirms_landmark_inside_locked_mask():
