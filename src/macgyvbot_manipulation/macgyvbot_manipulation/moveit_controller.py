@@ -115,6 +115,39 @@ def _nearest_equivalent_positions(current_positions, target_positions):
     )
 
 
+def _wrist_equivalent_goal_position_candidates(
+    joint_names,
+    current_positions,
+    target_positions,
+):
+    goal_positions = _nearest_equivalent_positions(
+        current_positions,
+        target_positions,
+    )
+    if WRIST_JOINT_NAME not in joint_names:
+        return [goal_positions]
+
+    wrist_index = joint_names.index(WRIST_JOINT_NAME)
+    if wrist_index >= len(goal_positions):
+        return [goal_positions]
+
+    candidates = []
+    seen = set()
+    for wrist_value in _equivalent_values(
+        current_positions[wrist_index],
+        target_positions[wrist_index],
+    ):
+        candidate = np.array(goal_positions, copy=True)
+        candidate[wrist_index] = wrist_value
+        key = tuple(round(float(value), 6) for value in candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append(candidate)
+
+    return candidates or [goal_positions]
+
+
 def _principal_joint_positions(positions):
     return np.array(
         [math.atan2(math.sin(value), math.cos(value)) for value in positions],
@@ -270,49 +303,50 @@ def _pose_goal_to_near_current_state_goal(robot, pose_goal, logger):
             ik_state.get_joint_group_positions(GROUP_NAME),
             dtype=float,
         )
-        goal_positions = _nearest_equivalent_positions(
+        for goal_positions in _wrist_equivalent_goal_position_candidates(
+            joint_names,
             current_positions,
             raw_positions,
-        )
-        candidate_key = tuple(round(float(value), 6) for value in goal_positions)
-        if candidate_key in candidate_keys:
-            continue
-        candidate_keys.add(candidate_key)
+        ):
+            candidate_key = tuple(round(float(value), 6) for value in goal_positions)
+            if candidate_key in candidate_keys:
+                continue
+            candidate_keys.add(candidate_key)
 
-        goal_state = RobotState(robot_model)
-        goal_state.set_joint_group_positions(GROUP_NAME, goal_positions)
-        goal_state.update()
-        if not _state_satisfies_bounds(goal_state, jmg):
-            logger.warn(
-                "pose_goal IK 후보가 joint bounds를 벗어나 제외합니다: "
-                + _format_joint_deltas(
-                    joint_names,
-                    current_positions,
+            goal_state = RobotState(robot_model)
+            goal_state.set_joint_group_positions(GROUP_NAME, goal_positions)
+            goal_state.update()
+            if not _state_satisfies_bounds(goal_state, jmg):
+                logger.warn(
+                    "pose_goal IK 후보가 joint bounds를 벗어나 제외합니다: "
+                    + _format_joint_deltas(
+                        joint_names,
+                        current_positions,
+                        raw_positions,
+                        goal_positions,
+                    )
+                )
+                continue
+
+            deltas = goal_positions - current_positions
+            abs_deltas = np.abs(deltas)
+            limited_abs_deltas = abs_deltas[delta_limit_mask]
+            max_limited_delta = (
+                float(np.max(limited_abs_deltas))
+                if len(limited_abs_deltas) > 0
+                else 0.0
+            )
+            total_delta = float(np.sum(abs_deltas))
+            candidates.append(
+                (
+                    max_limited_delta,
+                    total_delta,
+                    seed_index,
+                    goal_state,
                     raw_positions,
                     goal_positions,
                 )
             )
-            continue
-
-        deltas = goal_positions - current_positions
-        abs_deltas = np.abs(deltas)
-        limited_abs_deltas = abs_deltas[delta_limit_mask]
-        max_limited_delta = (
-            float(np.max(limited_abs_deltas))
-            if len(limited_abs_deltas) > 0
-            else 0.0
-        )
-        total_delta = float(np.sum(abs_deltas))
-        candidates.append(
-            (
-                max_limited_delta,
-                total_delta,
-                seed_index,
-                goal_state,
-                raw_positions,
-                goal_positions,
-            )
-        )
 
     if not candidates:
         logger.warn(
