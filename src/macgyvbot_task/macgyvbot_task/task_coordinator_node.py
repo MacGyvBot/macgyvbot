@@ -2604,7 +2604,6 @@ class TaskCoordinatorNode(Node):
             yaw_deg=f"{yaw_deg:.1f}",
             offset_deg=f"{PICK_GRASP_YAW_OFFSET_DEG:.1f}",
             adjusted_yaw_deg=f"{adjusted_yaw_deg:.1f}",
-            final_grasp_yaw_deg=f"{final_grasp_yaw_deg:.1f}",
         )
         return final_grasp_yaw_deg
 

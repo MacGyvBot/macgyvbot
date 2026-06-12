@@ -360,16 +360,6 @@ class DropRecoverySequenceRunner:
             return False
 
         self.grasp_wrist_target_rad = float(current_wrist_rad) + math.radians(yaw_deg)
-        log_info(
-            self.logger,
-            "recovery grasp wrist target prepared",
-            step="recovery_wrist",
-            event="prepared",
-            target=self.target_tool,
-            yaw_deg=yaw_deg,
-            current_wrist_deg=math.degrees(float(current_wrist_rad)),
-            target_wrist_deg=math.degrees(self.grasp_wrist_target_rad),
-        )
         return True
 
     def _apply_grasp_yaw(self):
