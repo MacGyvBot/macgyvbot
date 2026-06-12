@@ -97,15 +97,15 @@ class FakeDrawerCollisionScene:
         raise AssertionError("planning precondition must not refresh drawer scene")
 
 
-def test_positive_final_angle_prefers_negative_rotation_candidate():
+def test_positive_final_angle_prefers_principal_rotation_candidate():
     current = math.radians(0.0)
     target = math.radians(10.0)
 
     candidates = _negative_first_equivalent_values(current, target)
     deltas = [math.degrees(candidate - current) for candidate in candidates]
 
-    assert math.isclose(deltas[0], -350.0)
-    assert any(math.isclose(delta, 10.0) for delta in deltas)
+    assert math.isclose(deltas[0], 10.0)
+    assert any(math.isclose(delta, -350.0) for delta in deltas)
 
 
 def test_negative_final_angle_keeps_short_negative_rotation_first():
@@ -129,16 +129,27 @@ def test_equivalent_current_angle_stays_first():
     assert math.isclose(deltas[0], 0.0, abs_tol=1e-6)
 
 
-def test_drawer_equivalent_candidates_include_opposite_positive_rotation():
+def test_large_positive_angle_prefers_principal_equivalent_before_wide_rotation():
     current = math.radians(0.0)
     target = current + math.radians(140.0)
 
     candidates = _negative_first_equivalent_values(current, target)
     deltas = [math.degrees(candidate - current) for candidate in candidates]
 
-    assert math.isclose(deltas[0], -220.0)
+    assert math.isclose(deltas[0], 140.0)
     assert any(math.isclose(delta, -220.0) for delta in deltas)
     assert any(math.isclose(delta, 140.0) for delta in deltas)
+
+
+def test_nonprincipal_target_prefers_equivalent_within_half_turn():
+    current = math.radians(0.0)
+    target = math.radians(260.834756723043)
+
+    candidates = _negative_first_equivalent_values(current, target)
+    deltas = [math.degrees(candidate - current) for candidate in candidates]
+
+    assert math.isclose(deltas[0], -99.16524327695704)
+    assert any(math.isclose(delta, 260.834756723043) for delta in deltas)
 
 
 def test_drawer_scene_precondition_checks_scene_key_without_refresh():

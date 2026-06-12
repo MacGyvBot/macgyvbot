@@ -101,6 +101,7 @@ from macgyvbot_manipulation.onrobot_gripper import RG
 from macgyvbot_manipulation.robot_pose import (
     get_ee_matrix,
     make_safe_pose,
+    normalize_angle_deg,
     orientation_from_joint_positions,
 )
 from macgyvbot_manipulation.robot_safezone import SAFE_Z_MIN, safe_z_min_for_drawer
@@ -1255,7 +1256,6 @@ class TaskCoordinatorNode(Node):
             should_dispatch = False
             with self._queue_lock:
                 self.resume_req.set()
-                self.pause_req.clear()
                 if self._current_step is None and not self._step_thread_alive():
                     should_dispatch = self._resume_suspended_step_locked()
             self._publish_robot_status(
@@ -2108,7 +2108,12 @@ class TaskCoordinatorNode(Node):
                 self._suspended_task_name = None
                 self._finish_drop_recovery_queue_locked(False)
                 return
-            if task_name == "recovery" and not ok and not self.pause_req.is_set():
+            if (
+                task_name == "recovery"
+                and not ok
+                and not self.pause_req.is_set()
+                and not self.resume_req.is_set()
+            ):
                 self._queue.clear()
                 self._suspended_step = None
                 self._suspended_task_name = None
@@ -2136,7 +2141,11 @@ class TaskCoordinatorNode(Node):
                     step_name=step.name,
                     target=self.state.target_label or "unknown",
                 )
-            elif (self.pause_req.is_set() or self.drop_req.is_set()) and step.retry_on_pause:
+            elif (
+                self.pause_req.is_set()
+                or self.drop_req.is_set()
+                or self.resume_req.is_set()
+            ) and step.retry_on_pause:
                 if task_name == "recovery":
                     self.state.recovery_mode = True
                 self._task_log(task_name, quiet_info=True).info(
@@ -2586,6 +2595,7 @@ class TaskCoordinatorNode(Node):
             return None
 
         adjusted_yaw_deg = float(yaw_deg) + PICK_GRASP_YAW_OFFSET_DEG
+        final_grasp_yaw_deg = normalize_angle_deg(adjusted_yaw_deg)
         self._task_log("perception", quiet_info=True).info(
             "grasp detection binary crop PCA yaw applied",
             step="pca_yaw",
@@ -2594,8 +2604,9 @@ class TaskCoordinatorNode(Node):
             yaw_deg=f"{yaw_deg:.1f}",
             offset_deg=f"{PICK_GRASP_YAW_OFFSET_DEG:.1f}",
             adjusted_yaw_deg=f"{adjusted_yaw_deg:.1f}",
+            final_grasp_yaw_deg=f"{final_grasp_yaw_deg:.1f}",
         )
-        return adjusted_yaw_deg
+        return final_grasp_yaw_deg
 
     def _generate_grasp_detection_mask_images_after_vlm_observe(
         self,

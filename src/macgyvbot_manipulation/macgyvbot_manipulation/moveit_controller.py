@@ -79,24 +79,23 @@ def _equivalent_values(current, target, tolerance_rad=1e-9):
         for value in candidates
         if abs(value - current) <= tolerance_rad
     ]
-    negative = sorted(
-        [
-            value
-            for value in candidates
-            if value - current < -tolerance_rad
-        ],
-        key=lambda value: abs(value - current),
-    )
-    positive = sorted(
-        [
-            value
-            for value in candidates
-            if value - current > tolerance_rad
-        ],
-        key=lambda value: abs(value - current),
+    nonzero = [
+        value
+        for value in candidates
+        if abs(value - current) > tolerance_rad
+    ]
+    nonzero.sort(
+        key=lambda value: (
+            not _is_principal_angle(value),
+            abs(value - current),
+        )
     )
 
-    return zero + negative + positive
+    return zero + nonzero
+
+
+def _is_principal_angle(value, tolerance_rad=1e-9):
+    return -math.pi - tolerance_rad <= float(value) <= math.pi + tolerance_rad
 
 
 def _opposite_direction(delta_deg):
@@ -462,6 +461,38 @@ def plan_and_execute(
             return False
 
     elif state_goal:
+        try:
+            robot_model = robot.get_robot_model()
+            jmg = robot_model.get_joint_model_group(GROUP_NAME)
+            joint_names = list(jmg.active_joint_model_names)
+            goal_positions = list(state_goal.get_joint_group_positions(GROUP_NAME))
+            if WRIST_JOINT_NAME in joint_names:
+                j6_idx = joint_names.index(WRIST_JOINT_NAME)
+                if j6_idx < len(goal_positions):
+                    logger.info(
+                        format_structured_log(
+                            pkg="manipulation",
+                            pipe="moveit_control",
+                            msg="debug MoveIt plan joint target",
+                            joint=WRIST_JOINT_NAME,
+                            target_j6_rad=float(goal_positions[j6_idx]),
+                            target_j6_deg=math.degrees(
+                                float(goal_positions[j6_idx])
+                            ),
+                            lower_deg=math.degrees(WRIST_JOINT_LOWER_LIMIT_RAD),
+                            upper_deg=math.degrees(WRIST_JOINT_UPPER_LIMIT_RAD),
+                        )
+                    )
+        except Exception as exc:
+            logger.warn(
+                format_structured_log(
+                    pkg="manipulation",
+                    pipe="moveit_control",
+                    msg="debug MoveIt plan joint target unavailable",
+                    joint=WRIST_JOINT_NAME,
+                    reason=exc,
+                )
+            )
         arm.set_goal_state(robot_state=state_goal)
 
     plan_result = arm.plan(parameters=params) if params else arm.plan()
@@ -1088,12 +1119,44 @@ class MoveItController:
             current_j6,
             target_j6_rad,
         )
+        logger.info(
+            format_structured_log(
+                pkg="manipulation",
+                pipe="moveit_control",
+                msg="debug wrist equivalent candidates",
+                joint=WRIST_JOINT_NAME,
+                current_j6_rad=current_j6,
+                current_j6_deg=math.degrees(current_j6),
+                target_j6_rad=float(target_j6_rad),
+                target_j6_deg=math.degrees(float(target_j6_rad)),
+                candidates_deg=[
+                    round(math.degrees(candidate), 3)
+                    for candidate in target_candidates
+                ],
+                lower_deg=math.degrees(WRIST_JOINT_LOWER_LIMIT_RAD),
+                upper_deg=math.degrees(WRIST_JOINT_UPPER_LIMIT_RAD),
+            )
+        )
         unfiltered_count = len(target_candidates)
         target_candidates = [
             target_j6
             for target_j6 in target_candidates
             if _wrist_joint_value_within_limits(target_j6)
         ]
+        logger.info(
+            format_structured_log(
+                pkg="manipulation",
+                pipe="moveit_control",
+                msg="debug wrist candidate filtering",
+                joint=WRIST_JOINT_NAME,
+                candidates_deg=[
+                    round(math.degrees(candidate), 3)
+                    for candidate in target_candidates
+                ],
+                removed=unfiltered_count - len(target_candidates),
+                remaining=len(target_candidates),
+            )
+        )
         if len(target_candidates) < unfiltered_count:
             logger.warn(
                 format_structured_log(
@@ -1149,6 +1212,21 @@ class MoveItController:
                     target_deg=math.degrees(target_j6),
                     delta_deg=delta_deg,
                     opposite_direction=_opposite_direction(delta_deg),
+                )
+            )
+            logger.info(
+                format_structured_log(
+                    pkg="manipulation",
+                    pipe="moveit_control",
+                    msg="debug wrist candidate before planning",
+                    joint=WRIST_JOINT_NAME,
+                    attempt=attempt,
+                    target_j6_rad=float(target_j6),
+                    target_j6_deg=math.degrees(target_j6),
+                    current_j6_rad=float(current_j6),
+                    current_j6_deg=math.degrees(current_j6),
+                    lower_deg=math.degrees(WRIST_JOINT_LOWER_LIMIT_RAD),
+                    upper_deg=math.degrees(WRIST_JOINT_UPPER_LIMIT_RAD),
                 )
             )
 
