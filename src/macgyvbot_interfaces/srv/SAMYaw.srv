@@ -2,8 +2,15 @@ sensor_msgs/Image color_image
 sensor_msgs/Image depth_image
 float64[] bbox_xyxy
 string target_label
+bool has_grasp_point_xy
+float64 grasp_point_u
+float64 grasp_point_v
+float64 camera_fx
+float64 camera_fy
 ---
 bool success
 float64 yaw_deg
+bool has_grasp_width_mm
+float64 grasp_width_mm
 string debug_image_path
 string error_message

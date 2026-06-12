@@ -5,6 +5,8 @@ from __future__ import annotations
 import time
 
 from macgyvbot_config.grasp import (
+    GRASP_WIDTH_MIN_MM,
+    GRASP_WIDTH_OFFSET_PER_SIDE_MM,
     GRASP_VERIFY_POLL_SEC,
     PREGRASP_MAX_EXTRA_DESCENT_M,
     PREGRASP_MEASUREMENT_SETTLE_TIMEOUT_SEC,
@@ -116,3 +118,18 @@ def calculate_pregrasp_extra_descent(depth_mm):
 
     descent_m = abs(float(depth_mm)) / 1000.0
     return min(descent_m, PREGRASP_MAX_EXTRA_DESCENT_M)
+
+
+def calculate_limited_grasp_width_mm(mask_width_mm, max_width_mm=None):
+    """Add per-side clearance to a measured mask width and clamp to RG limits."""
+    if mask_width_mm is None:
+        return None
+
+    width_mm = (
+        float(mask_width_mm)
+        + (2.0 * float(GRASP_WIDTH_OFFSET_PER_SIDE_MM))
+    )
+    width_mm = max(float(GRASP_WIDTH_MIN_MM), width_mm)
+    if max_width_mm is not None and max_width_mm > 0.0:
+        width_mm = min(width_mm, float(max_width_mm))
+    return width_mm

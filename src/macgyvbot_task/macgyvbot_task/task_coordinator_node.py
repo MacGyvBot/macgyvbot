@@ -1669,6 +1669,8 @@ class TaskCoordinatorNode(Node):
         self.state.grasp_detection_mask_target = None
         self.state.grasp_detection_yaw_deg = None
         self.state.grasp_detection_yaw_target = None
+        self.state.grasp_detection_width_mm = None
+        self.state.grasp_detection_width_target = None
         self.handoff_retry_req.clear()
         self.handoff_fallback_req.clear()
         self.handoff_decision_pending.clear()
@@ -1964,7 +1966,7 @@ class TaskCoordinatorNode(Node):
             )
             if self.grasp_point_mode != GRASP_POINT_MODE_CENTER:
                 return target
-            target = self._target_with_mask_pca_yaw(target, target_label)
+            target = self._target_with_mask_pca_result(target, target_label)
             self._log_grasp_point_refine_success(
                 target,
                 GRASP_POINT_MODE_CENTER,
@@ -2014,23 +2016,19 @@ class TaskCoordinatorNode(Node):
                 reason="vlm_service_failed",
             )
 
-        orientation_rpy_deg = list(response.orientation_rpy_deg) or None
-        pca_yaw_deg = self._mask_pca_yaw_for_target(target_label)
-        if pca_yaw_deg is not None:
-            orientation_rpy_deg = [0.0, 0.0, float(pca_yaw_deg)]
-
-        return self.pick_target_resolver.target_from_selected_grasp(
+        target = self.pick_target_resolver.target_from_selected_grasp(
             label,
             target_label,
             (
                 int(response.pixel_u),
                 int(response.pixel_v),
                 str(response.source or self.grasp_point_mode),
-                orientation_rpy_deg,
+                list(response.orientation_rpy_deg) or None,
             ),
             depth_image,
             intrinsics,
         )
+        return self._target_with_mask_pca_result(target, target_label)
 
     def _refine_yolo_pick_target_after_centering(
         self,
@@ -2060,7 +2058,7 @@ class TaskCoordinatorNode(Node):
                     box,
                 )
                 if selected is not None:
-                    target = self._target_with_mask_pca_yaw(
+                    target = self._target_with_mask_pca_result(
                         self.pick_target_resolver.target_from_selected_grasp(
                             label,
                             target_label,
@@ -2085,7 +2083,7 @@ class TaskCoordinatorNode(Node):
                     reason="grasp_point_bbox_timeout",
                     timeout_sec=timeout_sec,
                 )
-                target = self._target_with_mask_pca_yaw(
+                target = self._target_with_mask_pca_result(
                     self.pick_target_resolver.target_from_boxes(
                         results[0].boxes,
                         target_label,
@@ -2137,6 +2135,15 @@ class TaskCoordinatorNode(Node):
             return target
         return replace(target, yaw_deg=float(pca_yaw_deg))
 
+    def _target_with_mask_pca_result(self, target, target_label):
+        if target is None or not target.found:
+            return target
+        self._generate_grasp_detection_mask_images_after_vlm_observe(
+            target_label,
+            grasp_point_xy=target.pixel,
+        )
+        return self._target_with_mask_pca_yaw(target, target_label)
+
     def _mask_pca_yaw_for_target(self, target_label):
         if self.state.grasp_detection_yaw_target != target_label:
             return None
@@ -2156,7 +2163,11 @@ class TaskCoordinatorNode(Node):
         )
         return adjusted_yaw_deg
 
-    def _generate_grasp_detection_mask_images_after_vlm_observe(self, target_label):
+    def _generate_grasp_detection_mask_images_after_vlm_observe(
+        self,
+        target_label,
+        grasp_point_xy=None,
+    ):
         if not self.frame_processor.has_camera_state():
             self._task_log("perception").warn(
                 "camera state unavailable for grasp detection mask image",
@@ -2189,6 +2200,8 @@ class TaskCoordinatorNode(Node):
             depth_image=self.state.depth_image.copy(),
             bbox_xyxy=bbox_xyxy,
             target_label=target_label,
+            grasp_point_xy=grasp_point_xy,
+            intrinsics=self.state.intrinsics,
             interrupted=self._motion_interrupted,
         )
         if response is None:
@@ -2203,18 +2216,31 @@ class TaskCoordinatorNode(Node):
             self.state.grasp_detection_mask_target = None
             self.state.grasp_detection_yaw_deg = None
             self.state.grasp_detection_yaw_target = None
+            self.state.grasp_detection_width_mm = None
+            self.state.grasp_detection_width_target = None
             return None
 
         self.state.grasp_detection_mask_images = None
         self.state.grasp_detection_mask_target = None
         self.state.grasp_detection_yaw_deg = float(response.yaw_deg)
         self.state.grasp_detection_yaw_target = target_label
+        if getattr(response, "has_grasp_width_mm", False):
+            self.state.grasp_detection_width_mm = float(response.grasp_width_mm)
+            self.state.grasp_detection_width_target = target_label
+        else:
+            self.state.grasp_detection_width_mm = None
+            self.state.grasp_detection_width_target = None
         self._task_log("perception", quiet_info=True).info(
             "SAM yaw service result saved",
             step="grasp_mask",
             event="done",
             target=target_label,
             yaw_deg=f"{response.yaw_deg:.1f}",
+            width_mm=(
+                f"{float(response.grasp_width_mm):.1f}"
+                if getattr(response, "has_grasp_width_mm", False)
+                else "none"
+            ),
             path=response.debug_image_path,
         )
         return response

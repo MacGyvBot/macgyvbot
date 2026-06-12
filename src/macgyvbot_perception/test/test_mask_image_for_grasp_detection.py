@@ -6,6 +6,7 @@ from macgyvbot_perception.grasp_point.mask_image_for_grasp_detection import (
     generate_sam_depth_mask_image_for_grasp_detection,
 )
 from macgyvbot_perception.grasp_point.grasp_method import (
+    estimate_yaw_and_cross_section_width_from_binary_crop,
     estimate_yaw_from_binary_crop,
 )
 
@@ -103,3 +104,22 @@ def test_estimate_yaw_from_binary_crop_uses_white_mask_pixels():
     assert debug["success"]
     assert debug["num_pixels"] == 88
     assert yaw_deg == -90.0
+
+
+def test_estimate_yaw_and_cross_section_width_uses_grasp_point_depth():
+    crop = np.zeros((20, 30, 3), dtype=np.uint8)
+    crop[8:12, 4:26] = 255
+    depth = np.full((20, 30), 1000.0, dtype=np.float32)
+
+    yaw_deg, width_mm, debug = estimate_yaw_and_cross_section_width_from_binary_crop(
+        crop,
+        grasp_point_xy=(15.0, 10.0),
+        depth_mm=depth,
+        camera_fx=100.0,
+        camera_fy=100.0,
+    )
+
+    assert debug["success"]
+    assert debug["has_width"]
+    assert yaw_deg == -90.0
+    assert width_mm == 40.0

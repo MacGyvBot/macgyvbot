@@ -30,6 +30,8 @@ class TaskRuntimeState:
     grasp_detection_mask_target: str | None = None
     grasp_detection_yaw_deg: float | None = None
     grasp_detection_yaw_target: str | None = None
+    grasp_detection_width_mm: float | None = None
+    grasp_detection_width_target: str | None = None
     hand_grasp_image: Any = None
     latest_wrench: Any = None
     home_xyz: tuple | None = None
