@@ -90,6 +90,11 @@ class VoiceCommandWindowSmokeTest(unittest.TestCase):
         self.assertIsNotNone(pixmap)
         self.assertFalse(pixmap.isNull())
 
+    def test_current_status_box_has_label_and_left_aligned_text(self):
+        self.assertEqual(self.window._current_status_label.text(), "로봇 상태:")
+        self.assertEqual(self.window._current_status.text(), "대기")
+        self.assertTrue(self.window._current_status.alignment() & 1)
+
 
 if __name__ == "__main__":
     unittest.main()

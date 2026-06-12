@@ -621,6 +621,8 @@ class CommandInputNode(Node):
         return ""
 
     def _build_rejected_message(self, reason, message):
+        if reason == "resume_without_paused_task":
+            return "재개할 작업이 없습니다. 다음 명령을 기다리겠습니다."
         if reason == "llm_failed":
             return (
                 "문장을 끝까지 이해하지 못했습니다. "

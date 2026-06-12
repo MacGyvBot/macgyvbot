@@ -76,7 +76,9 @@ else:
             self._detector_connection_status = QLabel('Detector 영상: 대기 중')
             self._gui_connection_status = QLabel('GUI 노드: 연결됨')
             self._current_status = QLabel('대기')
-            self._current_status.setAlignment(Qt.AlignCenter)
+            self._current_status.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            self._current_status_label = QLabel('로봇 상태:')
+            self._current_status_label.setObjectName('currentStatusLabel')
             self._task_target_status = QLabel('작업 대상: 없음')
             self._pause_button = QPushButton('멈춤')
             self._pause_button.setObjectName('pauseControlButton')
@@ -157,6 +159,7 @@ else:
             status_panel_layout.addWidget(self._detector_connection_status)
             status_panel_layout.addWidget(self._gui_connection_status)
             status_panel_layout.addSpacing(12)
+            status_panel_layout.addWidget(self._current_status_label)
             status_panel_layout.addWidget(self._current_status)
             status_panel_layout.addWidget(self._task_target_status)
             status_panel_layout.addStretch(1)
@@ -1045,6 +1048,12 @@ else:
                     color: #6A7E96;
                     font-size: 12px;
                 }
+                QLabel#currentStatusLabel {
+                    color: #6A7E96;
+                    font-size: 12px;
+                    font-weight: 800;
+                    padding: 0px 2px;
+                }
                 QFrame#taskLogPanel {
                     background-color: #F8FBFF;
                     border: 1px solid #C9DAEC;
@@ -1168,13 +1177,13 @@ else:
             )
             self._current_status.setStyleSheet(
                 '''
-                background-color: #FFF4B8;
-                border: 1px solid #E2B84D;
+                background-color: #FFF8D6;
+                border: 1px solid #F1DA8A;
                 border-radius: 10px;
                 padding: 8px 12px;
-                color: #5A4300;
+                color: #5B4B16;
                 font-size: 13px;
-                font-weight: 900;
+                font-weight: 800;
                 '''
             )
             task_style = '''

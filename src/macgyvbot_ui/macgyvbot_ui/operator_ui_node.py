@@ -1013,6 +1013,8 @@ class OperatorUiNode(Node):
         return '미수신'
 
     def _build_rejected_message(self, reason, message):
+        if reason == 'resume_without_paused_task':
+            return '재개할 작업이 없습니다. 다음 명령을 기다리겠습니다.'
         if reason == 'llm_failed':
             return '다시 말씀해주세요.'
         if reason == 'unknown_tool':
@@ -1207,8 +1209,8 @@ class OperatorUiNode(Node):
     def _robot_panel_status(state, message):
         return {
             'accepted': '요청 확인',
-            'searching_drawer': '서랍탐색',
-            'moving_to_drawer': '서랍이동',
+            'searching_drawer': '서랍 탐색 중',
+            'moving_to_drawer': '서랍 이동 중',
             'searching_drawer_handle': '손잡이 탐색',
             'opening_drawer': '서랍 열기',
             'closing_drawer': '서랍 닫기',
@@ -1218,17 +1220,17 @@ class OperatorUiNode(Node):
             'grasping': '공구 파지',
             'grasp_success': '파지 성공',
             'lifting_tool': '공구상승',
-            'moving_to_handoff': '전달이동',
+            'moving_to_handoff': '전달 위치 이동',
             'searching_hand': '손 탐색',
             'waiting_handoff': '전달 대기',
-            'handoff_inspection_pending': '손선택',
+            'handoff_inspection_pending': '재시도 선택 대기',
             'handoff_complete': '전달 완료',
             'waiting_return_handoff': '반납 대기',
-            'moving_return_grasp_pose': '반납이동',
-            'checking_return_target': '반납확인',
-            'return_hand_detected': '공구수령',
+            'moving_return_grasp_pose': '반납 위치 이동',
+            'checking_return_target': '반납 위치 확인',
+            'return_hand_detected': '공구 수령 중',
             'placing_return_tool': '공구 보관',
-            'returning_home': '홈복귀',
+            'returning_home': '홈 복귀 중',
             'done': '완료',
             'completed': '완료',
             'success': '완료',
@@ -1236,16 +1238,16 @@ class OperatorUiNode(Node):
             'error': '오류',
             'busy': '작업 중',
             'paused': '일시정지',
-            'resumed': '재개',
+            'resumed': '작업 재개',
             'cancelled': '취소',
             'returned': '반납 완료',
             'rejected': '거절',
             'tool_dropped': '공구낙하',
-            'vlm_loading': '모델로딩',
-            'vlm_inferencing': '파지탐색',
-            'vlm_ready': '모델준비',
-            'vlm_warning': '모델경고',
-            'vlm_error': '모델오류',
+            'vlm_loading': 'VLM 로드 중',
+            'vlm_inferencing': '파지점 탐색',
+            'vlm_ready': 'VLM 준비 완료',
+            'vlm_warning': 'VLM 경고',
+            'vlm_error': 'VLM 오류',
         }.get(state, OperatorUiNode._compact_status_text(message))
 
     @staticmethod
@@ -1597,38 +1599,38 @@ class OperatorUiNode(Node):
         mapping = {
             '명령대기': '대기',
             '대기': '대기',
-            '로봇동작중': '동작중',
-            '로봇노드실행대기중입니다': '노드대기',
-            '입력수신': '입력수신',
-            '정지요청전달': '정지요청',
-            '재개대기': '재개대기',
-            '손인식재시도': '재시도',
-            '작업취소처리중': '취소중',
-            '종료처리중': '종료중',
-            '명령해석완료': '해석완료',
-            '확인응답대기': '확인대기',
+            '로봇동작중': '로봇 동작 중',
+            '로봇노드실행대기중입니다': '로봇 노드 대기',
+            '입력수신': '입력 받음',
+            '정지요청전달': '정지 요청 전달',
+            '재개대기': '재개 대기',
+            '손인식재시도': '손 인식 재시도',
+            '작업취소처리중': '작업 취소 중',
+            '종료처리중': '종료 처리 중',
+            '명령해석완료': '명령 해석 완료',
+            '확인응답대기': '확인 응답 대기',
             '명령취소': '명령취소',
-            '대화응답': '응답완료',
-            '재입력필요': '재입력',
+            '대화응답': '응답 완료',
+            '재입력필요': '재입력 필요',
             '종료': '종료',
             '종료실패': '종료실패',
-            'home복귀': '홈복귀',
-            'home복귀요청': '홈요청',
-            'home복귀중': '홈복귀중',
-            'vlm로드중': '모델로딩',
-            'vlm탐색중': '파지탐색',
-            'vlm준비완료': '모델준비',
-            'vlm경고': '모델경고',
-            'vlm오류': '모델오류',
+            'home복귀': '홈 복귀',
+            'home복귀요청': '홈 복귀 요청',
+            'home복귀중': '홈 복귀 중',
+            'vlm로드중': 'VLM 로드 중',
+            'vlm탐색중': '파지점 탐색',
+            'vlm준비완료': 'VLM 준비 완료',
+            'vlm경고': 'VLM 경고',
+            'vlm오류': 'VLM 오류',
         }
         compact = mapping.get(normalized)
         if compact:
             return compact
         koreanized = raw.replace('Home', '홈').replace('VLM', '모델')
         koreanized = ' '.join(koreanized.split())
-        if len(koreanized) <= 10:
+        if len(koreanized) <= 16:
             return koreanized
-        return koreanized[:9] + '…'
+        return koreanized[:15] + '…'
 
     def request_manual_gripper_width(self, width_mm):
         try:
