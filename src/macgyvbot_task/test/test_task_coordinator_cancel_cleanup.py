@@ -536,6 +536,23 @@ def test_drop_recovery_uses_separate_resume_slots(monkeypatch):
     assert node._drop_recovery_resume_task_name == "pick"
 
 
+def test_paused_recovery_step_keeps_recovery_mode(monkeypatch):
+    _install_task_coordinator_import_stubs(monkeypatch)
+    from macgyvbot_task.application.task_control.task_step import TaskStep
+    from macgyvbot_task.task_coordinator_node import TaskCoordinatorNode
+
+    node = _make_bring_node(TaskCoordinatorNode)
+    recovery_step = TaskStep("recovery/cleanup", lambda: False)
+    node.state.recovery_mode = False
+    node.pause_req.set()
+
+    node._finish_step("recovery", recovery_step, False, None)
+
+    assert node.state.recovery_mode is True
+    assert node._suspended_step is recovery_step
+    assert node._suspended_task_name == "recovery"
+
+
 def test_drop_recovery_success_restores_original_step_before_tail(monkeypatch):
     _install_task_coordinator_import_stubs(monkeypatch)
     from macgyvbot_task.application.task_control.task_step import TaskStep

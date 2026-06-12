@@ -711,6 +711,37 @@ def test_recovery_cleanup_pause_keeps_recovery_mode(monkeypatch):
 
     assert not ok
     assert status.recovery_mode is True
+    assert not [
+        message
+        for level, message, _fields in logger.messages
+        if level == "error" and message == "recovery Home return failed"
+    ]
+
+
+def test_queue_recovery_cleanup_leaves_recovery_mode_for_queue_finish(monkeypatch):
+    status = FakeStatus()
+    status.recovery_mode = True
+    logger = FakeLogger()
+    config = RecoveryConfig(
+        robot=FakeRobot(),
+        state=status,
+    )
+
+    monkeypatch.setattr(recovery_utils, "return_home", lambda *_args: True)
+
+    ok = recovery_utils.cleanup_after_recovery(
+        status,
+        FakeMotion(),
+        config,
+        logger,
+        task_type="pick",
+        target_tool="wrench",
+        reason="recovery_succeeded",
+        finish_recovery_mode=False,
+    )
+
+    assert ok
+    assert status.recovery_mode is True
 
 
 def test_drop_recovery_builds_queue_steps():

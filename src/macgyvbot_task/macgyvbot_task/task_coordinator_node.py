@@ -2092,6 +2092,16 @@ class TaskCoordinatorNode(Node):
             self._current_task_name = None
             self._step_thread = None
 
+            if self.exit_req.is_set():
+                self._task_log(task_name, quiet_info=True).info(
+                    "task queue stopped by exit request",
+                    step="queue",
+                    event="cancel",
+                    reason="exit_requested",
+                )
+                self._run_cleanup_callbacks()
+                self._clear_task_state()
+                return
             if task_name == "recovery" and self.drop_req.is_set():
                 self._queue.clear()
                 self._suspended_step = None
@@ -2127,6 +2137,8 @@ class TaskCoordinatorNode(Node):
                     target=self.state.target_label or "unknown",
                 )
             elif (self.pause_req.is_set() or self.drop_req.is_set()) and step.retry_on_pause:
+                if task_name == "recovery":
+                    self.state.recovery_mode = True
                 self._task_log(task_name, quiet_info=True).info(
                     "task step suspended",
                     step="step",
@@ -2141,16 +2153,6 @@ class TaskCoordinatorNode(Node):
                     self._resume_suspended_step_locked()
                 else:
                     return
-            elif self.exit_req.is_set():
-                self._task_log(task_name, quiet_info=True).info(
-                    "task queue stopped by exit request",
-                    step="queue",
-                    event="cancel",
-                    reason="exit_requested",
-                )
-                self._run_cleanup_callbacks()
-                self._clear_task_state()
-                return
             elif not ok:
                 self._task_log(task_name).error(
                     "task step failed",

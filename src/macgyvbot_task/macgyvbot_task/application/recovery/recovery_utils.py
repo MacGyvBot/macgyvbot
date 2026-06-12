@@ -699,10 +699,12 @@ def cleanup_after_recovery(
     task_type,
     target_tool,
     reason=None,
+    finish_recovery_mode=True,
 ):
     """Finish recovery by returning home."""
     home_ok = return_home(motion_controller, config)
-    if not home_ok:
+    interrupted = _recovery_interrupted(config)
+    if not home_ok and not interrupted:
         log_recovery_event(
             logger,
             "RECOVERY_FAILED",
@@ -713,8 +715,7 @@ def cleanup_after_recovery(
                 "reason": "return_home_failed",
             },
         )
-    interrupted = _recovery_interrupted(config)
-    if not interrupted:
+    if finish_recovery_mode and not interrupted:
         set_recovery_mode(status, False)
     if reason is not None:
         log_recovery_event(

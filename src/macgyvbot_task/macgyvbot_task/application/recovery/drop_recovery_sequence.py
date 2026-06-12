@@ -522,6 +522,7 @@ class DropRecoverySequenceRunner:
             self.task_type,
             self.target_tool,
             reason="recovery_succeeded",
+            finish_recovery_mode=False,
         )
         if recovery_restart_requested(self.config) or self._paused_or_exiting():
             return False
