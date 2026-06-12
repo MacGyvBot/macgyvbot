@@ -65,6 +65,7 @@ from macgyvbot_task.application.recovery.recovery_utils import (  # noqa: E402
 )
 import macgyvbot_task.application.recovery.recovery_utils as recovery_utils  # noqa: E402
 from macgyvbot_task.application.recovery import drop_recovery  # noqa: E402
+from macgyvbot_task.application.recovery import drop_recovery_sequence  # noqa: E402
 from macgyvbot_config.robot import RECOVERY_INSPECTION_JOINTS  # noqa: E402
 
 
@@ -714,7 +715,7 @@ def test_drop_recovery_builds_queue_steps():
         detect_target_fn=lambda _target: None,
     )
 
-    steps = drop_recovery.build_drop_recovery_steps(
+    steps = drop_recovery_sequence.build_drop_recovery_steps(
         status,
         FakeMotion(),
         FakeGripper(),
@@ -736,6 +737,30 @@ def test_drop_recovery_builds_queue_steps():
         "recovery/cleanup",
     ]
     assert all(step.retry_on_pause for step in steps[1:])
+
+
+def test_drop_recovery_queue_step_returns_immediately_when_paused(monkeypatch):
+    status = FakeStatus()
+    logger = FakeLogger()
+    pause = FakeEvent(set_initially=True)
+    wait_calls = []
+    config = RecoveryConfig(
+        robot=FakeRobot(),
+        state=status,
+        pause_event=pause,
+        wait_fn=lambda _duration: wait_calls.append(_duration),
+    )
+    steps = drop_recovery_sequence.build_drop_recovery_steps(
+        status,
+        FakeMotion(),
+        FakeGripper(),
+        config,
+        logger,
+        task_type="pick",
+    )
+
+    assert steps[1].execute() is False
+    assert wait_calls == []
 
 
 def test_recovery_not_found_closes_open_drawer_then_returns_home(monkeypatch):
