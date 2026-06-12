@@ -360,6 +360,8 @@ class TaskCoordinatorNode(Node):
         self._drop_recovery_thread = None
         self._pending_drop_recovery_payload = None
         self._active_drop_recovery_snapshot = None
+        self._drop_recovery_resume_step = None
+        self._drop_recovery_resume_task_name = None
         self._drop_recovery_resume_queue = None
         self._vlm_preload_timer = None
         self._manual_gripper_lock = threading.Lock()
@@ -1533,8 +1535,8 @@ class TaskCoordinatorNode(Node):
                 self._drop_recovery_resume_queue = list(self._queue)
             self._queue.clear()
             if self._current_step is not None:
-                self._suspended_step = self._current_step
-                self._suspended_task_name = self._current_task_name
+                self._drop_recovery_resume_step = self._current_step
+                self._drop_recovery_resume_task_name = self._current_task_name
 
         self._drop_recovery_thread = threading.Thread(
             target=self._load_drop_recovery_queue,
@@ -1658,6 +1660,15 @@ class TaskCoordinatorNode(Node):
         pending_drop_recovery = self._pending_drop_recovery_payload is not None
         self._active_drop_recovery_snapshot = None
         if ok and not pending_drop_recovery:
+            if self._drop_recovery_resume_step is not None:
+                self._queue.append(
+                    (
+                        self._drop_recovery_resume_task_name,
+                        self._drop_recovery_resume_step,
+                    )
+                )
+                self._drop_recovery_resume_step = None
+                self._drop_recovery_resume_task_name = None
             if self._drop_recovery_resume_queue is not None:
                 self._queue.extend(self._drop_recovery_resume_queue)
                 self._drop_recovery_resume_queue = None
@@ -1735,6 +1746,8 @@ class TaskCoordinatorNode(Node):
             self._queue.clear()
             self._suspended_step = None
             self._suspended_task_name = None
+            self._drop_recovery_resume_step = None
+            self._drop_recovery_resume_task_name = None
             self._drop_recovery_resume_queue = None
             self._active_drop_recovery_snapshot = None
             self._current_step = None
@@ -2090,6 +2103,19 @@ class TaskCoordinatorNode(Node):
                 self._suspended_step = None
                 self._suspended_task_name = None
                 self._finish_drop_recovery_queue_locked(False)
+                return
+            if (
+                task_name != "recovery"
+                and self.drop_req.is_set()
+                and self._drop_recovery_resume_step is not None
+            ):
+                self._task_log(task_name, quiet_info=True).info(
+                    "task step suspended for drop recovery",
+                    step="step",
+                    event="drop",
+                    step_name=step.name,
+                    target=self.state.target_label or "unknown",
+                )
                 return
 
             if ok and not self.pause_req.is_set() and not self.drop_req.is_set():
