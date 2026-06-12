@@ -47,6 +47,32 @@ class FakeToolHoldMonitor:
         self.stop_reasons.append(reason)
 
 
+class FakeDrawerFlow:
+    def drawer_id_for_tool(self, tool_name):
+        return 1 if tool_name == "screwdriver" else None
+
+    def prepare_open_handle_target(self, drawer_id, _logger):
+        return drawer_id == 1
+
+    def move_to_open_handle_preapproach(self, drawer_id, _logger):
+        return drawer_id == 1
+
+    def move_to_open_handle_pose(self, drawer_id, _logger):
+        return drawer_id == 1
+
+    def grip_open_handle(self, drawer_id, _logger):
+        return drawer_id == 1
+
+    def pull_open_drawer(self, drawer_id, _logger):
+        return drawer_id == 1
+
+    def release_open_handle(self, drawer_id, _logger):
+        return drawer_id == 1
+
+    def observe_drawer(self, drawer_id, _logger):
+        return drawer_id == 1
+
+
 def _module(name, **attrs):
     module = types.ModuleType(name)
     for key, value in attrs.items():
@@ -159,6 +185,7 @@ def _install_task_coordinator_import_stubs(monkeypatch):
         "macgyvbot_manipulation.onrobot_gripper": {"RG": _class("RG")},
         "macgyvbot_manipulation.robot_pose": {
             "get_ee_matrix": lambda *_args, **_kwargs: None,
+            "make_safe_pose": lambda *args, **_kwargs: args,
             "orientation_from_joint_positions": lambda *_args, **_kwargs: None,
         },
         "macgyvbot_perception.depth_projection": {
@@ -196,6 +223,12 @@ def _install_task_coordinator_import_stubs(monkeypatch):
         "macgyvbot_task.application.return_flow.return_sequence": {
             "ReturnSequenceRunner": _class("ReturnSequenceRunner")
         },
+        "macgyvbot_task.application.recovery": {
+            "run_drop_recovery": lambda *_args, **_kwargs: None,
+        },
+        "macgyvbot_task.application.recovery.recovery_utils": {
+            "RecoveryConfig": _class("RecoveryConfig"),
+        },
         "macgyvbot_task.application.robot.robot_home_initializer": {
             "RobotHomeInitializer": _class("RobotHomeInitializer")
         },
@@ -217,6 +250,7 @@ def _make_cancel_node(TaskCoordinatorNode, *, active_step=False):
     node.handoff_decision_pending = threading.Event()
     node.exit_req = threading.Event()
     node.pause_req = threading.Event()
+    node.drop_req = threading.Event()
     node.resume_req = threading.Event()
     node._queue_lock = threading.RLock()
     node._queue = deque([("pick", object())])
@@ -277,6 +311,82 @@ def _make_resume_node(TaskCoordinatorNode):
     return node
 
 
+def _make_bring_node(TaskCoordinatorNode):
+    node = object.__new__(TaskCoordinatorNode)
+    node.exit_req = threading.Event()
+    node.pause_req = threading.Event()
+    node.drop_req = threading.Event()
+    node.resume_req = threading.Event()
+    node._queue_lock = threading.RLock()
+    node._queue = deque()
+    node._current_step = None
+    node._current_task_name = None
+    node._step_thread = None
+    node._suspended_step = None
+    node._suspended_task_name = None
+    node.drawer_flow = FakeDrawerFlow()
+    node.return_perception = types.SimpleNamespace(
+        detect_drawer_tool_labels=lambda: ["screwdriver"]
+    )
+    node.frame_processor = types.SimpleNamespace(has_camera_state=lambda: False)
+    node.detector = types.SimpleNamespace(detect=lambda _image: [])
+    node.pick_target_resolver = types.SimpleNamespace(
+        should_refine_grasp_point_at_top_view=lambda: False
+    )
+    node.pick_runner = types.SimpleNamespace(build_steps=lambda *_args: [])
+    node.motion = FakeMotion()
+    node.tool_hold_monitor = FakeToolHoldMonitor()
+    node.state = types.SimpleNamespace(
+        picking=False,
+        recovery_mode=False,
+        target_label=None,
+        target_tool=None,
+        human_grasped_tool=False,
+        current_command=None,
+        drawer_prepared_tool=None,
+        drawer_preparing_tool=None,
+        drawer_open=False,
+        opened_drawer_id=None,
+        _last_search_status_target=None,
+        grasp_detection_mask_images=None,
+        grasp_detection_mask_target=None,
+        grasp_detection_yaw_deg=None,
+        grasp_detection_yaw_target=None,
+        grasp_detection_width_mm=None,
+        grasp_detection_width_target=None,
+    )
+    node._task_log = lambda *_args, **_kwargs: FakeLogger()
+    node._motion_log = lambda *_args, **_kwargs: FakeLogger()
+    node._step_thread_alive = lambda: False
+    node._run_cleanup_callbacks = lambda: None
+    node.published_statuses = []
+    node._publish_robot_status = (
+        lambda status, **kwargs: node.published_statuses.append((status, kwargs))
+    )
+    return node
+
+
+def _attach_bring_runner(node):
+    from macgyvbot_task.application.pick_flow.bring_sequence import BringSequenceRunner
+
+    node.bring_runner = BringSequenceRunner(
+        state=node.state,
+        drawer_flow=node.drawer_flow,
+        return_perception=node.return_perception,
+        frame_processor=node.frame_processor,
+        detector=node.detector,
+        pick_target_resolver=node.pick_target_resolver,
+        pick_runner=node.pick_runner,
+        publish_robot_status=node._publish_robot_status,
+        task_log=node._task_log,
+        interrupted=node._motion_interrupted,
+        append_task_steps=node._append_task_steps,
+        has_queued_task_steps=node._has_queued_task_steps,
+        recover_after_drawer_validation_failure=lambda *_args, **_kwargs: True,
+    )
+    return node
+
+
 def test_cancel_cleans_paused_suspended_state_without_active_step(monkeypatch):
     _install_task_coordinator_import_stubs(monkeypatch)
     from macgyvbot_task.task_coordinator_node import TaskCoordinatorNode
@@ -328,3 +438,67 @@ def test_resume_without_paused_task_returns_to_idle(monkeypatch):
     assert node.published_statuses[-1][1]["action"] == "resume"
     assert node.published_statuses[-1][1]["reason"] == "resume_without_paused_task"
     assert "재개할 작업이 없습니다" in node.published_statuses[-1][1]["message"]
+
+
+def test_bring_request_loads_drawer_prepare_steps_before_search(monkeypatch):
+    _install_task_coordinator_import_stubs(monkeypatch)
+    from macgyvbot_task.task_coordinator_node import TaskCoordinatorNode
+
+    node = _attach_bring_runner(_make_bring_node(TaskCoordinatorNode))
+    loaded = {}
+
+    def _load_queue(task_name, steps):
+        loaded["task_name"] = task_name
+        loaded["step_names"] = [step.name for step in steps]
+        return True
+
+    node._load_queue = _load_queue
+    node.is_running = lambda: False
+    node._task_request_command = (
+        lambda _request: {"action": "bring", "tool_name": "screwdriver"}
+    )
+    request = types.SimpleNamespace(
+        tool_name="screwdriver",
+        has_base_target=False,
+    )
+
+    node._handle_bring_request(request)
+
+    assert loaded["task_name"] == "bring"
+    assert loaded["step_names"] == [
+        "bring/drawer_prepare_handle_target",
+        "bring/drawer_handle_preapproach",
+        "bring/drawer_handle_pose",
+        "bring/drawer_grip_handle",
+        "bring/drawer_pull_open",
+        "bring/drawer_release_handle",
+        "bring/drawer_observe",
+        "bring/drawer_validate_contents",
+        "bring/search_target",
+    ]
+    assert node.state.picking is True
+    assert node.state.target_label == "screwdriver"
+
+
+def test_drawer_prepare_step_suspends_on_pause(monkeypatch):
+    _install_task_coordinator_import_stubs(monkeypatch)
+    from macgyvbot_task.application.task_control.task_step import TaskStep
+    from macgyvbot_task.task_coordinator_node import TaskCoordinatorNode
+
+    node = _make_bring_node(TaskCoordinatorNode)
+    step = TaskStep("bring/drawer_handle_preapproach", lambda: False)
+    node.state.target_label = "screwdriver"
+    node.state.current_command = {"action": "bring", "tool_name": "screwdriver"}
+    node.pause_req.set()
+    node._current_step = step
+    node._current_task_name = "bring"
+
+    node._finish_step("bring", step, False, None)
+
+    assert node._suspended_step is step
+    assert node._suspended_task_name == "bring"
+    assert node.state.target_label == "screwdriver"
+    assert node.state.current_command == {
+        "action": "bring",
+        "tool_name": "screwdriver",
+    }

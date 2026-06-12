@@ -257,9 +257,12 @@ slider release 또는 `적용` 버튼에서만 요청을 보내며, task coordin
 MoveIt/RG2 실행 리소스, pick/return workflow, 내부 `TaskStep` queue,
 `/task_control`의 pause/resume/exit 처리를 소유합니다.
 
-`bring`과 `return` 요청은 coordinator 안에서 `PickSequenceRunner` 또는
+`bring` 요청은 `BringSequenceRunner`가 drawer 준비, drawer 내부 관찰/검증,
+target search를 `TaskStep` queue로 구성한 뒤 target이 잡히면 기존
+`PickSequenceRunner`의 pick step들을 같은 queue 뒤에 붙입니다. `return` 요청은
 `ReturnSequenceRunner`의 step queue로 변환되고, 각 step은 worker thread에서
-순차 실행됩니다. 자세한 흐름과 topic ownership은
+순차 실행됩니다. 따라서 서랍 접근 중 pause가 들어와도 drawer prep step은
+일반 실패가 아니라 task queue의 retry/resume 계약을 따릅니다. 자세한 흐름과 topic ownership은
 [EXPLAIN.md](./EXPLAIN.md)를 참고합니다.
 
 ## Drop Recovery
