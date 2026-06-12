@@ -1560,7 +1560,6 @@ class TaskCoordinatorNode(Node):
 
         self.drop_req.clear()
         self.resume_req.clear()
-        self._clear_recovery_queue()
         self.state.picking = True
         self.state.current_command = snapshot["command"]
         self.state.target_tool = snapshot["tool_name"]
@@ -1680,12 +1679,6 @@ class TaskCoordinatorNode(Node):
         self._start_drop_recovery(payload)
         return True
 
-    def _clear_recovery_queue(self):
-        with self._queue_lock:
-            self._queue.clear()
-            self._suspended_step = None
-            self._suspended_task_name = None
-
     def _build_recovery_config(self, snapshot):
         command = snapshot["command"]
         return RecoveryConfig(
@@ -1757,8 +1750,40 @@ class TaskCoordinatorNode(Node):
             use_bbox_center=True,
         )
         if apply_pca_yaw:
-            return self._target_with_mask_pca_yaw(target, target_tool)
+            target = self._target_with_mask_pca_yaw(target, target_tool)
+            self._set_recovery_tool_mask_lock_state(target, target_tool)
+            return target
         return target
+
+    def _set_recovery_tool_mask_lock_state(self, target, target_tool):
+        if target is None or not getattr(target, "found", False):
+            self.state.tool_mask_locked = False
+            self.state.last_tool_mask_lock_result = None
+            return
+
+        yaw_target = getattr(self.state, "grasp_detection_yaw_target", None)
+        yaw_deg = getattr(self.state, "grasp_detection_yaw_deg", None)
+        if yaw_target != target_tool or yaw_deg is None:
+            self.state.tool_mask_locked = False
+            self.state.last_tool_mask_lock_result = None
+            return
+
+        tool_roi = None
+        pixel = getattr(target, "pixel", None)
+        if pixel is not None:
+            tool_roi = {
+                "center_u": int(pixel[0]),
+                "center_v": int(pixel[1]),
+            }
+
+        self.state.tool_mask_locked = True
+        self.state.last_tool_mask_lock_result = {
+            "locked": True,
+            "mask_source": "SAM_DEPTH_RECOVERY",
+            "tool_roi": tool_roi,
+            "reason": "drop_recovery_sam_depth_locked",
+            "target_tool": target_tool,
+        }
 
     def _move_to_drop_recovery_target_observe_pose(self, detection, target_tool, logger):
         base_xyz = getattr(detection, "base_xyz", None)
