@@ -35,6 +35,7 @@ from macgyvbot_interfaces.srv import SetGripper
 from macgyvbot_config.drawer import (
     DRAWER_OBSERVATION_J6_DEG,
     ENABLE_DRAWER_COLLISION_SCENE_DEFAULT,
+    TOOL_OBSERVE_X_BACKOFF_M,
 )
 from macgyvbot_config.gripper import ENABLE_GRIPPER_SELF_COLLISION_ACM_DEFAULT
 from macgyvbot_config.joint_velocity import MOTION_VELOCITY_SCALING_FACTOR
@@ -99,8 +100,10 @@ from macgyvbot_manipulation.moveit_controller import MoveItController
 from macgyvbot_manipulation.onrobot_gripper import RG
 from macgyvbot_manipulation.robot_pose import (
     get_ee_matrix,
+    make_safe_pose,
     orientation_from_joint_positions,
 )
+from macgyvbot_manipulation.robot_safezone import SAFE_Z_MIN, safe_z_min_for_drawer
 from macgyvbot_manipulation.timing import cooperative_wait
 from macgyvbot_perception.depth_projection import DepthProjector
 from macgyvbot_perception.grasp_point.grasp_point_selector import (
@@ -133,6 +136,10 @@ from macgyvbot_task.application.return_flow.return_perception_adapter import (
 )
 from macgyvbot_task.application.pick_flow.pick_sequence import PickSequenceRunner
 from macgyvbot_task.application.return_flow.return_sequence import ReturnSequenceRunner
+from macgyvbot_task.application.recovery import (
+    run_drop_recovery,
+)
+from macgyvbot_task.application.recovery.recovery_utils import RecoveryConfig
 from macgyvbot_task.application.robot.robot_home_initializer import (
     RobotHomeInitializer,
 )
@@ -335,6 +342,7 @@ class TaskCoordinatorNode(Node):
         self.display = DebugDisplay(enabled=self.display_debug_windows)
         self.exit_req = threading.Event()
         self.pause_req = threading.Event()
+        self.drop_req = threading.Event()
         self.resume_req = threading.Event()
         self.handoff_retry_req = threading.Event()
         self.handoff_fallback_req = threading.Event()
@@ -348,6 +356,8 @@ class TaskCoordinatorNode(Node):
         self._suspended_step = None
         self._suspended_task_name = None
         self._exit_home_thread = None
+        self._drop_recovery_thread = None
+        self._pending_drop_recovery_payload = None
         self._vlm_preload_timer = None
         self._manual_gripper_lock = threading.Lock()
 
@@ -482,6 +492,7 @@ class TaskCoordinatorNode(Node):
         control_events = {
             "exit": self.exit_req,
             "pause": self.pause_req,
+            "drop": self.drop_req,
             "resume": self.resume_req,
             "handoff_retry": self.handoff_retry_req,
             "handoff_fallback": self.handoff_fallback_req,
@@ -886,7 +897,7 @@ class TaskCoordinatorNode(Node):
         with self._queue_lock:
             active_step = self._current_step is not None or self._step_thread_alive()
             queued = bool(self._queue)
-            paused = self.pause_req.is_set()
+            paused = self.pause_req.is_set() or self.drop_req.is_set()
 
         exit_home_running = (
             self._exit_home_thread is not None
@@ -1000,6 +1011,7 @@ class TaskCoordinatorNode(Node):
 
         if request.has_base_target:
             self.state.target_label = tool_name
+            self.state.target_tool = tool_name
             self.state.current_command = command
             self.start_pick_sequence(
                 request.bx,
@@ -1010,6 +1022,7 @@ class TaskCoordinatorNode(Node):
             return
 
         self.state.current_command = command
+        self.state.target_tool = tool_name
         self.state.drawer_prepared_tool = None
         self.state.drawer_preparing_tool = None
         self.state._last_search_status_target = None
@@ -1022,6 +1035,7 @@ class TaskCoordinatorNode(Node):
         )
         if not self._prepare_drawer_for_target(tool_name):
             self.state.target_label = tool_name
+            self.state.target_tool = tool_name
             self._publish_robot_status(
                 "searching",
                 tool_name=tool_name,
@@ -1123,6 +1137,22 @@ class TaskCoordinatorNode(Node):
         reason = str(msg.reason or "").strip()
         if not action:
             return
+        if self.state.recovery_mode and action not in {"pause", "resume"}:
+            self._task_log("control").warn(
+                "task control ignored during drop recovery",
+                step="task_control",
+                event="rejected",
+                action=action,
+                reason="drop_recovery_active",
+            )
+            self._publish_robot_status(
+                "busy",
+                action=action,
+                message="drop recovery가 진행 중입니다. 복구가 끝나면 작업을 자동으로 재개합니다.",
+                reason="drop_recovery_active",
+                command=self.state.current_command,
+            )
+            return
         if action == "pause":
             self._handle_pause(reason)
             return
@@ -1222,11 +1252,25 @@ class TaskCoordinatorNode(Node):
             event="resume",
             reason=reason or "resume_requested",
         )
+        if self.state.recovery_mode:
+            self.resume_req.set()
+            self.pause_req.clear()
+            self._publish_robot_status(
+                "resumed",
+                message="drop recovery를 재개합니다.",
+                reason=reason or "resume_requested",
+                command=self.state.current_command,
+            )
+            return True
+
         should_dispatch = False
         resume_available = False
         with self._queue_lock:
-            if not self.pause_req.is_set() and self._suspended_step is None:
-                self.pause_req.clear()
+            if (
+                not self.pause_req.is_set()
+                and not self.drop_req.is_set()
+                and self._suspended_step is None
+            ):
                 self.resume_req.clear()
             else:
                 resume_available = True
@@ -1274,6 +1318,7 @@ class TaskCoordinatorNode(Node):
         )
         self.exit_req.set()
         self.pause_req.clear()
+        self.drop_req.clear()
         self.resume_req.clear()
         self.motion.cancel_current_goal(self._motion_log(), reason=reason or "cancel")
         with self._queue_lock:
@@ -1306,6 +1351,7 @@ class TaskCoordinatorNode(Node):
         )
         self.exit_req.set()
         self.pause_req.clear()
+        self.drop_req.clear()
         self.resume_req.clear()
         self.motion.cancel_current_goal(self._motion_log(), reason=reason or "exit")
         with self._queue_lock:
@@ -1439,14 +1485,417 @@ class TaskCoordinatorNode(Node):
         if payload.get("event") != "tool_dropped":
             return
         reason = payload.get("reason") or "tool_dropped"
+        if self.state.recovery_mode:
+            self._task_log("safety").warn(
+                "tool drop queued while recovery is active",
+                step="tool_drop",
+                event="queued",
+                reason=reason,
+                tool=payload.get("tool_name", "unknown"),
+            )
+            self._pending_drop_recovery_payload = payload
+            self.drop_req.set()
+            self.resume_req.clear()
+            self.motion.cancel_current_goal(
+                self._motion_log(),
+                reason=f"{reason}_during_recovery",
+            )
+            return
         self._task_log("safety").warn(
-            "tool drop handled as task exit",
+            "tool drop recovery requested",
             step="tool_drop",
             event="detected",
             reason=reason,
             tool=payload.get("tool_name", "unknown"),
         )
-        self._handle_exit(reason, publish_status=False)
+        self._start_drop_recovery(payload)
+
+    def _start_drop_recovery(self, payload):
+        if (
+            self._drop_recovery_thread is not None
+            and self._drop_recovery_thread.is_alive()
+        ):
+            self._pending_drop_recovery_payload = payload
+            return
+
+        snapshot = self._drop_recovery_snapshot(payload)
+        self.drop_req.set()
+        self.resume_req.clear()
+        self.motion.cancel_current_goal(
+            self._motion_log(),
+            reason=snapshot["reason"],
+        )
+        with self._queue_lock:
+            if self._current_step is not None:
+                self._suspended_step = self._current_step
+                self._suspended_task_name = self._current_task_name
+
+        self._drop_recovery_thread = threading.Thread(
+            target=self._run_drop_recovery,
+            args=(snapshot,),
+            name="task_drop_recovery",
+            daemon=True,
+        )
+        self._drop_recovery_thread.start()
+
+    def _drop_recovery_snapshot(self, payload):
+        command = payload.get("command") or self.state.current_command or {}
+        task_name = self._current_task_name or str(payload.get("action") or "")
+        action = str(payload.get("action") or command.get("action") or task_name)
+        tool_name = (
+            payload.get("tool_name")
+            or self.state.held_tool
+            or self.state.target_tool
+            or self.state.target_label
+            or command.get("tool_name")
+            or "unknown"
+        )
+        return {
+            "task_name": task_name,
+            "action": action,
+            "tool_name": tool_name,
+            "command": command,
+            "reason": payload.get("reason") or "tool_dropped",
+            "resume_state": {
+                "picking": self.state.picking,
+                "target_label": self.state.target_label,
+                "target_tool": self.state.target_tool,
+                "current_command": self.state.current_command,
+            },
+        }
+
+    def _run_drop_recovery(self, snapshot):
+        log = self._task_log("recovery")
+        if not self._wait_for_active_task_step_to_stop(log):
+            self._publish_robot_status(
+                "failed",
+                action=snapshot["action"],
+                tool_name=snapshot["tool_name"],
+                message="drop recovery를 시작하기 전에 기존 작업 큐가 멈추지 않았습니다.",
+                reason="drop_recovery_queue_shutdown_timeout",
+                command=snapshot["command"],
+            )
+            return
+
+        self.drop_req.clear()
+        self.resume_req.clear()
+        self.state.picking = True
+        self.state.current_command = snapshot["command"]
+        self.state.target_tool = snapshot["tool_name"]
+        if snapshot["action"] in ("bring", "pick"):
+            self.state.target_label = snapshot["tool_name"]
+        elif snapshot["action"] == "return" and not self.state.held_tool:
+            self.state.held_tool = snapshot["tool_name"]
+
+        recovery_config = self._build_recovery_config(snapshot)
+        is_pick_drop_recovery = (
+            snapshot["action"] in ("bring", "pick")
+            or snapshot["task_name"] == "pick"
+        )
+        if is_pick_drop_recovery:
+            action = "bring"
+        else:
+            action = "return"
+        ok = run_drop_recovery(
+            self.state,
+            self.motion,
+            self.gripper,
+            recovery_config,
+            log,
+            task_type="pick" if is_pick_drop_recovery else "return",
+        )
+
+        if self._pending_drop_recovery_payload is not None and not ok:
+            self._publish_robot_status(
+                "recovering",
+                tool_name=snapshot["tool_name"],
+                action=action,
+                message="drop recovery 중 다시 drop이 감지되어 새 recovery를 시작합니다.",
+                reason="drop_recovery_restart_requested",
+                command=snapshot["command"],
+            )
+            self._restore_drop_recovery_resume_state(snapshot)
+            self.drop_req.set()
+            self.resume_req.clear()
+            self._restart_pending_drop_recovery()
+            return
+
+        self._publish_robot_status(
+            "returned" if ok else "failed",
+            tool_name=snapshot["tool_name"],
+            action=action,
+            message=(
+                "drop recovery가 완료되었습니다."
+                if ok
+                else "drop recovery가 실패했습니다. 로봇은 가능한 안전 정리 절차를 수행했습니다."
+            ),
+            reason="drop_recovery_succeeded" if ok else "drop_recovery_failed",
+            command=snapshot["command"],
+        )
+        self._restore_drop_recovery_resume_state(snapshot)
+        pending_drop_recovery = self._pending_drop_recovery_payload is not None
+        if ok and not pending_drop_recovery:
+            with self._queue_lock:
+                should_dispatch = self._resume_suspended_step_locked()
+            self._publish_robot_status(
+                "resumed",
+                tool_name=snapshot["tool_name"],
+                action=action,
+                message="drop recovery가 완료되어 중단된 작업을 자동으로 다시 실행합니다.",
+                reason="drop_recovery_auto_resumed",
+                command=snapshot["command"],
+            )
+            if should_dispatch:
+                self._dispatch_next()
+        elif not ok and not pending_drop_recovery:
+            self._clear_failed_drop_recovery_queue()
+            self.pause_req.clear()
+            self.drop_req.clear()
+            self.resume_req.clear()
+            self._run_cleanup_callbacks()
+            self._clear_task_state()
+        else:
+            self.drop_req.set()
+            self.resume_req.clear()
+        self._restart_pending_drop_recovery()
+
+    def _wait_for_active_task_step_to_stop(
+        self,
+        logger,
+        timeout_sec=TASK_QUEUE_STOP_TIMEOUT_SEC,
+    ):
+        deadline = time.monotonic() + timeout_sec
+        while time.monotonic() < deadline:
+            with self._queue_lock:
+                active = self._current_step is not None or self._step_thread_alive()
+            if not active:
+                return True
+            time.sleep(TASK_QUEUE_STOP_POLL_SEC)
+        logger.warn(
+            "active task step shutdown wait timed out",
+            step="queue",
+            event="timeout",
+            reason="drop_recovery_active_step_shutdown_timeout",
+            timeout_sec=timeout_sec,
+        )
+        return False
+
+    def _restore_drop_recovery_resume_state(self, snapshot):
+        resume_state = snapshot.get("resume_state") or {}
+        self.state.picking = bool(resume_state.get("picking", self.state.picking))
+        self.state.target_label = resume_state.get("target_label")
+        self.state.target_tool = resume_state.get("target_tool")
+        self.state.current_command = resume_state.get("current_command")
+        self.state.recovery_mode = False
+
+    def _restart_pending_drop_recovery(self):
+        payload = self._pending_drop_recovery_payload
+        self._pending_drop_recovery_payload = None
+        if payload is None:
+            return False
+
+        self._task_log("recovery").warn(
+            "restarting drop recovery from queued drop event",
+            step="tool_drop",
+            event="restart",
+            reason=payload.get("reason") or "tool_dropped",
+            tool=payload.get("tool_name", "unknown"),
+        )
+        self._drop_recovery_thread = None
+        self._start_drop_recovery(payload)
+        return True
+
+    def _clear_failed_drop_recovery_queue(self):
+        with self._queue_lock:
+            self._queue.clear()
+            self._suspended_step = None
+            self._suspended_task_name = None
+            self._current_step = None
+            self._current_task_name = None
+            self._step_thread = None
+
+    def _build_recovery_config(self, snapshot):
+        command = snapshot["command"]
+        return RecoveryConfig(
+            robot=self.robot,
+            state=self.state,
+            command=command,
+            task_type=snapshot["action"],
+            tool_hold_monitor=self.tool_hold_monitor,
+            initial_detect_target_fn=lambda target_tool: self._resolve_recovery_initial_target(
+                target_tool,
+                allow_supported_fallback=not (
+                    snapshot["action"] in ("bring", "pick")
+                    or snapshot["task_name"] == "pick"
+                ),
+            ),
+            target_observe_fn=self._move_to_drop_recovery_target_observe_pose,
+            observed_tool_label_fn=self._detect_recovery_observed_tool_label,
+            close_open_drawer_fn=self._close_open_drawer_for_recovery_failure,
+            detect_target_fn=lambda target_tool: self._resolve_recovery_target(
+                target_tool,
+                apply_pca_yaw=True,
+            ),
+            pause_event=self.pause_req,
+            resume_event=self.resume_req,
+            drop_event=self.drop_req,
+            exit_event=self.exit_req,
+        )
+
+    def _close_open_drawer_for_recovery_failure(self, logger):
+        drawer_id = getattr(self.state, "opened_drawer_id", None)
+        if not getattr(self.state, "drawer_open", False) or drawer_id is None:
+            return True
+
+        if not self.drawer_flow.close_drawer(drawer_id, logger):
+            return False
+
+        self.state.drawer_open = False
+        self.state.opened_drawer_id = None
+        return True
+
+    def _resolve_recovery_initial_target(
+        self,
+        target_tool,
+        allow_supported_fallback=False,
+    ):
+        target = self._resolve_recovery_target(target_tool, apply_pca_yaw=False)
+        if target is not None and target.found:
+            return target
+        if not allow_supported_fallback:
+            return target
+
+        observed_tool = self._detect_recovery_observed_tool_label()
+        if not observed_tool or observed_tool == "unknown":
+            return target
+        return self._resolve_recovery_target(observed_tool, apply_pca_yaw=False)
+
+    def _resolve_recovery_target(self, target_tool, apply_pca_yaw=False):
+        if not self.frame_processor.has_camera_state():
+            self._task_log("recovery").warn(
+                "recovery target camera state unavailable",
+                step="recovery_detect",
+                event="fail",
+                target=target_tool,
+                reason="camera_state_unavailable",
+            )
+            return None
+
+        color_image = self.state.color_image.copy()
+        depth_image = self.state.depth_image.copy()
+        intrinsics = dict(self.state.intrinsics)
+        results = self.detector.detect(color_image)
+        boxes = results[0].boxes if results else None
+        target = self.pick_target_resolver.target_from_boxes(
+            boxes,
+            target_tool,
+            color_image,
+            depth_image,
+            intrinsics,
+            use_bbox_center=True,
+        )
+        if apply_pca_yaw:
+            target = self._target_with_mask_pca_result(target, target_tool)
+            self._set_recovery_tool_mask_lock_state(target, target_tool)
+            return target
+        return target
+
+    def _set_recovery_tool_mask_lock_state(self, target, target_tool):
+        if target is None or not getattr(target, "found", False):
+            self.state.tool_mask_locked = False
+            self.state.last_tool_mask_lock_result = None
+            return
+
+        yaw_target = getattr(self.state, "grasp_detection_yaw_target", None)
+        yaw_deg = getattr(self.state, "grasp_detection_yaw_deg", None)
+        if yaw_target != target_tool or yaw_deg is None:
+            self.state.tool_mask_locked = False
+            self.state.last_tool_mask_lock_result = None
+            return
+
+        tool_roi = None
+        pixel = getattr(target, "pixel", None)
+        if pixel is not None:
+            tool_roi = {
+                "center_u": int(pixel[0]),
+                "center_v": int(pixel[1]),
+            }
+
+        self.state.tool_mask_locked = True
+        self.state.last_tool_mask_lock_result = {
+            "locked": True,
+            "mask_source": "SAM_DEPTH_RECOVERY",
+            "tool_roi": tool_roi,
+            "reason": "drop_recovery_sam_depth_locked",
+            "target_tool": target_tool,
+        }
+
+    def _move_to_drop_recovery_target_observe_pose(self, detection, target_tool, logger):
+        base_xyz = getattr(detection, "base_xyz", None)
+        if base_xyz is None:
+            return False
+
+        plan = self.pick_runner.target_planner.plan(
+            *base_xyz,
+            logger,
+            safe_z_min=SAFE_Z_MIN,
+        )
+        observe_x = plan.target_x - TOOL_OBSERVE_X_BACKOFF_M
+        observe_y = plan.target_y
+        observe_z = plan.drawer_wall_clearance_z
+        logger.info(
+            "pick recovery target observe pose",
+            step="recovery_observe",
+            event="start",
+            target=target_tool,
+            observe_x=f"{observe_x:.3f}",
+            observe_y=f"{observe_y:.3f}",
+            observe_z=f"{observe_z:.3f}",
+        )
+        return self.motion.plan_and_execute(
+            logger,
+            pose_goal=make_safe_pose(
+                observe_x,
+                observe_y,
+                observe_z,
+                self.state.home_ori,
+                logger,
+            ),
+            collision_scene_key="recovery/pick_observe_offset",
+        )
+
+    def _detect_recovery_observed_tool_label(self):
+        if not self.frame_processor.has_camera_state():
+            return None
+
+        results = self.detector.detect(self.state.color_image.copy())
+        boxes = results[0].boxes if results else None
+        if boxes is None:
+            return None
+
+        best_label = None
+        best_conf = -1.0
+        for box in boxes:
+            label = self._box_label(box)
+            conf = self._box_confidence(box)
+            if conf > best_conf:
+                best_conf = conf
+                best_label = label
+        return best_label
+
+    def _box_label(self, box):
+        try:
+            class_id = int(box.cls[0])
+        except (TypeError, IndexError):
+            class_id = int(box.cls)
+        return str(self.detector.names[class_id])
+
+    @staticmethod
+    def _box_confidence(box):
+        try:
+            return float(box.conf[0])
+        except (AttributeError, TypeError, IndexError):
+            return 0.0
 
     def start_pick_sequence(self, bx, by, bz, vlm_yaw_deg=None):
         if self.is_running() or self.state.picking:
@@ -1467,6 +1916,7 @@ class TaskCoordinatorNode(Node):
             return False
 
         self.state.picking = True
+        self.state.target_tool = self.state.target_label
         self._publish_robot_status(
             "picking",
             tool_name=self.state.target_label,
@@ -1492,6 +1942,7 @@ class TaskCoordinatorNode(Node):
 
         self.state.picking = True
         self.state.target_label = None
+        self.state.target_tool = tool_name
         self.state.current_command = command
         steps = self.return_runner.build_steps(command)
         return self._load_queue("return", steps)
@@ -1507,6 +1958,7 @@ class TaskCoordinatorNode(Node):
                 )
                 return False
             self.exit_req.clear()
+            self.drop_req.clear()
             self.resume_req.clear()
             self._queue.clear()
             self._queue.extend((task_name, step) for step in steps)
@@ -1521,7 +1973,11 @@ class TaskCoordinatorNode(Node):
 
     def _dispatch_next(self):
         with self._queue_lock:
-            if self.exit_req.is_set() or self.pause_req.is_set():
+            if (
+                self.exit_req.is_set()
+                or self.pause_req.is_set()
+                or self.drop_req.is_set()
+            ):
                 return
             if self._current_step is not None or self._step_thread_alive():
                 return
@@ -1578,7 +2034,7 @@ class TaskCoordinatorNode(Node):
             self._current_task_name = None
             self._step_thread = None
 
-            if ok and not self.pause_req.is_set():
+            if ok and not self.pause_req.is_set() and not self.drop_req.is_set():
                 self._task_log(task_name, quiet_info=True).info(
                     "task step completed",
                     step="step",
@@ -1586,11 +2042,11 @@ class TaskCoordinatorNode(Node):
                     step_name=step.name,
                     target=self.state.target_label or "unknown",
                 )
-            elif self.pause_req.is_set() and step.retry_on_pause:
+            elif (self.pause_req.is_set() or self.drop_req.is_set()) and step.retry_on_pause:
                 self._task_log(task_name, quiet_info=True).info(
                     "task step suspended",
                     step="step",
-                    event="pause",
+                    event="drop" if self.drop_req.is_set() else "pause",
                     step_name=step.name,
                     target=self.state.target_label or "unknown",
                 )
@@ -1637,6 +2093,7 @@ class TaskCoordinatorNode(Node):
             self._suspended_step = None
             self._suspended_task_name = None
         self.pause_req.clear()
+        self.drop_req.clear()
         self.resume_req.clear()
         return True
 
@@ -1665,6 +2122,7 @@ class TaskCoordinatorNode(Node):
         self._run_cleanup_callbacks()
         self._clear_task_state()
         self.exit_req.clear()
+        self.drop_req.clear()
         self.resume_req.clear()
 
     def is_running(self):
@@ -1681,6 +2139,8 @@ class TaskCoordinatorNode(Node):
     def _clear_task_state(self):
         self.state.picking = False
         self.state.target_label = None
+        self.state.target_tool = None
+        self.state.recovery_mode = False
         self.state.human_grasped_tool = False
         self.state.current_command = None
         self.state.drawer_prepared_tool = None
@@ -1773,6 +2233,8 @@ class TaskCoordinatorNode(Node):
             )
             ok = self.drawer_flow.open_drawer(drawer_id, log)
             if ok:
+                self.state.drawer_open = True
+                self.state.opened_drawer_id = drawer_id
                 self._publish_robot_status(
                     "observing_drawer",
                     tool_name=target_label,
@@ -1924,6 +2386,8 @@ class TaskCoordinatorNode(Node):
             self.state.current_command = None
             return False
 
+        self.state.drawer_open = False
+        self.state.opened_drawer_id = None
         self._publish_robot_status(
             "returning_home",
             tool_name=target_label,
@@ -2266,7 +2730,11 @@ class TaskCoordinatorNode(Node):
         return response
 
     def _motion_interrupted(self):
-        return self.exit_req.is_set() or self.pause_req.is_set()
+        return (
+            self.exit_req.is_set()
+            or self.pause_req.is_set()
+            or self.drop_req.is_set()
+        )
 
     def _hand_grasp_cb(self, msg):
         result = self._human_grasp_payload(msg)

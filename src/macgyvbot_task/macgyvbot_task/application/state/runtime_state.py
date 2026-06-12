@@ -22,6 +22,7 @@ class TaskRuntimeState:
     target_label: str | None = None
     pending_pick_thread: Any = None
     pending_return_thread: Any = None
+    target_tool: str | None = None
     human_grasped_tool: bool = False
     last_grasp_result: dict | None = None
     tool_mask_locked: bool = False
@@ -39,6 +40,13 @@ class TaskRuntimeState:
     current_command: dict | None = None
     drawer_prepared_tool: str | None = None
     drawer_preparing_tool: str | None = None
+    recovery_mode: bool = False
+    held_tool: str | None = None
+    gripper_holding: bool = False
+    drawer_open: bool = False
+    opened_drawer_id: int | None = None
+    last_known_tool_bbox: Any = None
+    last_known_tool_confidence: float | None = None
     _last_search_status_target: str | None = field(default=None, repr=False)
 
     def logger(self):

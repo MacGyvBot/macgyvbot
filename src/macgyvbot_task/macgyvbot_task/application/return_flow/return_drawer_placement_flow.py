@@ -12,10 +12,7 @@ from macgyvbot_config.drawer import (
     DRAWER_STORE_MARKER_APPROACH_Z_OFFSET_M,
     DRAWER_STORE_MARKER_RELEASE_Z_OFFSET_M,
 )
-from macgyvbot_config.return_flow import (
-    RETURN_DRAWER_PLACE_WRIST_YAW_DEG,
-    RETURN_TOOL_RELEASE_WAIT_SEC,
-)
+from macgyvbot_config.return_flow import RETURN_TOOL_RELEASE_WAIT_SEC
 from macgyvbot_manipulation.grasp_verifier import GraspVerifier
 from macgyvbot_manipulation.robot_pose import (
     current_ee_orientation,
@@ -26,6 +23,7 @@ from macgyvbot_manipulation.robot_safezone import safe_z_min_for_drawer
 from macgyvbot_task.application.drawer_store_motion import (
     drawer_wall_clearance_z_for_drawer,
     move_to_drawer_store_exit,
+    rotate_wrist_for_drawer_store,
 )
 from macgyvbot_task.application.pick_flow.pick_grasp_flow import (
     calculate_pregrasp_extra_descent,
@@ -364,13 +362,10 @@ class ReturnDrawerPlacementFlow:
         return False
 
     def _rotate_wrist_for_drawer_place(self, tool_name, command, logger):
-        logger.info(
-            "서랍 내부 보관 전 "
-            f"J6를 {RETURN_DRAWER_PLACE_WRIST_YAW_DEG:.1f}도 회전합니다."
-        )
-        ok = self.motion.rotate_wrist_by_yaw_deg(
-            RETURN_DRAWER_PLACE_WRIST_YAW_DEG,
+        ok = rotate_wrist_for_drawer_store(
+            self.motion,
             logger,
+            label="return_drawer_place",
         )
         if ok:
             return True

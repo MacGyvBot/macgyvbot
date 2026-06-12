@@ -71,6 +71,7 @@ from macgyvbot_config.drawer import (
     DRAWER_STORE_TOOL_OBSERVE_POINT,
     DRAWER_WALL_CLEARANCE_Z_OFFSET_M,
 )
+from macgyvbot_config.return_flow import RETURN_DRAWER_PLACE_WRIST_YAW_DEG
 from macgyvbot_manipulation.robot_safezone import SAFE_Z_MIN
 from macgyvbot_manipulation.robot_safezone import safe_z_min_for_drawer
 from macgyvbot_task.application.return_flow.return_drawer_placement_flow import (
@@ -78,6 +79,7 @@ from macgyvbot_task.application.return_flow.return_drawer_placement_flow import 
 )
 from macgyvbot_task.application.drawer_store_motion import (
     drawer_wall_clearance_z_for_drawer,
+    rotate_wrist_for_drawer_store,
 )
 from macgyvbot_task.application.return_flow.return_sequence import (
     ReturnSequenceRunner,
@@ -136,6 +138,7 @@ class FakeMotion:
     def __init__(self):
         self.targets = []
         self.min_z_values = []
+        self.wrist_rotations = []
 
     def plan_and_execute(
         self,
@@ -146,6 +149,10 @@ class FakeMotion:
     ):
         self.targets.append(pose_goal)
         self.min_z_values.append(min_z)
+        return True
+
+    def rotate_wrist_by_yaw_deg(self, yaw_deg, _logger):
+        self.wrist_rotations.append(yaw_deg)
         return True
 
 
@@ -253,6 +260,17 @@ def test_return_sequence_builds_drawer_store_step_order():
         "return/home_after_drawer_close",
         "return/done",
     ]
+
+
+def test_drawer_store_wrist_rotation_uses_return_policy():
+    motion = FakeMotion()
+
+    assert rotate_wrist_for_drawer_store(
+        motion,
+        FakeLogger(),
+        label="test_drawer_store",
+    )
+    assert motion.wrist_rotations == [RETURN_DRAWER_PLACE_WRIST_YAW_DEG]
 
 
 def test_return_staged_tool_grasp_pregrasp_depth_adjusts_before_final_grasp(

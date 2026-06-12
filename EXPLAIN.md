@@ -1,3 +1,11 @@
+# Current Drop Recovery Note
+
+`/tool_drop_detected`의 `event=tool_dropped` payload는 현재 자동 exit 대신
+first-version recovery로 처리합니다. 현재 MoveIt goal을 cancel하고 남은
+`TaskStep` queue를 비운 뒤 `recovery_mode`를 켜고, 기존 inspection pose,
+YOLO target resolver, grasp verifier, drawer flow, home motion을 orchestration합니다.
+자세한 흐름은 `docs/drop_recovery.md`를 참고합니다.
+
 # MacGyvBot File Roles
 
 이 문서는 migrated MacGyvBot 패키지들의 역할을 빠르게 파악하기 위한 설명서입니다.
