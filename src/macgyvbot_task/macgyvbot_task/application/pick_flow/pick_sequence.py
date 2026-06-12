@@ -11,7 +11,6 @@ from macgyvbot_config.handoff import (
     HANDOFF_WAIT_POLL_SEC,
 )
 from macgyvbot_config.pick import (
-    PICK_GRASP_YAW_OFFSET_DEG,
     PICK_OPEN_GRIPPER_WAIT_SEC,
     PICK_PREGRASP_REOPEN_WAIT_SEC,
     PICK_REFINE_SETTLE_WAIT_SEC,
@@ -116,7 +115,6 @@ class PickSequenceRunner:
             "drawer_id": drawer_id,
             "safe_z_min": safe_z_min,
             "grasp_yaw_deg": vlm_yaw_deg,
-            "raw_object_yaw_deg": vlm_yaw_deg,
             "limited_grasp_width_mm": None,
             "grasp_wrist_joint_rad": None,
         }
@@ -272,11 +270,6 @@ class PickSequenceRunner:
         if refined_target is not None and refined_target.found:
             bx, by, bz = refined_target.base_xyz
             context["grasp_yaw_deg"] = refined_target.yaw_deg
-            context["raw_object_yaw_deg"] = getattr(
-                refined_target,
-                "raw_object_yaw_deg",
-                refined_target.yaw_deg,
-            )
             context["limited_grasp_width_mm"] = self._current_limited_grasp_width_mm()
             context["plan"] = self.target_planner.plan(
                 bx,
@@ -428,15 +421,9 @@ class PickSequenceRunner:
             )
             return False
 
-        raw_object_yaw_deg = context.get("raw_object_yaw_deg")
-        yaw_plus_offset_deg = (
-            None
-            if raw_object_yaw_deg is None
-            else float(raw_object_yaw_deg) + PICK_GRASP_YAW_OFFSET_DEG
-        )
-        final_grasp_yaw_deg = normalize_angle_deg(yaw_deg)
-        context["grasp_yaw_deg"] = final_grasp_yaw_deg
-        if abs(final_grasp_yaw_deg) < 0.1:
+        yaw_deg = normalize_angle_deg(yaw_deg)
+        context["grasp_yaw_deg"] = yaw_deg
+        if abs(yaw_deg) < 0.1:
             context["grasp_wrist_target_rad"] = None
             log_info(
                 log,
@@ -444,11 +431,7 @@ class PickSequenceRunner:
                 step="wrist",
                 event="prepared",
                 reason="yaw_near_zero",
-                raw_object_yaw_deg=raw_object_yaw_deg,
-                perception_yaw_deg=grasp_yaw_deg,
-                pick_yaw_offset_deg=PICK_GRASP_YAW_OFFSET_DEG,
-                yaw_plus_offset_deg=yaw_plus_offset_deg,
-                final_grasp_yaw_deg=final_grasp_yaw_deg,
+                yaw_deg=yaw_deg,
             )
             return True
 
@@ -468,23 +451,16 @@ class PickSequenceRunner:
             )
             return False
 
-        target_wrist_rad = float(current_wrist_rad) + math.radians(
-            final_grasp_yaw_deg
-        )
+        target_wrist_rad = float(current_wrist_rad) + math.radians(yaw_deg)
         context["grasp_wrist_target_rad"] = target_wrist_rad
         log_info(
             log,
-            "debug grasp yaw pipeline",
+            "grasp wrist target prepared",
             step="wrist",
             event="prepared",
-            raw_object_yaw_deg=raw_object_yaw_deg,
-            perception_yaw_deg=grasp_yaw_deg,
-            pick_yaw_offset_deg=PICK_GRASP_YAW_OFFSET_DEG,
-            yaw_plus_offset_deg=yaw_plus_offset_deg,
-            final_grasp_yaw_deg=final_grasp_yaw_deg,
+            yaw_deg=yaw_deg,
             current_wrist_deg=math.degrees(float(current_wrist_rad)),
             target_wrist_deg=math.degrees(target_wrist_rad),
-            target_j6_rad=target_wrist_rad,
         )
         return True
 

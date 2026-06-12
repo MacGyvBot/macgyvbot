@@ -848,6 +848,9 @@ class MoveItController:
             state_goal=state_goal,
             collision_scene_key=collision_scene_key,
         )
+        if self.should_interrupt is not None and self.should_interrupt():
+            logger.info("Home return interrupted; skipping Home joint settle wait.")
+            return False
 
         if self._wait_until_at_joint_goal(
             HOME_JOINTS,
@@ -882,6 +885,9 @@ class MoveItController:
     ):
         deadline = time.monotonic() + timeout_sec
         while time.monotonic() <= deadline:
+            if self.should_interrupt is not None and self.should_interrupt():
+                logger.info("joint goal settle wait interrupted")
+                return False
             if self._is_at_joint_goal(
                 goal_joints,
                 logger,

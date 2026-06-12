@@ -65,6 +65,7 @@ rclpy_module.action = rclpy_action_module
 sys.modules.setdefault("rclpy", rclpy_module)
 sys.modules.setdefault("rclpy.action", rclpy_action_module)
 
+import macgyvbot_manipulation.moveit_controller as moveit_controller  # noqa: E402
 from macgyvbot_manipulation.moveit_controller import (  # noqa: E402
     MoveItController,
     _negative_first_equivalent_values,
@@ -74,9 +75,17 @@ from macgyvbot_manipulation.moveit_controller import (  # noqa: E402
 class FakeLogger:
     def __init__(self):
         self.errors = []
+        self.infos = []
+        self.warnings = []
 
     def error(self, message):
         self.errors.append(message)
+
+    def info(self, message):
+        self.infos.append(message)
+
+    def warn(self, message):
+        self.warnings.append(message)
 
 
 class FakeDrawerCollisionScene:
@@ -95,6 +104,19 @@ class FakeDrawerCollisionScene:
 
     def ensure_ready_for_scene_key(self, *_args, **_kwargs):
         raise AssertionError("planning precondition must not refresh drawer scene")
+
+
+class FakeRobot:
+    def get_robot_model(self):
+        return object()
+
+
+class FakeRobotState:
+    def __init__(self, _robot_model):
+        self.joint_positions = None
+
+    def update(self):
+        pass
 
 
 def test_positive_final_angle_prefers_principal_rotation_candidate():
@@ -188,3 +210,52 @@ def test_drawer_scene_precondition_blocks_when_initial_scene_missing():
     assert drawer_scene.profile_keys == ["drawer/approach_to_close"]
     assert drawer_scene.ready_profiles == ["drawer_only"]
     assert logger.errors
+
+
+def test_home_move_interrupt_skips_settle_wait(monkeypatch):
+    controller = MoveItController(
+        robot=FakeRobot(),
+        arm=None,
+        params=None,
+        enable_gripper_self_collision_acm=False,
+    )
+    logger = FakeLogger()
+    settle_calls = []
+
+    monkeypatch.setattr(moveit_controller, "RobotState", FakeRobotState)
+    monkeypatch.setattr(controller, "_is_at_joint_goal", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(controller, "plan_and_execute", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        controller,
+        "_wait_until_at_joint_goal",
+        lambda *_args, **_kwargs: settle_calls.append(True) or True,
+    )
+    controller.should_interrupt = lambda: True
+
+    assert not controller.move_to_home_joints(logger)
+    assert settle_calls == []
+
+
+def test_joint_goal_settle_wait_stops_on_interrupt(monkeypatch):
+    controller = MoveItController(
+        robot=FakeRobot(),
+        arm=None,
+        params=None,
+        enable_gripper_self_collision_acm=False,
+    )
+    logger = FakeLogger()
+    goal_checks = []
+
+    monkeypatch.setattr(
+        controller,
+        "_is_at_joint_goal",
+        lambda *_args, **_kwargs: goal_checks.append(True) or False,
+    )
+    controller.should_interrupt = lambda: True
+
+    assert not controller._wait_until_at_joint_goal(
+        {},
+        logger,
+        timeout_sec=1.0,
+    )
+    assert goal_checks == []
