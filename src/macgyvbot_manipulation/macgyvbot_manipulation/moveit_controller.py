@@ -1084,6 +1084,25 @@ class MoveItController:
             current_j6,
             target_j6_rad,
         )
+        unfiltered_count = len(target_candidates)
+        target_candidates = [
+            target_j6
+            for target_j6 in target_candidates
+            if _wrist_joint_value_within_limits(target_j6)
+        ]
+        if len(target_candidates) < unfiltered_count:
+            logger.warn(
+                format_structured_log(
+                    pkg="manipulation",
+                    pipe="moveit",
+                    msg="wrist joint target candidates outside limits removed",
+                    joint=WRIST_JOINT_NAME,
+                    removed=unfiltered_count - len(target_candidates),
+                    remaining=len(target_candidates),
+                    lower_deg=math.degrees(WRIST_JOINT_LOWER_LIMIT_RAD),
+                    upper_deg=math.degrees(WRIST_JOINT_UPPER_LIMIT_RAD),
+                )
+            )
         if not target_candidates:
             logger.warn(
                 format_structured_log(
