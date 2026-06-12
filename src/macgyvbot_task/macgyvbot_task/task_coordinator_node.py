@@ -138,7 +138,7 @@ from macgyvbot_task.application.return_flow.return_perception_adapter import (
 from macgyvbot_task.application.pick_flow.pick_sequence import PickSequenceRunner
 from macgyvbot_task.application.return_flow.return_sequence import ReturnSequenceRunner
 from macgyvbot_task.application.recovery import (
-    run_drop_recovery,
+    build_drop_recovery_steps,
 )
 from macgyvbot_task.application.recovery.recovery_utils import RecoveryConfig
 from macgyvbot_task.application.robot.robot_home_initializer import (
@@ -359,6 +359,8 @@ class TaskCoordinatorNode(Node):
         self._exit_home_thread = None
         self._drop_recovery_thread = None
         self._pending_drop_recovery_payload = None
+        self._active_drop_recovery_snapshot = None
+        self._drop_recovery_resume_queue = None
         self._vlm_preload_timer = None
         self._manual_gripper_lock = threading.Lock()
 
@@ -1248,14 +1250,20 @@ class TaskCoordinatorNode(Node):
             reason=reason or "resume_requested",
         )
         if self.state.recovery_mode:
-            self.resume_req.set()
-            self.pause_req.clear()
+            should_dispatch = False
+            with self._queue_lock:
+                self.resume_req.set()
+                self.pause_req.clear()
+                if self._current_step is None and not self._step_thread_alive():
+                    should_dispatch = self._resume_suspended_step_locked()
             self._publish_robot_status(
                 "resumed",
                 message="drop recovery를 재개합니다.",
                 reason=reason or "resume_requested",
                 command=self.state.current_command,
             )
+            if should_dispatch:
+                self._dispatch_next()
             return True
 
         should_dispatch = False
@@ -1521,12 +1529,15 @@ class TaskCoordinatorNode(Node):
             reason=snapshot["reason"],
         )
         with self._queue_lock:
+            if self._drop_recovery_resume_queue is None:
+                self._drop_recovery_resume_queue = list(self._queue)
+            self._queue.clear()
             if self._current_step is not None:
                 self._suspended_step = self._current_step
                 self._suspended_task_name = self._current_task_name
 
         self._drop_recovery_thread = threading.Thread(
-            target=self._run_drop_recovery,
+            target=self._load_drop_recovery_queue,
             args=(snapshot,),
             name="task_drop_recovery",
             daemon=True,
@@ -1559,7 +1570,7 @@ class TaskCoordinatorNode(Node):
             },
         }
 
-    def _run_drop_recovery(self, snapshot):
+    def _load_drop_recovery_queue(self, snapshot):
         log = self._task_log("recovery")
         if not self._wait_for_active_task_step_to_stop(log):
             self._publish_robot_status(
@@ -1570,6 +1581,8 @@ class TaskCoordinatorNode(Node):
                 reason="drop_recovery_queue_shutdown_timeout",
                 command=snapshot["command"],
             )
+            self._active_drop_recovery_snapshot = None
+            self._drop_recovery_thread = None
             return
 
         self.drop_req.clear()
@@ -1587,11 +1600,7 @@ class TaskCoordinatorNode(Node):
             snapshot["action"] in ("bring", "pick")
             or snapshot["task_name"] == "pick"
         )
-        if is_pick_drop_recovery:
-            action = "bring"
-        else:
-            action = "return"
-        ok = run_drop_recovery(
+        steps = build_drop_recovery_steps(
             self.state,
             self.motion,
             self.gripper,
@@ -1599,6 +1608,23 @@ class TaskCoordinatorNode(Node):
             log,
             task_type="pick" if is_pick_drop_recovery else "return",
         )
+
+        with self._queue_lock:
+            self._active_drop_recovery_snapshot = snapshot
+            self._queue.extend(("recovery", step) for step in steps)
+            self._drop_recovery_thread = None
+        self._dispatch_next()
+
+    def _finish_drop_recovery_queue_locked(self, ok):
+        snapshot = self._active_drop_recovery_snapshot
+        if snapshot is None:
+            return False
+
+        is_pick_drop_recovery = (
+            snapshot["action"] in ("bring", "pick")
+            or snapshot["task_name"] == "pick"
+        )
+        action = "bring" if is_pick_drop_recovery else "return"
 
         if self._pending_drop_recovery_payload is not None and not ok:
             self._publish_robot_status(
@@ -1610,10 +1636,11 @@ class TaskCoordinatorNode(Node):
                 command=snapshot["command"],
             )
             self._restore_drop_recovery_resume_state(snapshot)
+            self._active_drop_recovery_snapshot = None
             self.drop_req.set()
             self.resume_req.clear()
             self._restart_pending_drop_recovery()
-            return
+            return False
 
         self._publish_robot_status(
             "returned" if ok else "failed",
@@ -1629,9 +1656,12 @@ class TaskCoordinatorNode(Node):
         )
         self._restore_drop_recovery_resume_state(snapshot)
         pending_drop_recovery = self._pending_drop_recovery_payload is not None
+        self._active_drop_recovery_snapshot = None
         if ok and not pending_drop_recovery:
-            with self._queue_lock:
-                should_dispatch = self._resume_suspended_step_locked()
+            if self._drop_recovery_resume_queue is not None:
+                self._queue.extend(self._drop_recovery_resume_queue)
+                self._drop_recovery_resume_queue = None
+            should_dispatch = self._resume_suspended_step_locked()
             self._publish_robot_status(
                 "resumed",
                 tool_name=snapshot["tool_name"],
@@ -1640,8 +1670,7 @@ class TaskCoordinatorNode(Node):
                 reason="drop_recovery_auto_resumed",
                 command=snapshot["command"],
             )
-            if should_dispatch:
-                self._dispatch_next()
+            return should_dispatch
         elif not ok and not pending_drop_recovery:
             self._clear_failed_drop_recovery_queue()
             self.pause_req.clear()
@@ -1653,6 +1682,7 @@ class TaskCoordinatorNode(Node):
             self.drop_req.set()
             self.resume_req.clear()
         self._restart_pending_drop_recovery()
+        return False
 
     def _wait_for_active_task_step_to_stop(
         self,
@@ -1705,6 +1735,8 @@ class TaskCoordinatorNode(Node):
             self._queue.clear()
             self._suspended_step = None
             self._suspended_task_name = None
+            self._drop_recovery_resume_queue = None
+            self._active_drop_recovery_snapshot = None
             self._current_step = None
             self._current_task_name = None
             self._step_thread = None
@@ -1982,6 +2014,7 @@ class TaskCoordinatorNode(Node):
             return any(name == task_name for name, _step in self._queue)
 
     def _dispatch_next(self):
+        should_dispatch_after_completion = False
         with self._queue_lock:
             if (
                 self.exit_req.is_set()
@@ -1992,26 +2025,28 @@ class TaskCoordinatorNode(Node):
             if self._current_step is not None or self._step_thread_alive():
                 return
             if not self._queue:
-                self._complete_queue_locked()
-                return
+                should_dispatch_after_completion = self._complete_queue_locked()
+            else:
+                task_name, step = self._queue.popleft()
+                self._current_task_name = task_name
+                self._current_step = step
+                self._step_thread = threading.Thread(
+                    target=self._execute_step,
+                    args=(task_name, step),
+                    name=f"task_step:{step.name}",
+                    daemon=True,
+                )
+                self._task_log(task_name).info(
+                    "task step started",
+                    step="step",
+                    event="start",
+                    step_name=step.name,
+                    target=self.state.target_label or "unknown",
+                )
+                self._step_thread.start()
 
-            task_name, step = self._queue.popleft()
-            self._current_task_name = task_name
-            self._current_step = step
-            self._step_thread = threading.Thread(
-                target=self._execute_step,
-                args=(task_name, step),
-                name=f"task_step:{step.name}",
-                daemon=True,
-            )
-            self._task_log(task_name).info(
-                "task step started",
-                step="step",
-                event="start",
-                step_name=step.name,
-                target=self.state.target_label or "unknown",
-            )
-            self._step_thread.start()
+        if should_dispatch_after_completion:
+            self._dispatch_next()
 
     def _execute_step(self, task_name, step):
         ok = False
@@ -2043,6 +2078,19 @@ class TaskCoordinatorNode(Node):
             self._current_step = None
             self._current_task_name = None
             self._step_thread = None
+
+            if task_name == "recovery" and self.drop_req.is_set():
+                self._queue.clear()
+                self._suspended_step = None
+                self._suspended_task_name = None
+                self._finish_drop_recovery_queue_locked(False)
+                return
+            if task_name == "recovery" and not ok and not self.pause_req.is_set():
+                self._queue.clear()
+                self._suspended_step = None
+                self._suspended_task_name = None
+                self._finish_drop_recovery_queue_locked(False)
+                return
 
             if ok and not self.pause_req.is_set() and not self.drop_req.is_set():
                 self._task_log(task_name, quiet_info=True).info(
@@ -2123,6 +2171,9 @@ class TaskCoordinatorNode(Node):
         self._clear_task_state()
 
     def _complete_queue_locked(self):
+        if self._active_drop_recovery_snapshot is not None:
+            return self._finish_drop_recovery_queue_locked(True)
+
         self._task_log(self._current_task_name or "task", quiet_info=True).info(
             "task queue completed",
             step="queue",
@@ -2134,6 +2185,7 @@ class TaskCoordinatorNode(Node):
         self.exit_req.clear()
         self.drop_req.clear()
         self.resume_req.clear()
+        return False
 
     def is_running(self):
         with self._queue_lock:

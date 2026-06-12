@@ -705,6 +705,39 @@ def test_recovery_cleanup_pause_keeps_recovery_mode(monkeypatch):
     assert status.recovery_mode is True
 
 
+def test_drop_recovery_builds_queue_steps():
+    status = FakeStatus()
+    logger = FakeLogger()
+    config = RecoveryConfig(
+        robot=FakeRobot(),
+        state=status,
+        detect_target_fn=lambda _target: None,
+    )
+
+    steps = drop_recovery.build_drop_recovery_steps(
+        status,
+        FakeMotion(),
+        FakeGripper(),
+        config,
+        logger,
+        task_type="pick",
+    )
+
+    assert [step.name for step in steps] == [
+        "recovery/start",
+        "recovery/move_to_inspection_pose",
+        "recovery/open_gripper_after_inspection",
+        "recovery/detect_target",
+        "recovery/move_to_target_observe",
+        "recovery/redetect_target",
+        "recovery/check_graspability",
+        "recovery/attempt_grasp",
+        "recovery/wait_tool_mask_lock",
+        "recovery/cleanup",
+    ]
+    assert all(step.retry_on_pause for step in steps[1:])
+
+
 def test_recovery_not_found_closes_open_drawer_then_returns_home(monkeypatch):
     status = FakeStatus()
     status.drawer_open = True

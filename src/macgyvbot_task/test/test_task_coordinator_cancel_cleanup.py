@@ -224,6 +224,7 @@ def _install_task_coordinator_import_stubs(monkeypatch):
             "ReturnSequenceRunner": _class("ReturnSequenceRunner")
         },
         "macgyvbot_task.application.recovery": {
+            "build_drop_recovery_steps": lambda *_args, **_kwargs: [],
             "run_drop_recovery": lambda *_args, **_kwargs: None,
         },
         "macgyvbot_task.application.recovery.recovery_utils": {
