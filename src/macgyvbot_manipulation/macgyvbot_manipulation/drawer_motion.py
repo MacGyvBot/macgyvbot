@@ -47,6 +47,8 @@ class DrawerMotionFlow:
         self.observation_orientation_provider = observation_orientation_provider
         self.dry_run = dry_run
         self._opened_drawers = {}
+        self._open_handle_targets = {}
+        self._active_open_handles = {}
 
     @staticmethod
     def drawer_id_for_tool(tool_name):
@@ -58,7 +60,105 @@ class DrawerMotionFlow:
 
     def open_drawer(self, drawer_id, logger):
         """Move to a drawer handle, grip it, pull it open, then release."""
-        if not self._move_to_handle_joints(drawer_id, logger):
+        if not self.prepare_open_handle_target(drawer_id, logger):
+            return False
+
+        if not self.move_to_open_handle_preapproach(drawer_id, logger):
+            return False
+
+        if not self.move_to_open_handle_pose(drawer_id, logger):
+            return False
+
+        if not self.grip_open_handle(drawer_id, logger):
+            return False
+
+        if not self.pull_open_drawer(drawer_id, logger):
+            return False
+
+        return self.release_open_handle(drawer_id, logger)
+
+    def prepare_open_handle_target(self, drawer_id, logger):
+        """Compute and cache the handle target used by the open-drawer steps."""
+        joint_positions = self._joint_positions(drawer_id)
+        if joint_positions is None:
+            _log_drawer_motion_failed(
+                logger,
+                stage="handle_joint_config",
+                drawer_id=drawer_id,
+                reason="unsupported_drawer_id",
+            )
+            return False
+
+        logger.info(
+            f"drawer {drawer_id} handle joint pose 이동: "
+            + ", ".join(
+                f"{name}={value:.3f}rad"
+                for name, value in joint_positions.items()
+            )
+        )
+        if self.dry_run:
+            self._open_handle_targets[drawer_id] = {
+                "state_goal": None,
+                "xyz": [0.0, 0.0, 0.0],
+                "ori": None,
+            }
+            return True
+
+        state_goal = RobotState(self.robot.get_robot_model())
+        state_goal.joint_positions = joint_positions
+        state_goal.update()
+        handle_transform = np.asarray(
+            state_goal.get_global_link_transform(EE_LINK),
+            dtype=float,
+        )
+        self._open_handle_targets[drawer_id] = {
+            "state_goal": state_goal,
+            "xyz": self._xyz_from_pose(handle_transform),
+            "ori": orientation_from_transform(handle_transform),
+        }
+        return True
+
+    def move_to_open_handle_preapproach(self, drawer_id, logger):
+        """Move near the drawer handle before the final handle-pose motion."""
+        target = self._open_handle_target(drawer_id, logger)
+        if target is None:
+            return False
+        return self._move_to_handle_preapproach(
+            target["xyz"],
+            target["ori"],
+            f"drawer {drawer_id} handle preapproach",
+            logger,
+            collision_scene_key="drawer/handle_preapproach",
+            drawer_id=drawer_id,
+        )
+
+    def move_to_open_handle_pose(self, drawer_id, logger):
+        """Move to the drawer handle joint pose and cache the actual handle pose."""
+        target = self._open_handle_target(drawer_id, logger)
+        if target is None:
+            return False
+
+        if self.dry_run:
+            self._active_open_handles[drawer_id] = {
+                "xyz": target["xyz"],
+                "ori": target["ori"],
+            }
+            return True
+
+        ok = self.motion.plan_and_execute(
+            logger,
+            state_goal=target["state_goal"],
+            collision_scene_key="drawer/handle_pose",
+        )
+        if not ok:
+            _log_drawer_motion_failed(
+                logger,
+                stage="handle_joint_pose",
+                drawer_id=drawer_id,
+                reason="state_goal_plan_failed",
+                target_xyz=target["xyz"],
+                collision_scene_key="drawer/handle_pose",
+            )
             return False
 
         handle_pose = get_ee_matrix(self.robot)
@@ -67,13 +167,31 @@ class DrawerMotionFlow:
         logger.info(
             f"drawer {drawer_id} handle 위치 xyz={self._format_xyz(handle_xyz)}"
         )
+        self._active_open_handles[drawer_id] = {
+            "xyz": handle_xyz,
+            "ori": handle_ori,
+        }
+        return True
 
-        if not self._close_gripper("drawer/open/grip_handle", logger):
+    def grip_open_handle(self, drawer_id, logger):
+        """Close the gripper on the drawer handle."""
+        return self._close_gripper("drawer/open/grip_handle", logger)
+
+    def pull_open_drawer(self, drawer_id, logger):
+        """Pull the drawer open from the cached handle pose."""
+        handle = self._active_open_handles.get(drawer_id)
+        if handle is None:
+            _log_drawer_motion_failed(
+                logger,
+                stage="open_handle_pose",
+                drawer_id=drawer_id,
+                reason="handle_pose_missing",
+            )
             return False
 
         if not self._move_by_offset(
-            handle_xyz,
-            handle_ori,
+            handle["xyz"],
+            handle["ori"],
             DRAWER_OPEN_OFFSET_XYZ_M,
             f"drawer {drawer_id} open",
             logger,
@@ -82,13 +200,19 @@ class DrawerMotionFlow:
         ):
             return False
 
-        opened_pose = get_ee_matrix(self.robot)
-        opened_xyz = self._xyz_from_pose(opened_pose)
+        if self.dry_run:
+            opened_xyz = handle["xyz"]
+        else:
+            opened_pose = get_ee_matrix(self.robot)
+            opened_xyz = self._xyz_from_pose(opened_pose)
         self._opened_drawers[drawer_id] = {
             "xyz": opened_xyz,
-            "ori": handle_ori,
+            "ori": handle["ori"],
         }
+        return True
 
+    def release_open_handle(self, drawer_id, logger):
+        """Open the gripper after the drawer has been pulled open."""
         return self._open_gripper("drawer/open/release_handle", logger)
 
     def observe_drawer(self, drawer_id, logger):
@@ -206,6 +330,14 @@ class DrawerMotionFlow:
                 collision_scene_key="drawer/close_prepare_wrist",
             )
         return ok
+
+    def _open_handle_target(self, drawer_id, logger):
+        target = self._open_handle_targets.get(drawer_id)
+        if target is not None:
+            return target
+        if not self.prepare_open_handle_target(drawer_id, logger):
+            return None
+        return self._open_handle_targets.get(drawer_id)
 
     def _move_to_handle_joints(self, drawer_id, logger):
         joint_positions = self._joint_positions(drawer_id)

@@ -128,6 +128,7 @@ from macgyvbot_task.application.adapters.vlm_grasp_service_client import (
     VLMGraspServiceClient,
 )
 from macgyvbot_task.application.display.debug_display import DebugDisplay
+from macgyvbot_task.application.pick_flow.bring_sequence import BringSequenceRunner
 from macgyvbot_task.application.pick_flow.pick_frame_processor import (
     PickFrameProcessor,
 )
@@ -524,6 +525,23 @@ class TaskCoordinatorNode(Node):
             ),
             control_events=control_events,
             drawer_flow=self.drawer_flow,
+        )
+        self.bring_runner = BringSequenceRunner(
+            state=self.state,
+            drawer_flow=self.drawer_flow,
+            return_perception=self.return_perception,
+            frame_processor=self.frame_processor,
+            detector=self.detector,
+            pick_target_resolver=self.pick_target_resolver,
+            pick_runner=self.pick_runner,
+            publish_robot_status=self._publish_robot_status,
+            task_log=self._task_log,
+            interrupted=self._motion_interrupted,
+            append_task_steps=self._append_task_steps,
+            has_queued_task_steps=self._has_queued_task_steps,
+            recover_after_drawer_validation_failure=(
+                self._recover_after_pick_drawer_validation_failure
+            ),
         )
         self.return_runner = ReturnSequenceRunner(
             self.robot,
@@ -1006,6 +1024,8 @@ class TaskCoordinatorNode(Node):
 
         self.state.current_command = command
         self.state.target_tool = tool_name
+        self.state.target_label = tool_name
+        self.state.picking = True
         self.state.drawer_prepared_tool = None
         self.state.drawer_preparing_tool = None
         self.state._last_search_status_target = None
@@ -1016,16 +1036,8 @@ class TaskCoordinatorNode(Node):
             message=f"{tool_name} 탐색 요청을 task coordinator가 수신했습니다.",
             command=command,
         )
-        if not self._prepare_drawer_for_target(tool_name):
-            self.state.target_label = tool_name
-            self.state.target_tool = tool_name
-            self._publish_robot_status(
-                "searching",
-                tool_name=tool_name,
-                action="bring",
-                message=f"{tool_name} 탐색을 시작합니다.",
-                command=command,
-            )
+        if not self._load_queue("bring", self.bring_runner.build_steps(tool_name)):
+            self._clear_task_state()
 
     def _handle_release_request(self, request):
         command = self._task_request_command(request)
@@ -1905,14 +1917,15 @@ class TaskCoordinatorNode(Node):
 
         self.state.picking = True
         self.state.target_tool = self.state.target_label
+        target_label = self.state.target_label
+        steps = self.pick_runner.build_steps(bx, by, bz, vlm_yaw_deg)
         self._publish_robot_status(
             "picking",
-            tool_name=self.state.target_label,
+            tool_name=target_label,
             action="bring",
-            message=f"{self.state.target_label} pick 동작을 시작합니다.",
+            message=f"{target_label} pick 동작을 시작합니다.",
             command=self.state.current_command,
         )
-        steps = self.pick_runner.build_steps(bx, by, bz, vlm_yaw_deg)
         return self._load_queue("pick", steps)
 
     def start_return_sequence(self, command):
@@ -1958,6 +1971,15 @@ class TaskCoordinatorNode(Node):
             )
         self._dispatch_next()
         return True
+
+    def _append_task_steps(self, task_name, steps):
+        with self._queue_lock:
+            self._queue.extend((task_name, step) for step in steps)
+        return True
+
+    def _has_queued_task_steps(self, task_name):
+        with self._queue_lock:
+            return any(name == task_name for name, _step in self._queue)
 
     def _dispatch_next(self):
         with self._queue_lock:
@@ -2187,164 +2209,24 @@ class TaskCoordinatorNode(Node):
         drawer_id = self.drawer_flow.drawer_id_for_tool(target_label)
         if drawer_id is None:
             return False
-        if self.state.drawer_preparing_tool == target_label:
-            return True
         if self.state.picking:
             return True
 
         self.state.picking = True
-        self.state.drawer_preparing_tool = target_label
-        self._publish_robot_status(
-            "opening_drawer",
-            tool_name=target_label,
-            action="bring",
-            message=f"{target_label}가 들어있는 서랍을 엽니다.",
-            command=self.state.current_command,
-        )
-        worker = threading.Thread(
-            target=self._prepare_drawer_worker,
-            args=(target_label, drawer_id),
-            daemon=True,
-        )
-        worker.start()
-        return True
-
-    def _prepare_drawer_worker(self, target_label, drawer_id):
-        try:
-            log = self._task_log("drawer", quiet_info=True)
-            log.info(
-                "preparing drawer before target search",
-                step="drawer_prepare",
-                event="start",
-                target=target_label,
-                drawer=drawer_id,
-            )
-            ok = self.drawer_flow.open_drawer(drawer_id, log)
-            if ok:
-                self.state.drawer_open = True
-                self.state.opened_drawer_id = drawer_id
-                self._publish_robot_status(
-                    "observing_drawer",
-                    tool_name=target_label,
-                    action="bring",
-                    message=f"{target_label} 탐색을 위해 서랍 내부를 관찰합니다.",
-                    command=self.state.current_command,
-                )
-                ok = self.drawer_flow.observe_drawer(drawer_id, log)
-                if not ok:
-                    self._publish_robot_status(
-                        "failed",
-                        tool_name=target_label,
-                        action="bring",
-                        message=f"{target_label} 탐색 전 서랍 내부 관찰에 실패했습니다.",
-                        reason="pick_drawer_observe_failed",
-                        command=self.state.current_command,
-                    )
-                    self._recover_after_pick_drawer_validation_failure(
-                        target_label,
-                        drawer_id,
-                        log,
-                        "pick_drawer_observe_failed",
-                    )
-                    return
-
-            if ok:
-                if not self._validate_pick_drawer_ownership(
-                    target_label,
-                    drawer_id,
-                    log,
-                ):
-                    return
-                self.state.target_label = target_label
-                self.state.drawer_prepared_tool = target_label
-                self._publish_robot_status(
-                    "searching",
-                    tool_name=target_label,
-                    action="bring",
-                    message=f"{target_label} 탐색을 시작합니다.",
-                    command=self.state.current_command,
-                )
-            else:
-                self._publish_robot_status(
-                    "failed",
-                    tool_name=target_label,
-                    action="bring",
-                    message=f"{target_label} 탐색 전 서랍 준비에 실패했습니다.",
-                    reason="drawer_prepare_failed",
-                    command=self.state.current_command,
-                )
-                self.state.target_label = None
-                self.state.current_command = None
-        finally:
-            self.state.drawer_preparing_tool = None
-            self.state.picking = False
-
-    def _validate_pick_drawer_ownership(self, target_label, drawer_id, log):
-        observed_tools = self.return_perception.detect_drawer_tool_labels()
-        if observed_tools is None:
-            self._publish_robot_status(
-                "failed",
-                tool_name=target_label,
-                action="bring",
-                message=f"{target_label} 서랍 내부 공구 상태를 확인하지 못했습니다.",
-                reason="pick_drawer_occupancy_unknown",
-                command=self.state.current_command,
-            )
-            self._recover_after_pick_drawer_validation_failure(
-                target_label,
-                drawer_id,
-                log,
-                "pick_drawer_occupancy_unknown",
-            )
+        self.state.target_label = target_label
+        self.state.target_tool = target_label
+        self.state.drawer_prepared_tool = None
+        self.state.drawer_preparing_tool = None
+        self.state._last_search_status_target = None
+        if self.state.current_command is None:
+            self.state.current_command = {
+                "action": "bring",
+                "tool_name": target_label,
+            }
+        if not self._load_queue("bring", self.bring_runner.build_steps(target_label)):
+            self._clear_task_state()
             return False
-
-        conflicting_tools = [
-            observed_tool
-            for observed_tool in observed_tools
-            if observed_tool != target_label
-        ]
-        if target_label in observed_tools and not conflicting_tools:
-            log.info(
-                "pick drawer ownership validated",
-                step="drawer_ownership",
-                event="valid",
-                target=target_label,
-                drawer=drawer_id,
-                observed_tools=observed_tools,
-            )
-            return True
-
-        reason = "pick_drawer_tool_not_found"
-        if conflicting_tools:
-            reason = "pick_drawer_tool_mismatch"
-        observed_text = ", ".join(observed_tools) if observed_tools else "none"
-        log.warn(
-            "pick drawer ownership mismatch",
-            step="drawer_ownership",
-            event="fail",
-            expected_tool=target_label,
-            observed_tool=observed_text,
-            drawer_id=drawer_id,
-            reason=reason,
-        )
-        self._publish_robot_status(
-            "failed",
-            tool_name=target_label,
-            action="bring",
-            message=(
-                f"{target_label} 서랍에서 기대 공구를 찾지 못했습니다. "
-                f"감지된 공구: {observed_text}"
-            ),
-            reason=reason,
-            command=self.state.current_command,
-        )
-        self._recover_after_pick_drawer_validation_failure(
-            target_label,
-            drawer_id,
-            log,
-            reason,
-        )
-        return False
+        return True
 
     def _recover_after_pick_drawer_validation_failure(
         self,
