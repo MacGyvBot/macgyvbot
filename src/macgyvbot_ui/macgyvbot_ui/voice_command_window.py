@@ -4,8 +4,8 @@ from datetime import datetime
 from pathlib import Path
 
 try:
-    from PyQt5.QtCore import Qt, QTimer
-    from PyQt5.QtGui import QImage, QPixmap
+    from PyQt5.QtCore import QSize, Qt, QTimer
+    from PyQt5.QtGui import QIcon, QImage, QPixmap
     from PyQt5.QtWidgets import (
         QApplication,
         QFrame,
@@ -109,10 +109,11 @@ else:
                     text='취소',
                 )
             )
-            self._power_button = QPushButton('⏻')
+            self._power_button = QPushButton('')
             self._power_button.setObjectName('powerButton')
             self._power_button.setToolTip('안전 종료')
             self._power_button.setFixedSize(38, 38)
+            self._apply_power_icon()
             self._power_button.clicked.connect(
                 lambda _checked=False: self._send_control_text('종료')
             )
@@ -1248,6 +1249,19 @@ else:
                     Qt.SmoothTransformation,
                 )
             )
+
+        def _apply_power_icon(self):
+            asset_path = (
+                Path(__file__).resolve().parent
+                / 'assets'
+                / 'power_icon.png'
+            )
+            icon = QIcon(str(asset_path))
+            if icon.isNull():
+                self._power_button.setText('⏻')
+                return
+            self._power_button.setIcon(icon)
+            self._power_button.setIconSize(QSize(20, 20))
 
         @staticmethod
         def _gripper_status_style(enabled):
