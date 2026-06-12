@@ -1331,7 +1331,7 @@ class TaskCoordinatorNode(Node):
             self._publish_robot_status(
                 "cancelled",
                 action="cancel",
-                message="현재 작업을 취소했습니다. 다음 명령을 기다립니다.",
+                message="작업을 취소했습니다. 다음 명령을 기다립니다.",
                 reason=reason or "cancel_requested",
                 command=self.state.current_command,
             )

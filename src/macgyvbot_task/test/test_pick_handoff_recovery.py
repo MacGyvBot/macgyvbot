@@ -244,11 +244,12 @@ def test_return_tool_to_original_position_uses_drawer_clearance(monkeypatch):
     monkeypatch.setattr(pick_handoff_flow, "get_ee_matrix", lambda _robot: FakeMatrix())
     motion = FakeMotion()
     gripper = FakeGripper()
+    state = FakeState()
     flow = PickHandoffFlow(
         robot=object(),
         motion_controller=motion,
         gripper=gripper,
-        state=FakeState(),
+        state=state,
         wait_fn=lambda _duration: None,
     )
     ori = {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
@@ -292,6 +293,13 @@ def test_return_tool_to_original_position_uses_drawer_clearance(monkeypatch):
     )
     assert gripper.open_calls == 1
     assert motion.home_calls == 1
+    assert state.tool_mask_locked is False
+    assert state.last_tool_mask_lock_result is None
+    assert any(
+        status == "tool_mask_released"
+        and payload["reason"] == "return_to_original_position"
+        for status, payload in state.statuses
+    )
 
 
 def test_return_tool_to_original_position_restores_grasp_wrist_before_xy_move(

@@ -687,14 +687,14 @@ class HandGraspDetectionNode(Node):
             self.get_logger().info("Robot grasp success received. Tool mask lock requested.")
             return
 
-        if status == "released_to_human":
+        if status in {"released_to_human", "tool_mask_released"}:
             self._reset_tool_mask_state()
             self.mask_tracking_active = False
             if self.ml_classifier is not None:
                 self.ml_classifier.reset()
-            self._publish_tool_mask_unlock("released_to_human")
+            self._publish_tool_mask_unlock(status)
             self.get_logger().info(
-                "Tool handoff release received. Tool mask/depth lock cleared."
+                "Tool release received. Tool mask/depth lock cleared."
             )
             return
 
