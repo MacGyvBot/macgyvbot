@@ -763,7 +763,11 @@ class PickSequenceRunner:
             message=f"{self.state.target_label}가 있던 서랍을 닫습니다.",
             command=self.state.current_command,
         )
-        drawer_closed = self.drawer_flow.close_drawer(drawer_id, log)
+        drawer_closed = self.drawer_flow.close_drawer(
+            drawer_id,
+            log,
+            prepare_wrist=True,
+        )
         if not drawer_closed:
             return True, False, False
 
