@@ -1272,17 +1272,18 @@ class TaskCoordinatorNode(Node):
             event="cancel",
             reason=reason or "cancel_requested",
         )
-        task_running = self.is_running() or self.state.picking
         self.exit_req.set()
         self.pause_req.clear()
         self.resume_req.clear()
         self.motion.cancel_current_goal(self._motion_log(), reason=reason or "cancel")
         with self._queue_lock:
+            active_step = self._current_step is not None or self._step_thread_alive()
             self._queue.clear()
             self._suspended_step = None
             self._suspended_task_name = None
 
-        if not task_running:
+        if not active_step:
+            self._run_cleanup_callbacks()
             self.exit_req.clear()
             self._clear_task_state()
 
