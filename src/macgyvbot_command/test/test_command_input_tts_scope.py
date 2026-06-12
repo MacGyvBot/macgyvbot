@@ -53,11 +53,16 @@ def _install_import_stubs():
             self.reason = ""
             self.command = _ToolCommand()
 
+    class _CommandText:
+        def __init__(self):
+            self.text = ""
+            self.source = ""
+
     msg_module = _module(
         "macgyvbot_interfaces.msg",
         CommandFeedback=_CommandFeedback,
         CommandShutdown=type("CommandShutdown", (), {}),
-        CommandText=type("CommandText", (), {}),
+        CommandText=_CommandText,
         RobotTaskControl=type("RobotTaskControl", (), {}),
         RobotTaskStatus=_RobotTaskStatus,
         ToolCommand=_ToolCommand,
@@ -72,7 +77,7 @@ def _install_import_stubs():
 _install_import_stubs()
 
 from macgyvbot_command.command_input_node import CommandInputNode  # noqa: E402
-from macgyvbot_interfaces.msg import CommandFeedback, RobotTaskStatus  # noqa: E402
+from macgyvbot_interfaces.msg import CommandText, RobotTaskStatus  # noqa: E402
 
 
 class _FakeParser:
@@ -106,15 +111,13 @@ class CommandInputTtsScopeTest(unittest.TestCase):
         self.assertEqual(node._parser.statuses[-1]["status"], "moving_to_handoff")
         self.assertEqual(node.spoken, [])
 
-    def test_command_feedback_still_drives_tts(self):
+    def test_tts_text_drives_tts(self):
         node = self._make_node()
-        msg = CommandFeedback()
-        msg.status = "accepted"
-        msg.message = "드라이버를 가져오라는 뜻으로 이해했습니다."
-        msg.command.action = "bring"
-        msg.command.tool_name = "screwdriver"
+        msg = CommandText()
+        msg.text = "드라이버를 가져오라는 뜻으로 이해했습니다."
+        msg.source = "operator_ui_chat"
 
-        node._feedback_cb(msg)
+        node._tts_text_cb(msg)
 
         self.assertEqual(
             node.spoken,

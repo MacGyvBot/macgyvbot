@@ -82,6 +82,32 @@ class OperatorUiStatusMessageTest(unittest.TestCase):
         self.assertEqual(status, "모델 grasp model inference is running now")
         self.assertNotIn("…", status)
 
+    def test_append_bot_publishes_same_text_for_tts(self):
+        class FakeWindow:
+            def __init__(self):
+                self.messages = []
+
+            def append_bot(self, text):
+                self.messages.append(text)
+
+        class FakePublisher:
+            def __init__(self):
+                self.messages = []
+
+            def publish(self, msg):
+                self.messages.append(msg)
+
+        node = object.__new__(OperatorUiNode)
+        node.window = FakeWindow()
+        node._tts_pub = FakePublisher()
+
+        node._append_bot("공구를 받아주세요.")
+
+        self.assertEqual(node.window.messages, ["공구를 받아주세요."])
+        self.assertEqual(len(node._tts_pub.messages), 1)
+        self.assertEqual(node._tts_pub.messages[0].text, "공구를 받아주세요.")
+        self.assertEqual(node._tts_pub.messages[0].source, "operator_ui_chat")
+
 
 if __name__ == "__main__":
     unittest.main()

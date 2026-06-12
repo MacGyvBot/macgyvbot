@@ -44,6 +44,7 @@ from macgyvbot_config.topics import (
     STT_TEXT_TOPIC,
     TASK_CONTROL_TOPIC,
     TOOL_COMMAND_TOPIC,
+    TTS_TEXT_TOPIC,
 )
 from macgyvbot_config.structured_logging import format_structured_log
 from macgyvbot_interfaces.msg import (
@@ -114,6 +115,7 @@ class CommandInputNode(Node):
         self.declare_parameter("dynamic_energy", DEFAULT_STT_DYNAMIC_ENERGY)
         self.declare_parameter("ambient_duration", DEFAULT_STT_AMBIENT_DURATION_SEC)
         self.declare_parameter("stt_text_topic", STT_TEXT_TOPIC)
+        self.declare_parameter("tts_text_topic", TTS_TEXT_TOPIC)
 
         self.declare_parameter("tool_command_topic", TOOL_COMMAND_TOPIC)
         self.declare_parameter("command_feedback_topic", COMMAND_FEEDBACK_TOPIC)
@@ -140,6 +142,7 @@ class CommandInputNode(Node):
         self._phrase_time_limit = float(self.get_parameter("phrase_time_limit").value)
 
         stt_text_topic = self.get_parameter("stt_text_topic").value
+        tts_text_topic = self.get_parameter("tts_text_topic").value
         tool_command_topic = self.get_parameter("tool_command_topic").value
         command_feedback_topic = self.get_parameter("command_feedback_topic").value
         robot_status_topic = self.get_parameter("robot_status_topic").value
@@ -163,9 +166,9 @@ class CommandInputNode(Node):
 
         self.create_subscription(CommandText, stt_text_topic, self._text_cb, 10)
         self.create_subscription(
-            CommandFeedback,
-            command_feedback_topic,
-            self._feedback_cb,
+            CommandText,
+            tts_text_topic,
+            self._tts_text_cb,
             10,
         )
         self.create_subscription(
@@ -247,6 +250,7 @@ class CommandInputNode(Node):
                 stt_text_topic=stt_text_topic,
                 tool_command_topic=tool_command_topic,
                 command_feedback_topic=command_feedback_topic,
+                tts_text_topic=tts_text_topic,
                 robot_status_topic=robot_status_topic,
                 tts_enabled=self._tts_service.enabled,
             )
@@ -491,11 +495,10 @@ class CommandInputNode(Node):
         if rclpy.ok():
             rclpy.shutdown()
 
-    def _feedback_cb(self, msg):
-        feedback = self._feedback_payload(msg)
-        speech = self._feedback_speech_message(feedback)
-        if speech:
-            self._speak_bot(speech)
+    def _tts_text_cb(self, msg):
+        text = (msg.text or "").strip()
+        if text:
+            self._speak_bot(text)
 
     def _robot_status_cb(self, msg):
         status = self._robot_status_payload(msg)
@@ -551,16 +554,6 @@ class CommandInputNode(Node):
         }
 
     @staticmethod
-    def _feedback_payload(msg):
-        return {
-            "status": msg.status,
-            "reason": msg.reason,
-            "message": msg.message,
-            "raw_text": msg.raw_text,
-            "command": CommandInputNode._tool_command_payload(msg.command),
-        }
-
-    @staticmethod
     def _robot_status_payload(msg):
         return {
             "status": msg.status,
@@ -574,68 +567,6 @@ class CommandInputNode(Node):
 
     def _handoff_decision_pending(self):
         return self._last_robot_state == "handoff_inspection_pending"
-
-    def _feedback_speech_message(self, feedback):
-        status = feedback.get("status", "unknown")
-        message = str(feedback.get("message") or "").strip()
-        reason = feedback.get("reason", "unknown")
-        command = feedback.get("command") or {}
-        action = command.get("action")
-
-        if status == "accepted":
-            if action == "pause":
-                return "일시 정지 요청을 전달했습니다. 작업을 다시 시작하려면 재개 명령을 말씀해 주세요."
-            if action == "resume":
-                return message or "재개 요청을 전달했습니다."
-            if action == "cancel":
-                return message or "현재 작업 취소 요청을 전달했습니다."
-            if action == "exit":
-                return message or "종료 요청을 전달했습니다."
-            return message or "명령을 이해했습니다."
-
-        if status == "pending_confirmation":
-            return message or "제가 이해한 명령이 맞는지 확인해 주세요."
-
-        if status == "cancelled":
-            return message or "요청이 취소되었습니다."
-
-        if status == "assistant_response":
-            return message or "다시 한 번 말씀해 주세요."
-
-        if status == "rejected":
-            return self._build_rejected_message(reason, message)
-
-        return ""
-
-    def _build_rejected_message(self, reason, message):
-        if reason == "resume_without_paused_task":
-            return "재개할 작업이 없습니다. 다음 명령을 기다리겠습니다."
-        if reason == "llm_failed":
-            return (
-                "문장을 끝까지 이해하지 못했습니다. "
-                "공구 이름이나 동작을 다시 말해 주세요."
-            )
-        if reason == "unknown_tool":
-            return (
-                "어떤 공구인지 잘 모르겠습니다. "
-                "드라이버, 플라이어, 망치, 줄자, 렌치 중에서 다시 말해 주세요."
-            )
-        if reason == "unknown_action":
-            return (
-                "무엇을 할지 정확하지 않습니다. "
-                "가져와, 치워줘, Home으로 같은 표현으로 다시 말해 주세요."
-            )
-        if reason == "deictic_bring_not_supported":
-            return (
-                "지금은 '이거 가져와'처럼 대상이 없는 요청은 이해하지 못합니다. "
-                "공구 이름을 함께 말해 주세요."
-            )
-        if reason == "low_confidence":
-            return (
-                "제가 이해한 내용이 정확하지 않습니다. "
-                "공구 이름이나 동작을 다시 말해 주세요."
-            )
-        return message or "명령을 이해하지 못했습니다. 다시 입력해 주세요."
 
     def _speak_bot(self, text):
         self._remember_bot_text(text)

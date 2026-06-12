@@ -5,6 +5,7 @@ CAMERA_DEPTH_TOPIC = "/camera/camera/aligned_depth_to_color/image_raw"
 CAMERA_INFO_TOPIC = "/camera/camera/color/camera_info"
 
 STT_TEXT_TOPIC = "/stt_text"
+TTS_TEXT_TOPIC = "/tts_text"
 TOOL_COMMAND_TOPIC = "/tool_command"
 COMMAND_FEEDBACK_TOPIC = "/command_feedback"
 ROBOT_STATUS_TOPIC = "/robot_task_status"
