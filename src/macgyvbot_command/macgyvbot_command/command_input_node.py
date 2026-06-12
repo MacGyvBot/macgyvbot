@@ -148,7 +148,6 @@ class CommandInputNode(Node):
         self._last_robot_state = "unknown"
         self._recent_bot_texts = {}
         self._bot_echo_ignore_ns = 10_000_000_000
-        self._last_spoken_robot_status_key = None
         self._stt_pub = self.create_publisher(CommandText, stt_text_topic, 10)
         self._tool_command_pub = self.create_publisher(ToolCommand, tool_command_topic, 10)
         self._feedback_pub = self.create_publisher(
@@ -506,18 +505,6 @@ class CommandInputNode(Node):
 
         state = str(status.get("status", status.get("state", "unknown"))).lower()
         self._last_robot_state = state
-        if state in self._spoken_robot_statuses():
-            message = self._robot_status_speech_message(status)
-            if not message:
-                message = self._robot_status_default_message(state)
-            spoken_key = (
-                state,
-                str(status.get('action', '')).strip().lower(),
-                message,
-            )
-            if message and spoken_key != self._last_spoken_robot_status_key:
-                self._last_spoken_robot_status_key = spoken_key
-                self._speak_bot(message)
 
         if self._exit_pending and str(status.get("action", "")).lower() == "exit":
             if state in ("done", "completed", "success"):
@@ -620,30 +607,6 @@ class CommandInputNode(Node):
 
         return ""
 
-    def _robot_status_speech_message(self, status):
-        state = str(status.get("status", status.get("state", "unknown"))).lower()
-        message = str(status.get("message") or "").strip()
-        reason = str(status.get("reason") or "").strip()
-        if state not in ("failed", "error"):
-            return message
-
-        tool_name = str(status.get("tool_name") or "").strip() or "공구"
-        if reason == "pick_drawer_tool_not_found":
-            return f"{tool_name}를 서랍에서 찾지 못했습니다."
-        if reason in {"drawer_prepare_failed", "drawer_open_failed"}:
-            return "서랍을 여는 중 문제가 발생했습니다."
-        if reason in {"pose_goal_plan_failed", "planning_failed"}:
-            return "이동 경로를 찾지 못했습니다."
-        if reason in {"handoff_pose_unavailable", "handoff_target_unavailable"}:
-            return "전달 위치를 계산하지 못했습니다."
-        if reason in {"home_motion_failed", "home_pose_unavailable"}:
-            return "홈 위치 복귀에 실패했습니다."
-        if reason in {"tool_mask_lock_failed", "mask_lock_failed"}:
-            return "공구 추적 준비에 실패했습니다."
-        if message:
-            return self._limit_words(message.splitlines()[0].strip(), 7)
-        return ""
-
     def _build_rejected_message(self, reason, message):
         if reason == "resume_without_paused_task":
             return "재개할 작업이 없습니다. 다음 명령을 기다리겠습니다."
@@ -673,101 +636,6 @@ class CommandInputNode(Node):
                 "공구 이름이나 동작을 다시 말해 주세요."
             )
         return message or "명령을 이해하지 못했습니다. 다시 입력해 주세요."
-
-    @staticmethod
-    def _spoken_robot_statuses():
-        return {
-            'accepted',
-            'searching_drawer',
-            'moving_to_drawer',
-            'searching_drawer_handle',
-            'opening_drawer',
-            'closing_drawer',
-            'searching',
-            'picking',
-            'approaching_tool',
-            'grasping',
-            'grasp_success',
-            'lifting_tool',
-            'moving_to_handoff',
-            'searching_hand',
-            'waiting_handoff',
-            'handoff_complete',
-            'waiting_return_handoff',
-            'moving_return_grasp_pose',
-            'checking_return_target',
-            'return_hand_detected',
-            'placing_return_tool',
-            'returning_home',
-            'done',
-            'completed',
-            'success',
-            'failed',
-            'error',
-            'busy',
-            'paused',
-            'resumed',
-            'cancelled',
-            'rejected',
-            'returned',
-            'tool_dropped',
-            'vlm_loading',
-            'vlm_ready',
-            'vlm_warning',
-            'vlm_error',
-        }
-
-    @staticmethod
-    def _robot_status_default_message(state):
-        return {
-            'accepted': '요청을 확인했습니다.',
-            'searching_drawer': '공구함을 찾는 중입니다.',
-            'moving_to_drawer': '공구함으로 이동 중입니다.',
-            'searching_drawer_handle': '서랍 손잡이를 찾는 중입니다.',
-            'opening_drawer': '서랍을 여는 중입니다.',
-            'closing_drawer': '서랍을 닫는 중입니다.',
-            'searching': '대상 공구를 찾는 중입니다.',
-            'picking': '공구를 집는 위치로 이동 중입니다.',
-            'approaching_tool': '공구 상단으로 접근 중입니다.',
-            'grasping': '공구를 잡는 중입니다.',
-            'grasp_success': '공구를 안정적으로 잡았습니다.',
-            'lifting_tool': '공구를 안전 높이로 들어 올리는 중입니다.',
-            'moving_to_handoff': '사용자 전달 위치로 이동 중입니다.',
-            'searching_hand': '사용자 손을 찾는 중입니다.',
-            'waiting_handoff': '손으로 공구를 잡아주세요.',
-            'handoff_complete': '공구 전달을 완료했습니다.',
-            'waiting_return_handoff': '반납할 공구를 받을 준비를 하고 있습니다.',
-            'moving_return_grasp_pose': '반납 공구 감지 위치로 이동 중입니다.',
-            'checking_return_target': '반납 공구 위치를 확인하는 중입니다.',
-            'return_hand_detected': '사용자 손 위치에서 반납 공구를 받는 중입니다.',
-            'placing_return_tool': '반납 공구를 보관 위치에 놓는 중입니다.',
-            'returning_home': 'Home 위치로 복귀하는 중입니다.',
-            'done': '작업이 완료되었습니다.',
-            'completed': '작업이 완료되었습니다.',
-            'success': '작업이 완료되었습니다.',
-            'failed': '작업에 실패했습니다.',
-            'error': '작업 중 오류가 발생했습니다.',
-            'busy': '이미 다른 작업을 수행 중입니다.',
-            'paused': '로봇이 일시정지되었습니다.',
-            'resumed': '작업을 다시 시작합니다.',
-            'cancelled': '작업이 취소되었습니다.',
-            'rejected': '요청을 수행할 수 없습니다.',
-            'returned': '반납 작업을 완료했습니다.',
-            'tool_dropped': '공구 drop이 감지되었습니다.',
-            'vlm_loading': 'VLM 모델을 로드하는 중입니다.',
-            'vlm_ready': 'VLM 모델 준비가 완료되었습니다.',
-            'vlm_warning': 'VLM 모델 상태를 확인해야 합니다.',
-            'vlm_error': 'VLM 모델 처리 중 오류가 발생했습니다.',
-        }.get(state, '')
-
-    @staticmethod
-    def _limit_words(text, max_words):
-        words = str(text or "").strip().split()
-        if not words:
-            return ""
-        if len(words) <= max_words:
-            return " ".join(words)
-        return " ".join(words[:max_words])
 
     def _speak_bot(self, text):
         self._remember_bot_text(text)
