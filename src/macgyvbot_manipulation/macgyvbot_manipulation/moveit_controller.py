@@ -578,13 +578,17 @@ class MoveItController:
             logger.error("drawer collision scene manager is not initialized")
             return False
 
-        return self.drawer_collision_scene.ensure_ready_for_scene_key(
-            collision_scene_key,
-            logger=logger,
-            attempts=2,
-            retry_delay_sec=0.1,
-            refresh=True,
+        profile = self.drawer_collision_scene.profile_for_scene_key(
+            collision_scene_key
         )
+        if self.drawer_collision_scene.is_ready(profile):
+            return True
+
+        logger.error(
+            "drawer collision scene is not initialized; "
+            f"profile={profile}, planning is blocked"
+        )
+        return False
 
     def ensure_gripper_self_collision_acm(
         self,

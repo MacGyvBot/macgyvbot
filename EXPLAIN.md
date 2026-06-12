@@ -66,8 +66,8 @@ ROS 패키지가 아니라 colcon workspace root이며, 실행 entrypoint는
     지나며, 이 함수가 drawer collision scene과 RG2 self-collision ACM 준비
     상태를 planning 직전에 확인합니다.
   - `drawer_collision_scene.py`는 MoveIt planning scene에 drawer keep-out
-    collision object를 추가하고, motion key에 따라 `drawer_only` 또는
-    `drawer_opened` profile을 선택합니다.
+    collision object를 추가합니다. 현재 drawer collision scene은 정적인
+    `drawer_only` profile만 사용합니다.
   - `gripper_collision_scene.py`는 RG2 내부 링크끼리만 허용할 self-collision
     ACM patch를 적용합니다. 이 ACM은 drawer 같은 외부 collision object와의
     충돌을 허용하지 않습니다.
@@ -76,7 +76,7 @@ ROS 패키지가 아니라 colcon workspace root이며, 실행 entrypoint는
   - ROS topic 이름, robot frame/link, model filename, pick/return/handoff/grasp
     threshold, timing, UI, VLM 설정 등 Python runtime constant를 소유합니다.
   - `drawer.py`는 drawer handle pose, drawer/tool mapping, drawer collision
-    box 좌표, collision profile, motion key별 opened-scene 매핑을 소유합니다.
+    box 좌표, collision profile, motion key별 profile routing을 소유합니다.
   - `joint_velocity.py`는 M0609 `joint_1`~`joint_6`의 사용자 조절용
     velocity limit과 전역 MoveIt velocity scaling 값을 소유합니다.
 
@@ -175,19 +175,15 @@ macgyvbot_perception.hand_grasp_detection_node
   acceleration scaling은 `moveit_py.yaml`의 기본
   `plan_request_params.max_acceleration_scaling_factor`가 소유하며, 실제 로봇
   테스트 기준으로 현재 `0.12`를 사용합니다.
-- drawer collision scene은 항상 기본 `drawer_only` profile에서 시작합니다.
+- drawer collision scene은 task node 초기화 시점에 한 번 적용되는 정적인
+  `drawer_only` profile입니다.
   `MoveItController.plan_and_execute(..., collision_scene_key=...)`가 호출될 때
-  `DrawerCollisionSceneManager`는 key를
-  `macgyvbot_config.drawer.DRAWER_COLLISION_SCENE_KEY_PROFILES`에서 조회합니다.
-  등록되지 않은 key는 기본 `drawer_only`로 처리되고, 등록된 key만 열린 서랍
-  boundary까지 포함하는 `drawer_opened`로 처리됩니다.
-- 현재 opened profile은 pick handoff의 사용자 이동과 서랍 닫기 접근처럼 열린
-  서랍을 반드시 피해야 하는 motion에만 최소 등록합니다. pick fallback으로 공구를
-  다시 서랍에 넣는 경로와 return 초기 handoff/임시 배치 경로는 drawer-only를
-  기본으로 둡니다.
-- drawer scene manager는 같은 profile이 반복되는 planning에서는 MoveItPy local
-  scene을 refresh하고, profile 또는 object id가 바뀔 때만 RViz/move_group 쪽 topic
-  publish와 `/apply_planning_scene` service update를 요청합니다.
+  `DrawerCollisionSceneManager`는 key를 조회할 수 있는 구조를 유지하지만,
+  현재 등록된 key가 없으므로 모든 motion은 기본 `drawer_only`로 처리됩니다.
+- drawer scene manager는 초기화 때 MoveItPy local scene과 RViz/move_group 쪽 topic
+  publish, `/apply_planning_scene` service update를 요청합니다. 이후 planning
+  precondition에서는 scene 준비 상태만 확인하고 collision object를 다시 적용하지
+  않습니다.
 - `/apply_planning_scene` service가 실패해도 local MoveItPy planning scene에 object
   적용이 성공하면 task node 내부 planning은 계속 진행할 수 있습니다. RViz 표시와
   외부 planning scene 동기화가 필요한 경우 로그의 `apply_service` 결과를 확인합니다.

@@ -305,12 +305,13 @@ planning acceleration scaling은
 `colcon build`와 새 터미널 `source install/setup.bash`를 다시 수행합니다.
 
 Drawer collision scene은 `base_link` 기준의 직육면체 keep-out 영역으로
-등록됩니다. 기본 profile은 `drawer_only`이고, 특정 motion key가
-`macgyvbot_config.drawer.DRAWER_COLLISION_SCENE_KEY_PROFILES`에 등록된 경우에만
-`drawer_opened` profile로 승격되어 열린 서랍 boundary까지 함께 적용됩니다.
+등록됩니다. 현재 profile은 정적인 `drawer_only` 하나만 사용하며, task node
+초기화 시점에 한 번만 planning scene에 적용됩니다.
+`macgyvbot_config.drawer.DRAWER_COLLISION_SCENE_KEY_PROFILES`의 motion key 라우팅
+구조는 유지하지만, 등록되지 않은 key는 모두 `drawer_only`로 처리됩니다.
 `MoveItController.plan_and_execute()`는 모든 planning 직전에 drawer scene과 RG2
-내부 self-collision ACM 적용 상태를 확인하며, scene이 준비되지 않으면 planning을
-시작하지 않습니다.
+내부 self-collision ACM 적용 상태를 확인하며, drawer scene이 초기화되지 않았으면
+planning을 시작하지 않습니다.
 
 기본 launch에서는 drawer collision scene과 RG2 내부 self-collision ACM이 켜져
 있습니다. 장비 bringup 또는 디버깅 중에는 아래 launch argument로 끌 수 있지만,

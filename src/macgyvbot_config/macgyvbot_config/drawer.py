@@ -75,7 +75,6 @@ DRAWER_COLLISION_SCENE_TOPICS = [
 ]
 DRAWER_COLLISION_SERVICE_WAIT_TIMEOUT_SEC = 0.2
 DRAWER_COLLISION_PROFILE_DRAWER_ONLY = "drawer_only"
-DRAWER_COLLISION_PROFILE_DRAWER_OPENED = "drawer_opened"
 DRAWER_COLLISION_DEFAULT_PROFILE = DRAWER_COLLISION_PROFILE_DRAWER_ONLY
 
 DRAWER_BODY_COLLISION_BOX = {
@@ -85,30 +84,15 @@ DRAWER_BODY_COLLISION_BOX = {
     "size_xyz": [0.2400, 0.1700, 0.2530],
     "color_rgba": [0.12, 0.45, 0.85, 0.35],
 }
-DRAWER_OPENED_COLLISION_BOX = {
-    "id": "drawer_opened_boundary",
-    "frame_id": DRAWER_COLLISION_FRAME_ID,
-    "center_xyz": [0.5200, 0.2150, 0.1265],
-    "size_xyz": [0.1800, 0.1700, 0.2530],
-    "color_rgba": [0.12, 0.45, 0.85, 0.35],
-}
 DRAWER_COLLISION_BOX_PROFILES = {
     DRAWER_COLLISION_PROFILE_DRAWER_ONLY: [
         DRAWER_BODY_COLLISION_BOX,
-    ],
-    DRAWER_COLLISION_PROFILE_DRAWER_OPENED: [
-        DRAWER_BODY_COLLISION_BOX,
-        DRAWER_OPENED_COLLISION_BOX,
     ],
 }
 DRAWER_COLLISION_BOXES = DRAWER_COLLISION_BOX_PROFILES[
     DRAWER_COLLISION_DEFAULT_PROFILE
 ]
 DRAWER_COLLISION_SCENE_KEY_PROFILES = {
-    # on pick
-    #"handoff/move_to_user": DRAWER_COLLISION_PROFILE_DRAWER_OPENED,
-    #"drawer/approach_to_close": DRAWER_COLLISION_PROFILE_DRAWER_OPENED,
-
-    # on return
-    # considered not needed. but it is ready to be applied.
+    # Motion-key routing is intentionally kept for future profile selection.
+    # The current drawer collision scene is static and uses drawer_only.
 }
