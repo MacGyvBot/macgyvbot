@@ -29,6 +29,9 @@ ROS 패키지가 아니라 colcon workspace root이며, 실행 entrypoint는
     경량 command router를 소유합니다.
   - `task_coordinator_node.py`는 pick/return application workflow, MoveIt/RG2
     실행 리소스, task queue, `/task_control` 처리를 소유합니다.
+  - `application/pick_flow/bring_sequence.py`는 bring 요청의 drawer prep,
+    drawer 내부 관찰/검증, target search, pick step append를 `TaskStep`으로
+    구성합니다.
   - `/task_request`, `/task_control`, 카메라 입력, hand grasp 결과를 받아
     task queue 기반 로봇 작업 시퀀스를 실행합니다.
   - `/robot_task_status`와 `/tool_drop_detected`를 발행합니다.
@@ -123,7 +126,7 @@ macgyvbot_task.task_coordinator_node
   -> RealSense color/depth 기반 YOLO 탐지
   -> grasp point 선택
   -> depth pixel을 robot base 좌표로 투영
-  -> PickSequenceRunner 또는 ReturnSequenceRunner가 TaskStep queue 구성
+  -> BringSequenceRunner, PickSequenceRunner, ReturnSequenceRunner가 TaskStep queue 구성
   -> 내부 queue에서 TaskStep을 하나씩 꺼내 worker thread로 순차 실행
   -> pause/resume/exit, MoveIt goal cancel, exit 후 Home 복귀 처리
   -> /robot_task_status 발행
@@ -140,6 +143,17 @@ macgyvbot_perception.hand_grasp_detection_node
   typed `/task_request`로 `task_coordinator_node.py`에 전달됩니다.
 - `task_coordinator_node.py`는 요청을 받아 `TaskStep` 목록을 구성하고, 내부 queue에
   적재한 뒤 worker thread에서 한 step씩 순차 실행합니다.
+- `bring`은 `BringSequenceRunner`가 drawer prep을
+  `bring/drawer_prepare_handle_target`, `bring/drawer_handle_preapproach`,
+  `bring/drawer_handle_pose`, `bring/drawer_grip_handle`,
+  `bring/drawer_pull_open`, `bring/drawer_release_handle`,
+  `bring/drawer_observe`, `bring/drawer_validate_contents` step으로 나누고,
+  이어서 `bring/search_target`에서 target 좌표를 찾으면 `PickSequenceRunner`의
+  pick steps를 같은 queue 뒤에 append합니다.
+- drawer prep은 별도 worker thread로 직접 실행하지 않습니다. 서랍 접근,
+  handle pose 이동, gripper grip/release, drawer observe, drawer ownership
+  validation 모두 task queue가 현재 step으로 관리하므로 pause로 cancel된 MoveIt
+  goal은 일반 drawer prepare 실패가 아니라 retry 가능한 suspended step으로 남습니다.
 - `/task_control`은 실행 중인 queue에 `pause`, `resume`, `exit`을 적용합니다.
 - `exit` action은 task queue를 종료하고 MoveIt goal을 cancel한 뒤 Home joint pose로
   복귀하며, 복귀 성공 후 OnRobot RG2 그리퍼를 open합니다.
