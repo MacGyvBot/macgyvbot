@@ -26,6 +26,7 @@ from macgyvbot_manipulation.robot_safezone import (
 from macgyvbot_manipulation.timing import cooperative_wait
 from macgyvbot_task.application.pick_flow.pick_grasp_flow import (
     PickGraspFlow,
+    calculate_limited_grasp_width_mm,
     calculate_pregrasp_extra_descent,
 )
 from macgyvbot_task.application.pick_flow.pick_handoff_flow import PickHandoffFlow
@@ -93,6 +94,8 @@ class PickSequenceRunner:
         self.state.grasp_detection_mask_target = None
         self.state.grasp_detection_yaw_deg = None
         self.state.grasp_detection_yaw_target = None
+        self.state.grasp_detection_width_mm = None
+        self.state.grasp_detection_width_target = None
 
         log = self.state.logger()
         drawer_id = self._drawer_id_for_current_target()
@@ -110,6 +113,7 @@ class PickSequenceRunner:
             "drawer_id": drawer_id,
             "safe_z_min": safe_z_min,
             "grasp_yaw_deg": vlm_yaw_deg,
+            "limited_grasp_width_mm": None,
             "grasp_wrist_joint_rad": None,
         }
 
@@ -260,6 +264,7 @@ class PickSequenceRunner:
         if refined_target is not None and refined_target.found:
             bx, by, bz = refined_target.base_xyz
             context["grasp_yaw_deg"] = refined_target.yaw_deg
+            context["limited_grasp_width_mm"] = self._current_limited_grasp_width_mm()
             context["plan"] = self.target_planner.plan(
                 bx,
                 by,
@@ -279,6 +284,7 @@ class PickSequenceRunner:
                 base_z=bz,
                 depth_m=getattr(refined_target, "depth_m", None),
                 yaw_deg=context["grasp_yaw_deg"],
+                grasp_width_mm=context.get("limited_grasp_width_mm"),
                 safe_z_min=context["safe_z_min"],
             )
         elif refined_target is not None:
@@ -404,6 +410,7 @@ class PickSequenceRunner:
         return False
 
     def _descend_to_grasp(self, plan, ori):
+        self._set_limited_gripper_width_for_descent()
         self.state._publish_robot_status(
             "grasping",
             tool_name=self.state.target_label,
@@ -447,6 +454,44 @@ class PickSequenceRunner:
             "grasp_descent_failed",
             collision_scene_key="pick/grasp_descent",
         )
+
+    def _set_limited_gripper_width_for_descent(self):
+        log = self.state.logger()
+        width_mm = self._current_limited_grasp_width_mm()
+        if width_mm is None:
+            return
+
+        try:
+            self.gripper.move_gripper(int(round(float(width_mm) * 10.0)))
+        except Exception as exc:
+            log_warn(
+                log,
+                "limited grasp width command failed",
+                step="gripper_width",
+                event="fail",
+                reason=str(exc) or type(exc).__name__,
+                width_mm=width_mm,
+            )
+            return
+
+        log_info(
+            log,
+            "limited grasp width applied",
+            step="gripper_width",
+            event="applied",
+            target=self.state.target_label,
+            width_mm=width_mm,
+        )
+
+    def _current_limited_grasp_width_mm(self):
+        width_target = getattr(self.state, "grasp_detection_width_target", None)
+        if width_target != self.state.target_label:
+            return None
+        mask_width_mm = getattr(self.state, "grasp_detection_width_mm", None)
+        if mask_width_mm is None:
+            return None
+        max_width_mm = float(getattr(self.gripper, "max_width", 0) or 0) / 10.0
+        return calculate_limited_grasp_width_mm(mask_width_mm, max_width_mm)
 
     def _grasp_tool(self, context):
         log = self.state.logger()
@@ -515,7 +560,11 @@ class PickSequenceRunner:
             redescend_min_z=redescend_min_z,
         )
 
-        self.gripper.open_gripper()
+        limited_width_mm = self._current_limited_grasp_width_mm()
+        if limited_width_mm is None:
+            self.gripper.open_gripper()
+        else:
+            self.gripper.move_gripper(int(round(float(limited_width_mm) * 10.0)))
         cooperative_wait(PICK_PREGRASP_REOPEN_WAIT_SEC)
 
         if actual_descent_m <= 0.0:

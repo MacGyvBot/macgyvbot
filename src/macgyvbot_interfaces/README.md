@@ -32,7 +32,7 @@ msg/
   ToolMaskLock.msg
 srv/
   SetGripper.srv
-  SAMYaw.srv
+  SAMYaw.srv  # SAM-depth yaw plus optional grasp-point width estimate
   VLMGrasp.srv
 
 future msg/

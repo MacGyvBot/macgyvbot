@@ -38,6 +38,8 @@ class SAMYawServiceClient:
         depth_image,
         bbox_xyxy,
         target_label,
+        grasp_point_xy=None,
+        intrinsics=None,
         interrupted=None,
     ):
         interrupted = interrupted or (lambda: False)
@@ -71,6 +73,13 @@ class SAMYawServiceClient:
         )
         request.bbox_xyxy = [float(value) for value in bbox_xyxy]
         request.target_label = str(target_label)
+        if grasp_point_xy is not None:
+            request.has_grasp_point_xy = True
+            request.grasp_point_u = float(grasp_point_xy[0])
+            request.grasp_point_v = float(grasp_point_xy[1])
+        if intrinsics:
+            request.camera_fx = float(intrinsics.get("fx") or 0.0)
+            request.camera_fy = float(intrinsics.get("fy") or 0.0)
 
         send_mono = time.monotonic()
         self._log().info(

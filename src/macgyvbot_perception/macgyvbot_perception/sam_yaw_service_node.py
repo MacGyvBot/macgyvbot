@@ -28,7 +28,7 @@ from macgyvbot_config.vlm import (
 )
 from macgyvbot_interfaces.srv import SAMYaw
 from macgyvbot_perception.grasp_point.grasp_method import (
-    estimate_yaw_from_binary_crop,
+    estimate_yaw_and_cross_section_width_from_binary_crop,
 )
 from macgyvbot_perception.grasp_point.mask_image_for_grasp_detection import (
     generate_sam_depth_mask_image_for_grasp_detection,
@@ -143,9 +143,10 @@ class SAMYawServiceNode(Node):
             )
             return response
 
+        depth_mm = depth_to_mm(depth_image, "passthrough")
         images = generate_sam_depth_mask_image_for_grasp_detection(
             color_image=color_image,
-            depth_mm=depth_to_mm(depth_image, "passthrough"),
+            depth_mm=depth_mm,
             bbox_xyxy=bbox,
             sam_segmenter=segmenter,
             data_root=Path(VLM_DATA_ROOT),
@@ -168,7 +169,22 @@ class SAMYawServiceNode(Node):
             )
             return response
 
-        yaw_deg, debug = estimate_yaw_from_binary_crop(images[0])
+        crop_origin_xy = self._crop_origin_xy(bbox, color_image)
+        grasp_point_xy = self._request_grasp_point_in_crop(
+            request,
+            crop_origin_xy,
+            images[0],
+        )
+        yaw_deg, width_mm, debug = (
+            estimate_yaw_and_cross_section_width_from_binary_crop(
+                images[0],
+                grasp_point_xy=grasp_point_xy,
+                depth_mm=depth_mm,
+                crop_origin_xy=crop_origin_xy,
+                camera_fx=float(request.camera_fx or 0.0),
+                camera_fy=float(request.camera_fy or 0.0),
+            )
+        )
         if yaw_deg is None:
             response.success = False
             response.error_message = str(debug.get("reason") or "PCA yaw failed")
@@ -186,6 +202,8 @@ class SAMYawServiceNode(Node):
 
         response.success = True
         response.yaw_deg = float(yaw_deg)
+        response.has_grasp_width_mm = width_mm is not None
+        response.grasp_width_mm = float(width_mm or 0.0)
         response.debug_image_path = VLM_YAW_PCA_DEBUG_DIR
         self.get_logger().info(
             _log(
@@ -194,11 +212,36 @@ class SAMYawServiceNode(Node):
                 event="done",
                 target=request.target_label,
                 yaw_deg=f"{response.yaw_deg:.1f}",
+                width_mm=(
+                    f"{response.grasp_width_mm:.1f}"
+                    if response.has_grasp_width_mm
+                    else "none"
+                ),
                 latency_sec=f"{time.monotonic() - request_start:.3f}",
                 pixels=debug.get("num_pixels"),
             )
         )
         return response
+
+    @staticmethod
+    def _crop_origin_xy(bbox, color_image):
+        height, width = color_image.shape[:2]
+        x1 = max(0, min(width - 1, int(math.floor(float(bbox[0])))))
+        y1 = max(0, min(height - 1, int(math.floor(float(bbox[1])))))
+        return float(x1), float(y1)
+
+    @staticmethod
+    def _request_grasp_point_in_crop(request, crop_origin_xy, cropped_binary_image):
+        if not bool(request.has_grasp_point_xy):
+            return None
+        crop_x, crop_y = crop_origin_xy
+        local_x = float(request.grasp_point_u) - crop_x
+        local_y = float(request.grasp_point_v) - crop_y
+        height, width = cropped_binary_image.shape[:2]
+        return (
+            max(0.0, min(float(width - 1), local_x)),
+            max(0.0, min(float(height - 1), local_y)),
+        )
 
     def _preload_segmenter(self):
         started = time.monotonic()
