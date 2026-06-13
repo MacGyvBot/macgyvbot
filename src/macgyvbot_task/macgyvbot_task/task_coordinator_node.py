@@ -347,6 +347,7 @@ class TaskCoordinatorNode(Node):
         self.handoff_retry_req = threading.Event()
         self.handoff_fallback_req = threading.Event()
         self.handoff_decision_pending = threading.Event()
+        self.drawer_prepare_paused = threading.Event()
 
         self._queue = deque()
         self._queue_lock = threading.RLock()
@@ -1215,6 +1216,8 @@ class TaskCoordinatorNode(Node):
         )
         self.pause_req.set()
         self.resume_req.clear()
+        if self.state.drawer_preparing_tool:
+            self.drawer_prepare_paused.set()
         with self._queue_lock:
             if self._current_step is not None:
                 self._suspended_step = self._current_step
@@ -1241,6 +1244,17 @@ class TaskCoordinatorNode(Node):
             self._publish_robot_status(
                 "resumed",
                 message="drop recovery를 재개합니다.",
+                reason=reason or "resume_requested",
+                command=self.state.current_command,
+            )
+            return True
+
+        if self.drawer_prepare_paused.is_set():
+            self.resume_req.set()
+            self.pause_req.clear()
+            self._publish_robot_status(
+                "resumed",
+                message="서랍 준비 작업을 재개합니다.",
                 reason=reason or "resume_requested",
                 command=self.state.current_command,
             )
@@ -1303,6 +1317,7 @@ class TaskCoordinatorNode(Node):
         self.pause_req.clear()
         self.drop_req.clear()
         self.resume_req.clear()
+        self.drawer_prepare_paused.clear()
         self.motion.cancel_current_goal(self._motion_log(), reason=reason or "cancel")
         with self._queue_lock:
             active_step = self._current_step is not None or self._step_thread_alive()
@@ -1336,6 +1351,7 @@ class TaskCoordinatorNode(Node):
         self.pause_req.clear()
         self.drop_req.clear()
         self.resume_req.clear()
+        self.drawer_prepare_paused.clear()
         self.motion.cancel_current_goal(self._motion_log(), reason=reason or "exit")
         with self._queue_lock:
             self._queue.clear()
@@ -2207,59 +2223,70 @@ class TaskCoordinatorNode(Node):
     def _prepare_drawer_worker(self, target_label, drawer_id):
         try:
             log = self._task_log("drawer", quiet_info=True)
-            log.info(
-                "preparing drawer before target search",
-                step="drawer_prepare",
-                event="start",
-                target=target_label,
-                drawer=drawer_id,
-            )
-            ok = self.drawer_flow.open_drawer(drawer_id, log)
-            if ok:
-                self.state.drawer_open = True
-                self.state.opened_drawer_id = drawer_id
-                self._publish_robot_status(
-                    "observing_drawer",
-                    tool_name=target_label,
-                    action="bring",
-                    message=f"{target_label} 탐색을 위해 서랍 내부를 관찰합니다.",
-                    command=self.state.current_command,
+            while rclpy.ok() and not self.exit_req.is_set():
+                log.info(
+                    "preparing drawer before target search",
+                    step="drawer_prepare",
+                    event="start",
+                    target=target_label,
+                    drawer=drawer_id,
                 )
-                ok = self.drawer_flow.observe_drawer(drawer_id, log)
-                if not ok:
+                ok = self.drawer_flow.open_drawer(drawer_id, log)
+                if ok:
+                    self.state.drawer_open = True
+                    self.state.opened_drawer_id = drawer_id
                     self._publish_robot_status(
-                        "failed",
+                        "observing_drawer",
                         tool_name=target_label,
                         action="bring",
-                        message=f"{target_label} 탐색 전 서랍 내부 관찰에 실패했습니다.",
-                        reason="pick_drawer_observe_failed",
+                        message=f"{target_label} 탐색을 위해 서랍 내부를 관찰합니다.",
                         command=self.state.current_command,
                     )
-                    self._recover_after_pick_drawer_validation_failure(
+                    ok = self.drawer_flow.observe_drawer(drawer_id, log)
+                    if not ok and not self.pause_req.is_set():
+                        self._publish_robot_status(
+                            "failed",
+                            tool_name=target_label,
+                            action="bring",
+                            message=f"{target_label} 탐색 전 서랍 내부 관찰에 실패했습니다.",
+                            reason="pick_drawer_observe_failed",
+                            command=self.state.current_command,
+                        )
+                        self._recover_after_pick_drawer_validation_failure(
+                            target_label,
+                            drawer_id,
+                            log,
+                            "pick_drawer_observe_failed",
+                        )
+                        return
+
+                if ok:
+                    if not self._validate_pick_drawer_ownership(
                         target_label,
                         drawer_id,
                         log,
-                        "pick_drawer_observe_failed",
+                    ):
+                        return
+                    self.state.target_label = target_label
+                    self.state.drawer_prepared_tool = target_label
+                    self._publish_robot_status(
+                        "searching",
+                        tool_name=target_label,
+                        action="bring",
+                        message=f"{target_label} 탐색을 시작합니다.",
+                        command=self.state.current_command,
                     )
                     return
 
-            if ok:
-                if not self._validate_pick_drawer_ownership(
-                    target_label,
-                    drawer_id,
-                    log,
+                if (
+                    self.pause_req.is_set()
+                    or self.resume_req.is_set()
+                    or self.drawer_prepare_paused.is_set()
                 ):
+                    if self._wait_for_drawer_prepare_resume(target_label, log):
+                        continue
                     return
-                self.state.target_label = target_label
-                self.state.drawer_prepared_tool = target_label
-                self._publish_robot_status(
-                    "searching",
-                    tool_name=target_label,
-                    action="bring",
-                    message=f"{target_label} 탐색을 시작합니다.",
-                    command=self.state.current_command,
-                )
-            else:
+
                 self._publish_robot_status(
                     "failed",
                     tool_name=target_label,
@@ -2270,9 +2297,46 @@ class TaskCoordinatorNode(Node):
                 )
                 self.state.target_label = None
                 self.state.current_command = None
+                return
         finally:
+            self.drawer_prepare_paused.clear()
             self.state.drawer_preparing_tool = None
             self.state.picking = False
+
+    def _wait_for_drawer_prepare_resume(self, target_label, log):
+        self.drawer_prepare_paused.set()
+        self._publish_robot_status(
+            "paused",
+            tool_name=target_label,
+            action="bring",
+            message="서랍 준비 작업을 일시정지했습니다.",
+            reason="drawer_prepare_paused",
+            command=self.state.current_command,
+        )
+        log.info(
+            "drawer prepare paused; waiting for resume",
+            step="drawer_prepare",
+            event="pause",
+            target=target_label,
+        )
+
+        while rclpy.ok() and self.drawer_prepare_paused.is_set():
+            if self.exit_req.is_set():
+                return False
+            if self.resume_req.is_set() or not self.pause_req.is_set():
+                self.resume_req.clear()
+                self.pause_req.clear()
+                self.drawer_prepare_paused.clear()
+                log.info(
+                    "drawer prepare resume requested",
+                    step="drawer_prepare",
+                    event="resume",
+                    target=target_label,
+                )
+                return True
+            cooperative_wait(0.1)
+
+        return False
 
     def _validate_pick_drawer_ownership(self, target_label, drawer_id, log):
         observed_tools = self.return_perception.detect_drawer_tool_labels()

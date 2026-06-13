@@ -255,6 +255,8 @@ def _make_resume_node(TaskCoordinatorNode):
     node.pause_req = threading.Event()
     node.drop_req = threading.Event()
     node.resume_req = threading.Event()
+    node.exit_req = threading.Event()
+    node.drawer_prepare_paused = threading.Event()
     node._queue_lock = threading.RLock()
     node._current_step = None
     node._suspended_step = None
@@ -269,6 +271,7 @@ def _make_resume_node(TaskCoordinatorNode):
     node.state = types.SimpleNamespace(
         current_command=None,
         recovery_mode=False,
+        drawer_preparing_tool=None,
     )
     node.published_statuses = []
     node._publish_robot_status = (
@@ -328,3 +331,40 @@ def test_resume_without_paused_task_returns_to_idle(monkeypatch):
     assert node.published_statuses[-1][1]["action"] == "resume"
     assert node.published_statuses[-1][1]["reason"] == "resume_without_paused_task"
     assert "재개할 작업이 없습니다" in node.published_statuses[-1][1]["message"]
+
+
+def test_resume_during_drawer_prepare_wakes_drawer_worker(monkeypatch):
+    _install_task_coordinator_import_stubs(monkeypatch)
+    from macgyvbot_task.task_coordinator_node import TaskCoordinatorNode
+
+    node = _make_resume_node(TaskCoordinatorNode)
+    node.pause_req.set()
+    node.drawer_prepare_paused.set()
+    node.state.current_command = {"action": "bring", "tool_name": "screwdriver"}
+    dispatched = []
+    node._dispatch_next = lambda: dispatched.append(True)
+
+    assert node._handle_resume("재개")
+
+    assert node.resume_req.is_set()
+    assert not node.pause_req.is_set()
+    assert node.drawer_prepare_paused.is_set()
+    assert dispatched == []
+    assert node.published_statuses[-1][0] == "resumed"
+    assert "서랍 준비" in node.published_statuses[-1][1]["message"]
+
+
+def test_drawer_prepare_resume_wait_consumes_resume(monkeypatch):
+    _install_task_coordinator_import_stubs(monkeypatch)
+    from macgyvbot_task.task_coordinator_node import TaskCoordinatorNode
+
+    node = _make_resume_node(TaskCoordinatorNode)
+    node.pause_req.set()
+    node.resume_req.set()
+    node.drawer_prepare_paused.set()
+
+    assert node._wait_for_drawer_prepare_resume("screwdriver", FakeLogger())
+
+    assert not node.resume_req.is_set()
+    assert not node.pause_req.is_set()
+    assert not node.drawer_prepare_paused.is_set()
