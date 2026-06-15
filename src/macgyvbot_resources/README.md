@@ -24,7 +24,7 @@ source-tree fallback lookup logic.
 Place the YOLO weights at:
 
 ```text
-src/macgyvbot_resources/weights/yolo_v11_merge_v2.pt
+src/macgyvbot_resources/weights/best.pt
 ```
 
 Then run the direct RealSense test:

@@ -46,8 +46,9 @@ ROS 패키지가 아니라 colcon workspace root이며, 실행 entrypoint는
     hand grasp detection node와 hand/tool grasp helper를 소유합니다.
   - model path lookup은 `macgyvbot_resources`를 기준으로 수행합니다.
   - `grasp_point/`는 로봇이 잡을 image-space grasp point 선택을 담당합니다.
-    기본 모드는 단일 호출 기반 `vlm_only_qwen3b`이며, 기존 grid 기반 `vlm`,
-    Gemini API 기반 `api`, bbox 중심 `center` 모드를 함께 지원합니다.
+    기본 모드는 `yolo`이며, 단일 호출 기반 `vlm_only_smol`,
+    `vlm_only_qwen3b`, `vlm_only_qwen7b`, 기존 grid 기반 `vlm`, Gemini API
+    기반 `api`, bbox 중심 `center` 모드를 함께 지원합니다.
   - `grasp_point/vlm/`은 local VLM 모델 호출, 응답 parsing, inference history
     기록처럼 VLM 자체에 가까운 공통 기능을 소유합니다.
   - `grasp_point/vlm_method/`, `grasp_point/vlm_only_method/`,
@@ -159,9 +160,10 @@ macgyvbot_perception.hand_grasp_detection_node
   복귀하며, 복귀 성공 후 OnRobot RG2 그리퍼를 open합니다.
 - `pause`는 현재 MoveIt trajectory goal을 cancel하지만 대기 중인 queue는 유지합니다.
   pause로 중단된 retry 가능 step은 queue 앞에 다시 들어가고, `resume` 이후 계속됩니다.
-- `/tool_drop_detected`의 `event=tool_dropped` payload는 자동 `exit`으로 해석합니다.
-  이때 queue clear와 MoveIt goal cancel은 수행하되 `/robot_task_status`의
-  `tool_dropped` 상태가 `cancelled`로 덮이지 않도록 처리합니다.
+- `/tool_drop_detected`의 `event=tool_dropped` payload는 자동 `exit`이 아니라
+  first-version recovery로 처리합니다. 이때 queue clear와 MoveIt goal cancel은
+  수행하되 `/robot_task_status`의 `tool_dropped` 상태가 `cancelled`로 덮이지
+  않도록 처리합니다.
 - pick flow의 `build_steps()`는 queue에 넣을 step 목록만 구성합니다. target planning,
   VLM refine, MoveIt motion, gripper 동작은 각 `TaskStep` 실행 시점에 수행됩니다.
 - pose goal 기반 MoveIt 이동은 `moveit_controller.py`에서 현재 joint state를 읽고

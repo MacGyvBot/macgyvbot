@@ -11,7 +11,8 @@
 
 ## 작성 기준
 
-- README에는 설치, 빌드, 실행에 필요한 최소 정보만 둔다.
+- README에는 처음 사용하는 사람이 설치, 빌드, 실행, 주요 흐름, 문제 해결
+  위치를 찾을 수 있는 entry-level 운영 정보를 둔다.
 - 현재 runtime 구조 설명은 `EXPLAIN.md`에 둔다.
 - 작업자/에이전트 공통 지침은 루트 `AGENTS.md`에 둔다.
 - topic publisher/subscriber 또는 payload 계약이 바뀌면
