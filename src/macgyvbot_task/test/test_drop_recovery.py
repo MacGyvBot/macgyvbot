@@ -1,5 +1,6 @@
 import sys
 import types
+import math
 
 
 class DummyPoseStamped:
@@ -64,6 +65,8 @@ from macgyvbot_task.application.recovery.recovery_utils import (  # noqa: E402
 )
 import macgyvbot_task.application.recovery.recovery_utils as recovery_utils  # noqa: E402
 from macgyvbot_task.application.recovery import drop_recovery  # noqa: E402
+from macgyvbot_task.application.recovery import drop_recovery_sequence  # noqa: E402
+from macgyvbot_config.robot import RECOVERY_INSPECTION_JOINTS  # noqa: E402
 
 
 class FakeLogger:
@@ -153,7 +156,31 @@ class FakeMotion:
         self.wrist_rotations.append(yaw_deg)
         return True
 
-    def plan_and_execute(self, _logger, pose_goal, collision_scene_key=None, **_kwargs):
+    def current_wrist_joint_rad(self, _logger):
+        return 0.5
+
+    def move_wrist_to_joint_rad(self, target_j6_rad, _logger, **_kwargs):
+        self.events.append(("wrist_target", target_j6_rad))
+        return True
+
+    def plan_and_execute(
+        self,
+        _logger,
+        pose_goal=None,
+        state_goal=None,
+        collision_scene_key=None,
+        **_kwargs,
+    ):
+        if state_goal is not None:
+            self.events.append(
+                (
+                    "joint_move",
+                    collision_scene_key,
+                    dict(state_goal.joint_positions),
+                )
+            )
+            return True
+
         self.events.append(
             (
                 "move",
@@ -172,6 +199,20 @@ class FakeGripper:
 
     def open_gripper(self):
         self.open_calls += 1
+
+
+class FakeJointMotion:
+    def __init__(self):
+        self.calls = []
+
+    def plan_and_execute(self, _logger, state_goal=None, collision_scene_key=None, **_kwargs):
+        self.calls.append((collision_scene_key, dict(state_goal.joint_positions)))
+        return True
+
+
+class FakeRobot:
+    def get_robot_model(self):
+        return object()
 
 
 class FakeMonitor:
@@ -215,6 +256,24 @@ def test_normalize_tool_name_uses_unknown_for_missing_values():
 def test_recovery_config_searches_inspection_for_four_seconds():
     assert RecoveryConfig().detection_timeout_sec == RECOVERY_INSPECTION_SEARCH_TIMEOUT_SEC
     assert RECOVERY_INSPECTION_SEARCH_TIMEOUT_SEC == 4.0
+
+
+def test_move_to_inspection_pose_uses_recovery_joint_pose():
+    motion = FakeJointMotion()
+    logger = FakeLogger()
+
+    ok = recovery_utils.move_to_inspection_pose(
+        motion,
+        RecoveryConfig(robot=FakeRobot(), state=types.SimpleNamespace(logger=lambda: logger)),
+    )
+
+    assert ok
+    assert len(motion.calls) == 1
+    collision_scene_key, joint_positions = motion.calls[0]
+    assert collision_scene_key == "recovery/inspection_pose"
+    assert joint_positions.keys() == RECOVERY_INSPECTION_JOINTS.keys()
+    for joint_name, expected_rad in RECOVERY_INSPECTION_JOINTS.items():
+        assert math.isclose(joint_positions[joint_name], expected_rad)
 
 
 def test_recovery_failure_messages_classify_not_found_and_ik_failures():
@@ -357,7 +416,7 @@ def test_recovery_grasp_rotates_yaw_before_xy_align_and_z_descent(monkeypatch):
         detection,
         motion,
         gripper,
-        config=RecoveryConfig(robot=object(), wait_fn=lambda _duration: None),
+        config=RecoveryConfig(robot=FakeRobot(), wait_fn=lambda _duration: None),
         target_tool="wrench",
     )
 
@@ -406,7 +465,7 @@ def test_recovery_grasp_applies_limited_width_before_each_descent_close(
         motion,
         gripper,
         config=RecoveryConfig(
-            robot=object(),
+            robot=FakeRobot(),
             state=status,
             wait_fn=lambda _duration: None,
         ),
@@ -429,7 +488,7 @@ def test_return_recovery_prefers_held_tool_and_returns_home(monkeypatch):
     logger = FakeLogger()
     detection = types.SimpleNamespace(found=True, base_xyz=(0.3, 0.1, 0.2))
     config = RecoveryConfig(
-        robot=object(),
+        robot=FakeRobot(),
         state=status,
         detect_target_fn=lambda target: detection,
     )
@@ -494,7 +553,7 @@ def test_return_recovery_updates_label_then_redetects_with_grasp_yaw(monkeypatch
     )
     calls = []
     config = RecoveryConfig(
-        robot=object(),
+        robot=FakeRobot(),
         state=status,
         command={"tool_name": "wrench", "action": "return"},
         initial_detect_target_fn=lambda target: calls.append(("initial", target))
@@ -555,7 +614,7 @@ def test_return_recovery_uses_recovery_only_state(monkeypatch):
     )
     calls = []
     config = RecoveryConfig(
-        robot=object(),
+        robot=FakeRobot(),
         state=status,
         command={"tool_name": "unknown", "action": "return"},
         initial_detect_target_fn=lambda target: calls.append(("initial", target))
@@ -600,7 +659,7 @@ def test_recovery_cleanup_returns_home(monkeypatch):
     logger = FakeLogger()
     detection = types.SimpleNamespace(found=True, base_xyz=(0.3, 0.1, 0.2))
     config = RecoveryConfig(
-        robot=object(),
+        robot=FakeRobot(),
         state=status,
         detect_target_fn=lambda target: detection,
     )
@@ -627,6 +686,249 @@ def test_recovery_cleanup_returns_home(monkeypatch):
     assert status.recovery_mode is False
 
 
+def test_recovery_cleanup_pause_keeps_recovery_mode(monkeypatch):
+    status = FakeStatus()
+    status.recovery_mode = True
+    logger = FakeLogger()
+    pause_event = types.SimpleNamespace(is_set=lambda: True)
+    config = RecoveryConfig(
+        robot=FakeRobot(),
+        state=status,
+        pause_event=pause_event,
+    )
+
+    monkeypatch.setattr(recovery_utils, "return_home", lambda *_args: False)
+
+    ok = recovery_utils.cleanup_after_recovery(
+        status,
+        FakeMotion(),
+        config,
+        logger,
+        task_type="pick",
+        target_tool="wrench",
+        reason="recovery_succeeded",
+    )
+
+    assert not ok
+    assert status.recovery_mode is True
+    assert not [
+        message
+        for level, message, _fields in logger.messages
+        if level == "error" and message == "recovery Home return failed"
+    ]
+
+
+def test_queue_recovery_cleanup_leaves_recovery_mode_for_queue_finish(monkeypatch):
+    status = FakeStatus()
+    status.recovery_mode = True
+    logger = FakeLogger()
+    config = RecoveryConfig(
+        robot=FakeRobot(),
+        state=status,
+    )
+
+    monkeypatch.setattr(recovery_utils, "return_home", lambda *_args: True)
+
+    ok = recovery_utils.cleanup_after_recovery(
+        status,
+        FakeMotion(),
+        config,
+        logger,
+        task_type="pick",
+        target_tool="wrench",
+        reason="recovery_succeeded",
+        finish_recovery_mode=False,
+    )
+
+    assert ok
+    assert status.recovery_mode is True
+
+
+def test_drop_recovery_builds_queue_steps():
+    status = FakeStatus()
+    logger = FakeLogger()
+    config = RecoveryConfig(
+        robot=FakeRobot(),
+        state=status,
+        detect_target_fn=lambda _target: None,
+    )
+
+    steps = drop_recovery_sequence.build_drop_recovery_steps(
+        status,
+        FakeMotion(),
+        FakeGripper(),
+        config,
+        logger,
+        task_type="pick",
+    )
+
+    assert [step.name for step in steps] == [
+        "recovery/start",
+        "recovery/move_to_inspection_pose",
+        "recovery/open_gripper_after_inspection",
+        "recovery/detect_target",
+        "recovery/move_to_target_observe",
+        "recovery/redetect_target",
+        "recovery/check_graspability",
+        "recovery/prepare_grasp_plan_and_yaw",
+        "recovery/apply_grasp_yaw",
+        "recovery/execute_grasp",
+        "recovery/publish_grasp_success",
+        "recovery/wait_tool_mask_lock",
+        "recovery/start_tool_hold_monitor",
+        "recovery/return_home",
+        "recovery/finish",
+    ]
+    assert all(step.retry_on_pause for step in steps[1:])
+
+
+def test_drop_recovery_prepares_and_applies_yaw_in_separate_steps(monkeypatch):
+    status = FakeStatus()
+    logger = FakeLogger()
+    motion = FakeMotion()
+    detection = types.SimpleNamespace(
+        found=True,
+        base_xyz=(0.3, 0.1, 0.2),
+        yaw_deg=30.0,
+    )
+    config = RecoveryConfig(
+        robot=FakeRobot(),
+        state=status,
+        detect_target_fn=lambda _target: detection,
+    )
+    plan = types.SimpleNamespace(
+        target_x=0.3,
+        target_y=0.1,
+        drawer_wall_clearance_z=0.42,
+        grasp_z=0.25,
+        should_descend_to_grasp=True,
+    )
+
+    class FakePlanner:
+        def __init__(self, _robot):
+            pass
+
+        def plan(self, *_args, **_kwargs):
+            return plan
+
+    monkeypatch.setattr(drop_recovery_sequence, "PickTargetPlanner", FakePlanner)
+    monkeypatch.setattr(
+        drop_recovery_sequence,
+        "current_ee_orientation",
+        lambda _robot: {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+    )
+
+    steps = drop_recovery_sequence.build_drop_recovery_steps(
+        status,
+        motion,
+        FakeGripper(),
+        config,
+        logger,
+        task_type="pick",
+    )
+    step_by_name = {step.name: step for step in steps}
+    runner = step_by_name["recovery/prepare_grasp_plan_and_yaw"].execute.__self__
+    runner.detection = detection
+
+    assert step_by_name["recovery/prepare_grasp_plan_and_yaw"].execute()
+    assert motion.events == []
+    assert math.isclose(runner.grasp_wrist_target_rad, 0.5 + math.radians(30.0))
+
+    assert step_by_name["recovery/apply_grasp_yaw"].execute()
+    assert motion.events == [("wrist_target", 0.5 + math.radians(30.0))]
+
+
+def test_drop_recovery_grasp_success_publish_is_idempotent():
+    status = FakeStatus()
+    logger = FakeLogger()
+    config = RecoveryConfig(
+        robot=FakeRobot(),
+        state=status,
+    )
+    steps = drop_recovery_sequence.build_drop_recovery_steps(
+        status,
+        FakeMotion(),
+        FakeGripper(),
+        config,
+        logger,
+        task_type="pick",
+    )
+    step_by_name = {step.name: step for step in steps}
+    publish_step = step_by_name["recovery/publish_grasp_success"]
+
+    assert publish_step.execute()
+    first_result = dict(status.last_tool_mask_lock_result)
+    status.tool_mask_locked = True
+    status.last_tool_mask_lock_result = {"locked": True, "reason": "already_locked"}
+
+    assert publish_step.execute()
+    assert status.tool_mask_locked is True
+    assert status.last_tool_mask_lock_result == {"locked": True, "reason": "already_locked"}
+    assert first_result["reason"] == "drop_recovery_grasp_success"
+
+
+def test_drop_recovery_mask_lock_and_monitor_start_are_separate_steps():
+    status = FakeStatus()
+    status.tool_mask_locked = True
+    status.last_tool_mask_lock_result = {
+        "locked": True,
+        "mask_source": "DEPTH_LOCKED_TOOL",
+    }
+    monitor = FakeMonitor()
+    config = RecoveryConfig(
+        robot=FakeRobot(),
+        state=status,
+        command={"action": "bring", "tool_name": "wrench"},
+        tool_hold_monitor=monitor,
+    )
+    steps = drop_recovery_sequence.build_drop_recovery_steps(
+        status,
+        FakeMotion(),
+        FakeGripper(),
+        config,
+        FakeLogger(),
+        task_type="pick",
+    )
+    step_by_name = {step.name: step for step in steps}
+
+    assert step_by_name["recovery/wait_tool_mask_lock"].execute()
+    assert monitor.starts == []
+
+    assert step_by_name["recovery/start_tool_hold_monitor"].execute()
+    assert monitor.starts == [
+        ("wrench", "bring", {"action": "bring", "tool_name": "wrench"})
+    ]
+
+    assert step_by_name["recovery/start_tool_hold_monitor"].execute()
+    assert monitor.starts == [
+        ("wrench", "bring", {"action": "bring", "tool_name": "wrench"})
+    ]
+
+
+def test_drop_recovery_queue_step_returns_immediately_when_paused(monkeypatch):
+    status = FakeStatus()
+    logger = FakeLogger()
+    pause = FakeEvent(set_initially=True)
+    wait_calls = []
+    config = RecoveryConfig(
+        robot=FakeRobot(),
+        state=status,
+        pause_event=pause,
+        wait_fn=lambda _duration: wait_calls.append(_duration),
+    )
+    steps = drop_recovery_sequence.build_drop_recovery_steps(
+        status,
+        FakeMotion(),
+        FakeGripper(),
+        config,
+        logger,
+        task_type="pick",
+    )
+
+    assert steps[1].execute() is False
+    assert wait_calls == []
+
+
 def test_recovery_not_found_closes_open_drawer_then_returns_home(monkeypatch):
     status = FakeStatus()
     status.drawer_open = True
@@ -636,7 +938,7 @@ def test_recovery_not_found_closes_open_drawer_then_returns_home(monkeypatch):
     drawer_closer = FakeDrawerCloser()
     motion = FakeMotion()
     config = RecoveryConfig(
-        robot=object(),
+        robot=FakeRobot(),
         state=status,
         detect_target_fn=lambda _target: None,
         close_open_drawer_fn=drawer_closer,
@@ -676,7 +978,7 @@ def test_recovery_not_graspable_closes_open_drawer_then_returns_home(monkeypatch
     drawer_closer = FakeDrawerCloser()
     detection = types.SimpleNamespace(found=True, base_xyz=(0.3, 0.1, 0.2))
     config = RecoveryConfig(
-        robot=object(),
+        robot=FakeRobot(),
         state=status,
         detect_target_fn=lambda _target: detection,
         close_open_drawer_fn=drawer_closer,
@@ -717,7 +1019,7 @@ def test_recovery_target_observe_planning_failure_closes_open_drawer(monkeypatch
     drawer_closer = FakeDrawerCloser()
     detection = types.SimpleNamespace(found=True, base_xyz=(0.3, 0.1, 0.2))
     config = RecoveryConfig(
-        robot=object(),
+        robot=FakeRobot(),
         state=status,
         initial_detect_target_fn=lambda _target: detection,
         target_observe_fn=lambda *_args: False,
@@ -756,15 +1058,15 @@ def test_recovery_failed_event_with_open_drawer_uses_fallback_cleanup(monkeypatc
     logger = FakeLogger()
     drawer_closer = FakeDrawerCloser()
     config = RecoveryConfig(
-        robot=object(),
+        robot=FakeRobot(),
         state=status,
         close_open_drawer_fn=drawer_closer,
     )
 
     monkeypatch.setattr(
-        recovery_utils,
-        "move_to_observation_pose",
-        lambda *_args: (False, None),
+        drop_recovery,
+        "move_to_inspection_pose",
+        lambda *_args: False,
     )
 
     ok = drop_recovery.run_drop_recovery(
@@ -806,7 +1108,7 @@ def test_pick_recovery_observes_target_then_returns_home(monkeypatch):
     )
     calls = []
     config = RecoveryConfig(
-        robot=object(),
+        robot=FakeRobot(),
         state=status,
         command={"tool_name": "wrench", "action": "bring"},
         initial_detect_target_fn=lambda target: calls.append(("initial", target))

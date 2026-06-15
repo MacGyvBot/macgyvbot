@@ -51,6 +51,28 @@ _install_ros_stubs()
 from macgyvbot_ui.operator_ui_node import OperatorUiNode
 
 
+class FakeClock:
+    def __init__(self, now_ns=0):
+        self.now_ns = now_ns
+
+    def now(self):
+        return types.SimpleNamespace(nanoseconds=self.now_ns)
+
+
+def _status_view_node(clock):
+    node = object.__new__(OperatorUiNode)
+    node.get_clock = lambda: clock
+    node._last_target_label = ""
+    node._task_chat_command_key = None
+    node._shown_task_chat_stamps = {}
+    node._task_chat_dedupe_ns = 10_000_000_000
+    node._task_chat_count = 0
+    node._task_chat_limit = 5
+    node._last_robot_status_key = None
+    node._last_robot_log_key = None
+    return node
+
+
 class FakePublisher:
     def __init__(self):
         self.messages = []
@@ -99,6 +121,20 @@ class OperatorUiStatusMessageTest(unittest.TestCase):
         self.assertNotIn("…", status)
 
     def test_append_bot_publishes_same_text_for_tts(self):
+        class FakeWindow:
+            def __init__(self):
+                self.messages = []
+
+            def append_bot(self, text):
+                self.messages.append(text)
+
+        class FakePublisher:
+            def __init__(self):
+                self.messages = []
+
+            def publish(self, msg):
+                self.messages.append(msg)
+
         node = object.__new__(OperatorUiNode)
         node.window = FakeWindow()
         node._tts_pub = FakePublisher()
@@ -109,6 +145,60 @@ class OperatorUiStatusMessageTest(unittest.TestCase):
         self.assertEqual(len(node._tts_pub.messages), 1)
         self.assertEqual(node._tts_pub.messages[0].text, "공구를 받아주세요.")
         self.assertEqual(node._tts_pub.messages[0].source, "operator_ui_chat")
+
+    def test_same_task_chat_reopens_after_dedupe_window(self):
+        clock = FakeClock(now_ns=1_000_000_000)
+        node = _status_view_node(clock)
+        status = {
+            "status": "handoff_inspection_pending",
+            "action": "bring",
+            "tool_name": "screwdriver",
+            "reason": "handoff_search_failed",
+            "command": {
+                "action": "bring",
+                "tool_name": "screwdriver",
+                "raw_text": "screwdriver bring",
+            },
+        }
+
+        first = node._build_robot_status_view(status)
+        second = node._build_robot_status_view(status)
+        clock.now_ns += 10_000_000_000
+        third = node._build_robot_status_view(status)
+
+        self.assertTrue(first["show_chat"])
+        self.assertFalse(second["show_chat"])
+        self.assertTrue(third["show_chat"])
+
+    def test_same_event_chat_reopens_after_dedupe_window(self):
+        class FakeWindow:
+            def __init__(self):
+                self.messages = []
+
+            def append_bot(self, text):
+                self.messages.append(text)
+
+        class FakePublisher:
+            def __init__(self):
+                self.messages = []
+
+            def publish(self, msg):
+                self.messages.append(msg)
+
+        clock = FakeClock(now_ns=1_000_000_000)
+        node = object.__new__(OperatorUiNode)
+        node.get_clock = lambda: clock
+        node.window = FakeWindow()
+        node._tts_pub = FakePublisher()
+        node._last_event_chat_key = None
+        node._last_event_chat_stamp_ns = 0
+        node._event_chat_dedupe_ns = 10_000_000_000
+
+        self.assertTrue(node._append_event_chat("handoff_inspection_pending", "retry?"))
+        self.assertFalse(node._append_event_chat("handoff_inspection_pending", "retry?"))
+        clock.now_ns += 10_000_000_000
+        self.assertTrue(node._append_event_chat("handoff_inspection_pending", "retry?"))
+        self.assertEqual(node.window.messages, ["retry?", "retry?"])
 
     def test_home_control_publishes_task_control_not_stt_text(self):
         node = object.__new__(OperatorUiNode)

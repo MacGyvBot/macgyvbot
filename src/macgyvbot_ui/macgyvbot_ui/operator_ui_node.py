@@ -235,8 +235,11 @@ class OperatorUiNode(Node):
         self._last_robot_status_key = None
         self._last_robot_log_key = None
         self._last_event_chat_key = None
+        self._last_event_chat_stamp_ns = 0
+        self._event_chat_dedupe_ns = 10_000_000_000
         self._task_chat_command_key = None
-        self._shown_task_chat_keys = set()
+        self._shown_task_chat_stamps = {}
+        self._task_chat_dedupe_ns = 10_000_000_000
         self._last_hand_present = None
         self._last_hand_log_key = None
         self._last_tool_drop_key = None
@@ -1078,14 +1081,14 @@ class OperatorUiNode(Node):
         command_key = self._status_command_key(status, action, tool_name)
         if command_key != self._task_chat_command_key:
             self._task_chat_command_key = command_key
-            self._shown_task_chat_keys.clear()
+            self._shown_task_chat_stamps.clear()
             self._task_chat_count = 0
 
         chat_message = abnormal_message or normal_chat_message
         if not chat_message and state in self._operational_chat_statuses():
             chat_message = message
         key = (command_key, state, chat_message)
-        show_chat = bool(chat_message) and key not in self._shown_task_chat_keys
+        show_chat = bool(chat_message) and not self._is_recent_task_chat(key)
         if (
             show_chat
             and self._task_chat_count >= self._task_chat_limit
@@ -1093,7 +1096,7 @@ class OperatorUiNode(Node):
         ):
             show_chat = False
         if show_chat:
-            self._shown_task_chat_keys.add(key)
+            self._shown_task_chat_stamps[key] = self.get_clock().now().nanoseconds
             self._task_chat_count += 1
             self._last_robot_status_key = key
 
@@ -1114,6 +1117,14 @@ class OperatorUiNode(Node):
             'show_chat': show_chat,
             'show_log': show_log,
         }
+
+    def _is_recent_task_chat(self, key):
+        now = self.get_clock().now().nanoseconds
+        last_shown = self._shown_task_chat_stamps.get(key)
+        return (
+            last_shown is not None
+            and now - last_shown < self._task_chat_dedupe_ns
+        )
 
     @staticmethod
     def _status_action(status):
@@ -1551,9 +1562,15 @@ class OperatorUiNode(Node):
             return False
 
         key = (str(event or ''), message)
-        if not force and key == self._last_event_chat_key:
+        now = self.get_clock().now().nanoseconds
+        if (
+            not force
+            and key == self._last_event_chat_key
+            and now - self._last_event_chat_stamp_ns < self._event_chat_dedupe_ns
+        ):
             return False
         self._last_event_chat_key = key
+        self._last_event_chat_stamp_ns = now
         self._append_bot(message)
         return True
 

@@ -7,10 +7,13 @@ from dataclasses import dataclass
 import time
 from typing import Any
 
+from moveit.core.robot_state import RobotState
+
 from macgyvbot_config.grasp import GRASP_RETRY_LIMIT
 from macgyvbot_config.hand_grasp import HAND_GRASP_MASK_LOCK_TIMEOUT_SEC
 from macgyvbot_config.handoff import HANDOFF_WAIT_POLL_SEC
 from macgyvbot_config.pick import PICK_PREGRASP_REOPEN_WAIT_SEC
+from macgyvbot_config.robot import RECOVERY_INSPECTION_JOINTS
 from macgyvbot_manipulation.grasp_verifier import GraspVerifier
 from macgyvbot_manipulation.handover_targeting import move_to_observation_pose
 from macgyvbot_manipulation.robot_safezone import SAFE_Z_MIN
@@ -93,7 +96,7 @@ def clear_recovery_perception_lock(status, logger=None):
 
 
 def move_to_inspection_pose(motion_controller, config: RecoveryConfig):
-    """Move to the existing hand inspection pose used by return handoff."""
+    """Move to the recovery-specific inspection joint pose."""
     logger = _logger(config)
     if config.robot is None:
         log_error(
@@ -105,12 +108,24 @@ def move_to_inspection_pose(motion_controller, config: RecoveryConfig):
         )
         return False
 
-    ok, _start_pose = move_to_observation_pose(
-        motion_controller,
-        config.robot,
+    state_goal = RobotState(config.robot.get_robot_model())
+    state_goal.joint_positions = dict(RECOVERY_INSPECTION_JOINTS)
+    state_goal.update()
+
+    log_info(
         logger,
+        "move to recovery inspection pose",
+        step="recovery",
+        event="start",
+        joints="j1=0,j2=-25.38,j3=44.24,j4=0,j5=133.39,j6=90.0",
     )
-    return bool(ok)
+    return bool(
+        motion_controller.plan_and_execute(
+            logger,
+            state_goal=state_goal,
+            collision_scene_key="recovery/inspection_pose",
+        )
+    )
 
 
 def run_recovery_step_with_pause_retry(
@@ -684,10 +699,12 @@ def cleanup_after_recovery(
     task_type,
     target_tool,
     reason=None,
+    finish_recovery_mode=True,
 ):
     """Finish recovery by returning home."""
     home_ok = return_home(motion_controller, config)
-    if not home_ok:
+    interrupted = _recovery_interrupted(config)
+    if not home_ok and not interrupted:
         log_recovery_event(
             logger,
             "RECOVERY_FAILED",
@@ -698,7 +715,8 @@ def cleanup_after_recovery(
                 "reason": "return_home_failed",
             },
         )
-    set_recovery_mode(status, False)
+    if finish_recovery_mode and not interrupted:
+        set_recovery_mode(status, False)
     if reason is not None:
         log_recovery_event(
             logger,
@@ -709,6 +727,7 @@ def cleanup_after_recovery(
                 "target_tool": target_tool,
                 "reason": reason,
                 "home_ok": home_ok,
+                "interrupted": interrupted,
                 "gripper_holding": getattr(status, "gripper_holding", False),
             },
         )

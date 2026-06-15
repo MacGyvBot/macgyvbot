@@ -79,24 +79,23 @@ def _equivalent_values(current, target, tolerance_rad=1e-9):
         for value in candidates
         if abs(value - current) <= tolerance_rad
     ]
-    negative = sorted(
-        [
-            value
-            for value in candidates
-            if value - current < -tolerance_rad
-        ],
-        key=lambda value: abs(value - current),
-    )
-    positive = sorted(
-        [
-            value
-            for value in candidates
-            if value - current > tolerance_rad
-        ],
-        key=lambda value: abs(value - current),
+    nonzero = [
+        value
+        for value in candidates
+        if abs(value - current) > tolerance_rad
+    ]
+    nonzero.sort(
+        key=lambda value: (
+            not _is_principal_angle(value),
+            abs(value - current),
+        )
     )
 
-    return zero + negative + positive
+    return zero + nonzero
+
+
+def _is_principal_angle(value, tolerance_rad=1e-9):
+    return -math.pi - tolerance_rad <= float(value) <= math.pi + tolerance_rad
 
 
 def _opposite_direction(delta_deg):
@@ -817,6 +816,9 @@ class MoveItController:
             state_goal=state_goal,
             collision_scene_key=collision_scene_key,
         )
+        if self.should_interrupt is not None and self.should_interrupt():
+            logger.info("Home return interrupted; skipping Home joint settle wait.")
+            return False
 
         if self._wait_until_at_joint_goal(
             HOME_JOINTS,
@@ -851,6 +853,9 @@ class MoveItController:
     ):
         deadline = time.monotonic() + timeout_sec
         while time.monotonic() <= deadline:
+            if self.should_interrupt is not None and self.should_interrupt():
+                logger.info("joint goal settle wait interrupted")
+                return False
             if self._is_at_joint_goal(
                 goal_joints,
                 logger,

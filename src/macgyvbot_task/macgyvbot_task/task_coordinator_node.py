@@ -101,6 +101,7 @@ from macgyvbot_manipulation.onrobot_gripper import RG
 from macgyvbot_manipulation.robot_pose import (
     get_ee_matrix,
     make_safe_pose,
+    normalize_angle_deg,
     orientation_from_joint_positions,
 )
 from macgyvbot_manipulation.robot_safezone import SAFE_Z_MIN, safe_z_min_for_drawer
@@ -128,6 +129,7 @@ from macgyvbot_task.application.adapters.vlm_grasp_service_client import (
     VLMGraspServiceClient,
 )
 from macgyvbot_task.application.display.debug_display import DebugDisplay
+from macgyvbot_task.application.pick_flow.bring_sequence import BringSequenceRunner
 from macgyvbot_task.application.pick_flow.pick_frame_processor import (
     PickFrameProcessor,
 )
@@ -137,7 +139,7 @@ from macgyvbot_task.application.return_flow.return_perception_adapter import (
 from macgyvbot_task.application.pick_flow.pick_sequence import PickSequenceRunner
 from macgyvbot_task.application.return_flow.return_sequence import ReturnSequenceRunner
 from macgyvbot_task.application.recovery import (
-    run_drop_recovery,
+    build_drop_recovery_steps,
 )
 from macgyvbot_task.application.recovery.recovery_utils import RecoveryConfig
 from macgyvbot_task.application.robot.robot_home_initializer import (
@@ -347,7 +349,6 @@ class TaskCoordinatorNode(Node):
         self.handoff_retry_req = threading.Event()
         self.handoff_fallback_req = threading.Event()
         self.handoff_decision_pending = threading.Event()
-        self.drawer_prepare_paused = threading.Event()
 
         self._queue = deque()
         self._queue_lock = threading.RLock()
@@ -359,6 +360,10 @@ class TaskCoordinatorNode(Node):
         self._exit_home_thread = None
         self._drop_recovery_thread = None
         self._pending_drop_recovery_payload = None
+        self._active_drop_recovery_snapshot = None
+        self._drop_recovery_resume_step = None
+        self._drop_recovery_resume_task_name = None
+        self._drop_recovery_resume_queue = None
         self._vlm_preload_timer = None
         self._manual_gripper_lock = threading.Lock()
 
@@ -525,6 +530,23 @@ class TaskCoordinatorNode(Node):
             ),
             control_events=control_events,
             drawer_flow=self.drawer_flow,
+        )
+        self.bring_runner = BringSequenceRunner(
+            state=self.state,
+            drawer_flow=self.drawer_flow,
+            return_perception=self.return_perception,
+            frame_processor=self.frame_processor,
+            detector=self.detector,
+            pick_target_resolver=self.pick_target_resolver,
+            pick_runner=self.pick_runner,
+            publish_robot_status=self._publish_robot_status,
+            task_log=self._task_log,
+            interrupted=self._motion_interrupted,
+            append_task_steps=self._append_task_steps,
+            has_queued_task_steps=self._has_queued_task_steps,
+            recover_after_drawer_validation_failure=(
+                self._recover_after_pick_drawer_validation_failure
+            ),
         )
         self.return_runner = ReturnSequenceRunner(
             self.robot,
@@ -1007,6 +1029,8 @@ class TaskCoordinatorNode(Node):
 
         self.state.current_command = command
         self.state.target_tool = tool_name
+        self.state.target_label = tool_name
+        self.state.picking = True
         self.state.drawer_prepared_tool = None
         self.state.drawer_preparing_tool = None
         self.state._last_search_status_target = None
@@ -1017,16 +1041,8 @@ class TaskCoordinatorNode(Node):
             message=f"{tool_name} 탐색 요청을 task coordinator가 수신했습니다.",
             command=command,
         )
-        if not self._prepare_drawer_for_target(tool_name):
-            self.state.target_label = tool_name
-            self.state.target_tool = tool_name
-            self._publish_robot_status(
-                "searching",
-                tool_name=tool_name,
-                action="bring",
-                message=f"{tool_name} 탐색을 시작합니다.",
-                command=command,
-            )
+        if not self._load_queue("bring", self.bring_runner.build_steps(tool_name)):
+            self._clear_task_state()
 
     def _handle_release_request(self, request):
         command = self._task_request_command(request)
@@ -1229,8 +1245,6 @@ class TaskCoordinatorNode(Node):
         )
         self.pause_req.set()
         self.resume_req.clear()
-        if self.state.drawer_preparing_tool:
-            self.drawer_prepare_paused.set()
         with self._queue_lock:
             if self._current_step is not None:
                 self._suspended_step = self._current_step
@@ -1252,25 +1266,19 @@ class TaskCoordinatorNode(Node):
             reason=reason or "resume_requested",
         )
         if self.state.recovery_mode:
-            self.resume_req.set()
-            self.pause_req.clear()
+            should_dispatch = False
+            with self._queue_lock:
+                self.resume_req.set()
+                if self._current_step is None and not self._step_thread_alive():
+                    should_dispatch = self._resume_suspended_step_locked()
             self._publish_robot_status(
                 "resumed",
                 message="drop recovery를 재개합니다.",
                 reason=reason or "resume_requested",
                 command=self.state.current_command,
             )
-            return True
-
-        if self.drawer_prepare_paused.is_set():
-            self.resume_req.set()
-            self.pause_req.clear()
-            self._publish_robot_status(
-                "resumed",
-                message="서랍 준비 작업을 재개합니다.",
-                reason=reason or "resume_requested",
-                command=self.state.current_command,
-            )
+            if should_dispatch:
+                self._dispatch_next()
             return True
 
         should_dispatch = False
@@ -1330,7 +1338,6 @@ class TaskCoordinatorNode(Node):
         self.pause_req.clear()
         self.drop_req.clear()
         self.resume_req.clear()
-        self.drawer_prepare_paused.clear()
         self.motion.cancel_current_goal(self._motion_log(), reason=reason or "cancel")
         with self._queue_lock:
             active_step = self._current_step is not None or self._step_thread_alive()
@@ -1347,7 +1354,7 @@ class TaskCoordinatorNode(Node):
             self._publish_robot_status(
                 "cancelled",
                 action="cancel",
-                message="현재 작업을 취소했습니다. 다음 명령을 기다립니다.",
+                message="작업을 취소했습니다. 다음 명령을 기다립니다.",
                 reason=reason or "cancel_requested",
                 command=self.state.current_command,
             )
@@ -1364,7 +1371,6 @@ class TaskCoordinatorNode(Node):
         self.pause_req.clear()
         self.drop_req.clear()
         self.resume_req.clear()
-        self.drawer_prepare_paused.clear()
         self.motion.cancel_current_goal(self._motion_log(), reason=reason or "exit")
         with self._queue_lock:
             self._queue.clear()
@@ -1538,12 +1544,15 @@ class TaskCoordinatorNode(Node):
             reason=snapshot["reason"],
         )
         with self._queue_lock:
+            if self._drop_recovery_resume_queue is None:
+                self._drop_recovery_resume_queue = list(self._queue)
+            self._queue.clear()
             if self._current_step is not None:
-                self._suspended_step = self._current_step
-                self._suspended_task_name = self._current_task_name
+                self._drop_recovery_resume_step = self._current_step
+                self._drop_recovery_resume_task_name = self._current_task_name
 
         self._drop_recovery_thread = threading.Thread(
-            target=self._run_drop_recovery,
+            target=self._load_drop_recovery_queue,
             args=(snapshot,),
             name="task_drop_recovery",
             daemon=True,
@@ -1576,7 +1585,7 @@ class TaskCoordinatorNode(Node):
             },
         }
 
-    def _run_drop_recovery(self, snapshot):
+    def _load_drop_recovery_queue(self, snapshot):
         log = self._task_log("recovery")
         if not self._wait_for_active_task_step_to_stop(log):
             self._publish_robot_status(
@@ -1587,6 +1596,8 @@ class TaskCoordinatorNode(Node):
                 reason="drop_recovery_queue_shutdown_timeout",
                 command=snapshot["command"],
             )
+            self._active_drop_recovery_snapshot = None
+            self._drop_recovery_thread = None
             return
 
         self.drop_req.clear()
@@ -1604,11 +1615,7 @@ class TaskCoordinatorNode(Node):
             snapshot["action"] in ("bring", "pick")
             or snapshot["task_name"] == "pick"
         )
-        if is_pick_drop_recovery:
-            action = "bring"
-        else:
-            action = "return"
-        ok = run_drop_recovery(
+        steps = build_drop_recovery_steps(
             self.state,
             self.motion,
             self.gripper,
@@ -1616,6 +1623,23 @@ class TaskCoordinatorNode(Node):
             log,
             task_type="pick" if is_pick_drop_recovery else "return",
         )
+
+        with self._queue_lock:
+            self._active_drop_recovery_snapshot = snapshot
+            self._queue.extend(("recovery", step) for step in steps)
+            self._drop_recovery_thread = None
+        self._dispatch_next()
+
+    def _finish_drop_recovery_queue_locked(self, ok):
+        snapshot = self._active_drop_recovery_snapshot
+        if snapshot is None:
+            return False
+
+        is_pick_drop_recovery = (
+            snapshot["action"] in ("bring", "pick")
+            or snapshot["task_name"] == "pick"
+        )
+        action = "bring" if is_pick_drop_recovery else "return"
 
         if self._pending_drop_recovery_payload is not None and not ok:
             self._publish_robot_status(
@@ -1627,10 +1651,11 @@ class TaskCoordinatorNode(Node):
                 command=snapshot["command"],
             )
             self._restore_drop_recovery_resume_state(snapshot)
+            self._active_drop_recovery_snapshot = None
             self.drop_req.set()
             self.resume_req.clear()
             self._restart_pending_drop_recovery()
-            return
+            return False
 
         self._publish_robot_status(
             "returned" if ok else "failed",
@@ -1646,9 +1671,21 @@ class TaskCoordinatorNode(Node):
         )
         self._restore_drop_recovery_resume_state(snapshot)
         pending_drop_recovery = self._pending_drop_recovery_payload is not None
+        self._active_drop_recovery_snapshot = None
         if ok and not pending_drop_recovery:
-            with self._queue_lock:
-                should_dispatch = self._resume_suspended_step_locked()
+            if self._drop_recovery_resume_step is not None:
+                self._queue.append(
+                    (
+                        self._drop_recovery_resume_task_name,
+                        self._drop_recovery_resume_step,
+                    )
+                )
+                self._drop_recovery_resume_step = None
+                self._drop_recovery_resume_task_name = None
+            if self._drop_recovery_resume_queue is not None:
+                self._queue.extend(self._drop_recovery_resume_queue)
+                self._drop_recovery_resume_queue = None
+            should_dispatch = self._resume_suspended_step_locked()
             self._publish_robot_status(
                 "resumed",
                 tool_name=snapshot["tool_name"],
@@ -1657,8 +1694,7 @@ class TaskCoordinatorNode(Node):
                 reason="drop_recovery_auto_resumed",
                 command=snapshot["command"],
             )
-            if should_dispatch:
-                self._dispatch_next()
+            return should_dispatch
         elif not ok and not pending_drop_recovery:
             self._clear_failed_drop_recovery_queue()
             self.pause_req.clear()
@@ -1670,6 +1706,7 @@ class TaskCoordinatorNode(Node):
             self.drop_req.set()
             self.resume_req.clear()
         self._restart_pending_drop_recovery()
+        return False
 
     def _wait_for_active_task_step_to_stop(
         self,
@@ -1722,6 +1759,10 @@ class TaskCoordinatorNode(Node):
             self._queue.clear()
             self._suspended_step = None
             self._suspended_task_name = None
+            self._drop_recovery_resume_step = None
+            self._drop_recovery_resume_task_name = None
+            self._drop_recovery_resume_queue = None
+            self._active_drop_recovery_snapshot = None
             self._current_step = None
             self._current_task_name = None
             self._step_thread = None
@@ -1887,9 +1928,14 @@ class TaskCoordinatorNode(Node):
 
         best_label = None
         best_conf = -1.0
+        confidence_threshold = float(
+            getattr(self.detector, "confidence_threshold", 0.0)
+        )
         for box in boxes:
             label = self._box_label(box)
             conf = self._box_confidence(box)
+            if conf < confidence_threshold:
+                continue
             if conf > best_conf:
                 best_conf = conf
                 best_label = label
@@ -1929,14 +1975,15 @@ class TaskCoordinatorNode(Node):
 
         self.state.picking = True
         self.state.target_tool = self.state.target_label
+        target_label = self.state.target_label
+        steps = self.pick_runner.build_steps(bx, by, bz, vlm_yaw_deg)
         self._publish_robot_status(
             "picking",
-            tool_name=self.state.target_label,
+            tool_name=target_label,
             action="bring",
-            message=f"{self.state.target_label} pick 동작을 시작합니다.",
+            message=f"{target_label} pick 동작을 시작합니다.",
             command=self.state.current_command,
         )
-        steps = self.pick_runner.build_steps(bx, by, bz, vlm_yaw_deg)
         return self._load_queue("pick", steps)
 
     def start_return_sequence(self, command):
@@ -1983,7 +2030,17 @@ class TaskCoordinatorNode(Node):
         self._dispatch_next()
         return True
 
+    def _append_task_steps(self, task_name, steps):
+        with self._queue_lock:
+            self._queue.extend((task_name, step) for step in steps)
+        return True
+
+    def _has_queued_task_steps(self, task_name):
+        with self._queue_lock:
+            return any(name == task_name for name, _step in self._queue)
+
     def _dispatch_next(self):
+        should_dispatch_after_completion = False
         with self._queue_lock:
             if (
                 self.exit_req.is_set()
@@ -1994,26 +2051,28 @@ class TaskCoordinatorNode(Node):
             if self._current_step is not None or self._step_thread_alive():
                 return
             if not self._queue:
-                self._complete_queue_locked()
-                return
+                should_dispatch_after_completion = self._complete_queue_locked()
+            else:
+                task_name, step = self._queue.popleft()
+                self._current_task_name = task_name
+                self._current_step = step
+                self._step_thread = threading.Thread(
+                    target=self._execute_step,
+                    args=(task_name, step),
+                    name=f"task_step:{step.name}",
+                    daemon=True,
+                )
+                self._task_log(task_name).info(
+                    "task step started",
+                    step="step",
+                    event="start",
+                    step_name=step.name,
+                    target=self.state.target_label or "unknown",
+                )
+                self._step_thread.start()
 
-            task_name, step = self._queue.popleft()
-            self._current_task_name = task_name
-            self._current_step = step
-            self._step_thread = threading.Thread(
-                target=self._execute_step,
-                args=(task_name, step),
-                name=f"task_step:{step.name}",
-                daemon=True,
-            )
-            self._task_log(task_name).info(
-                "task step started",
-                step="step",
-                event="start",
-                step_name=step.name,
-                target=self.state.target_label or "unknown",
-            )
-            self._step_thread.start()
+        if should_dispatch_after_completion:
+            self._dispatch_next()
 
     def _execute_step(self, task_name, step):
         ok = False
@@ -2046,6 +2105,47 @@ class TaskCoordinatorNode(Node):
             self._current_task_name = None
             self._step_thread = None
 
+            if self.exit_req.is_set():
+                self._task_log(task_name, quiet_info=True).info(
+                    "task queue stopped by exit request",
+                    step="queue",
+                    event="cancel",
+                    reason="exit_requested",
+                )
+                self._run_cleanup_callbacks()
+                self._clear_task_state()
+                return
+            if task_name == "recovery" and self.drop_req.is_set():
+                self._queue.clear()
+                self._suspended_step = None
+                self._suspended_task_name = None
+                self._finish_drop_recovery_queue_locked(False)
+                return
+            if (
+                task_name == "recovery"
+                and not ok
+                and not self.pause_req.is_set()
+                and not self.resume_req.is_set()
+            ):
+                self._queue.clear()
+                self._suspended_step = None
+                self._suspended_task_name = None
+                self._finish_drop_recovery_queue_locked(False)
+                return
+            if (
+                task_name != "recovery"
+                and self.drop_req.is_set()
+                and self._drop_recovery_resume_step is not None
+            ):
+                self._task_log(task_name, quiet_info=True).info(
+                    "task step suspended for drop recovery",
+                    step="step",
+                    event="drop",
+                    step_name=step.name,
+                    target=self.state.target_label or "unknown",
+                )
+                return
+
             if ok and not self.pause_req.is_set() and not self.drop_req.is_set():
                 self._task_log(task_name, quiet_info=True).info(
                     "task step completed",
@@ -2054,7 +2154,13 @@ class TaskCoordinatorNode(Node):
                     step_name=step.name,
                     target=self.state.target_label or "unknown",
                 )
-            elif (self.pause_req.is_set() or self.drop_req.is_set()) and step.retry_on_pause:
+            elif (
+                self.pause_req.is_set()
+                or self.drop_req.is_set()
+                or self.resume_req.is_set()
+            ) and step.retry_on_pause:
+                if task_name == "recovery":
+                    self.state.recovery_mode = True
                 self._task_log(task_name, quiet_info=True).info(
                     "task step suspended",
                     step="step",
@@ -2069,16 +2175,6 @@ class TaskCoordinatorNode(Node):
                     self._resume_suspended_step_locked()
                 else:
                     return
-            elif self.exit_req.is_set():
-                self._task_log(task_name, quiet_info=True).info(
-                    "task queue stopped by exit request",
-                    step="queue",
-                    event="cancel",
-                    reason="exit_requested",
-                )
-                self._run_cleanup_callbacks()
-                self._clear_task_state()
-                return
             elif not ok:
                 self._task_log(task_name).error(
                     "task step failed",
@@ -2125,6 +2221,9 @@ class TaskCoordinatorNode(Node):
         self._clear_task_state()
 
     def _complete_queue_locked(self):
+        if self._active_drop_recovery_snapshot is not None:
+            return self._finish_drop_recovery_queue_locked(True)
+
         self._task_log(self._current_task_name or "task", quiet_info=True).info(
             "task queue completed",
             step="queue",
@@ -2136,6 +2235,7 @@ class TaskCoordinatorNode(Node):
         self.exit_req.clear()
         self.drop_req.clear()
         self.resume_req.clear()
+        return False
 
     def is_running(self):
         with self._queue_lock:
@@ -2211,212 +2311,24 @@ class TaskCoordinatorNode(Node):
         drawer_id = self.drawer_flow.drawer_id_for_tool(target_label)
         if drawer_id is None:
             return False
-        if self.state.drawer_preparing_tool == target_label:
-            return True
         if self.state.picking:
             return True
 
         self.state.picking = True
-        self.state.drawer_preparing_tool = target_label
-        self._publish_robot_status(
-            "opening_drawer",
-            tool_name=target_label,
-            action="bring",
-            message=f"{target_label}가 들어있는 서랍을 엽니다.",
-            command=self.state.current_command,
-        )
-        worker = threading.Thread(
-            target=self._prepare_drawer_worker,
-            args=(target_label, drawer_id),
-            daemon=True,
-        )
-        worker.start()
-        return True
-
-    def _prepare_drawer_worker(self, target_label, drawer_id):
-        try:
-            log = self._task_log("drawer", quiet_info=True)
-            while rclpy.ok() and not self.exit_req.is_set():
-                log.info(
-                    "preparing drawer before target search",
-                    step="drawer_prepare",
-                    event="start",
-                    target=target_label,
-                    drawer=drawer_id,
-                )
-                ok = self.drawer_flow.open_drawer(drawer_id, log)
-                if ok:
-                    self.state.drawer_open = True
-                    self.state.opened_drawer_id = drawer_id
-                    self._publish_robot_status(
-                        "observing_drawer",
-                        tool_name=target_label,
-                        action="bring",
-                        message=f"{target_label} 탐색을 위해 서랍 내부를 관찰합니다.",
-                        command=self.state.current_command,
-                    )
-                    ok = self.drawer_flow.observe_drawer(drawer_id, log)
-                    if not ok and not self.pause_req.is_set():
-                        self._publish_robot_status(
-                            "failed",
-                            tool_name=target_label,
-                            action="bring",
-                            message=f"{target_label} 탐색 전 서랍 내부 관찰에 실패했습니다.",
-                            reason="pick_drawer_observe_failed",
-                            command=self.state.current_command,
-                        )
-                        self._recover_after_pick_drawer_validation_failure(
-                            target_label,
-                            drawer_id,
-                            log,
-                            "pick_drawer_observe_failed",
-                        )
-                        return
-
-                if ok:
-                    if not self._validate_pick_drawer_ownership(
-                        target_label,
-                        drawer_id,
-                        log,
-                    ):
-                        return
-                    self.state.target_label = target_label
-                    self.state.drawer_prepared_tool = target_label
-                    self._publish_robot_status(
-                        "searching",
-                        tool_name=target_label,
-                        action="bring",
-                        message=f"{target_label} 탐색을 시작합니다.",
-                        command=self.state.current_command,
-                    )
-                    return
-
-                if (
-                    self.pause_req.is_set()
-                    or self.resume_req.is_set()
-                    or self.drawer_prepare_paused.is_set()
-                ):
-                    if self._wait_for_drawer_prepare_resume(target_label, log):
-                        continue
-                    return
-
-                self._publish_robot_status(
-                    "failed",
-                    tool_name=target_label,
-                    action="bring",
-                    message=f"{target_label} 탐색 전 서랍 준비에 실패했습니다.",
-                    reason="drawer_prepare_failed",
-                    command=self.state.current_command,
-                )
-                self.state.target_label = None
-                self.state.current_command = None
-                return
-        finally:
-            self.drawer_prepare_paused.clear()
-            self.state.drawer_preparing_tool = None
-            self.state.picking = False
-
-    def _wait_for_drawer_prepare_resume(self, target_label, log):
-        self.drawer_prepare_paused.set()
-        self._publish_robot_status(
-            "paused",
-            tool_name=target_label,
-            action="bring",
-            message="서랍 준비 작업을 일시정지했습니다.",
-            reason="drawer_prepare_paused",
-            command=self.state.current_command,
-        )
-        log.info(
-            "drawer prepare paused; waiting for resume",
-            step="drawer_prepare",
-            event="pause",
-            target=target_label,
-        )
-
-        while rclpy.ok() and self.drawer_prepare_paused.is_set():
-            if self.exit_req.is_set():
-                return False
-            if self.resume_req.is_set() or not self.pause_req.is_set():
-                self.resume_req.clear()
-                self.pause_req.clear()
-                self.drawer_prepare_paused.clear()
-                log.info(
-                    "drawer prepare resume requested",
-                    step="drawer_prepare",
-                    event="resume",
-                    target=target_label,
-                )
-                return True
-            cooperative_wait(0.1)
-
-        return False
-
-    def _validate_pick_drawer_ownership(self, target_label, drawer_id, log):
-        observed_tools = self.return_perception.detect_drawer_tool_labels()
-        if observed_tools is None:
-            self._publish_robot_status(
-                "failed",
-                tool_name=target_label,
-                action="bring",
-                message=f"{target_label} 서랍 내부 공구 상태를 확인하지 못했습니다.",
-                reason="pick_drawer_occupancy_unknown",
-                command=self.state.current_command,
-            )
-            self._recover_after_pick_drawer_validation_failure(
-                target_label,
-                drawer_id,
-                log,
-                "pick_drawer_occupancy_unknown",
-            )
+        self.state.target_label = target_label
+        self.state.target_tool = target_label
+        self.state.drawer_prepared_tool = None
+        self.state.drawer_preparing_tool = None
+        self.state._last_search_status_target = None
+        if self.state.current_command is None:
+            self.state.current_command = {
+                "action": "bring",
+                "tool_name": target_label,
+            }
+        if not self._load_queue("bring", self.bring_runner.build_steps(target_label)):
+            self._clear_task_state()
             return False
-
-        conflicting_tools = [
-            observed_tool
-            for observed_tool in observed_tools
-            if observed_tool != target_label
-        ]
-        if target_label in observed_tools and not conflicting_tools:
-            log.info(
-                "pick drawer ownership validated",
-                step="drawer_ownership",
-                event="valid",
-                target=target_label,
-                drawer=drawer_id,
-                observed_tools=observed_tools,
-            )
-            return True
-
-        reason = "pick_drawer_tool_not_found"
-        if conflicting_tools:
-            reason = "pick_drawer_tool_mismatch"
-        observed_text = ", ".join(observed_tools) if observed_tools else "none"
-        log.warn(
-            "pick drawer ownership mismatch",
-            step="drawer_ownership",
-            event="fail",
-            expected_tool=target_label,
-            observed_tool=observed_text,
-            drawer_id=drawer_id,
-            reason=reason,
-        )
-        self._publish_robot_status(
-            "failed",
-            tool_name=target_label,
-            action="bring",
-            message=(
-                f"{target_label} 서랍에서 기대 공구를 찾지 못했습니다. "
-                f"감지된 공구: {observed_text}"
-            ),
-            reason=reason,
-            command=self.state.current_command,
-        )
-        self._recover_after_pick_drawer_validation_failure(
-            target_label,
-            drawer_id,
-            log,
-            reason,
-        )
-        return False
+        return True
 
     def _recover_after_pick_drawer_validation_failure(
         self,
@@ -2696,6 +2608,7 @@ class TaskCoordinatorNode(Node):
             return None
 
         adjusted_yaw_deg = float(yaw_deg) + PICK_GRASP_YAW_OFFSET_DEG
+        final_grasp_yaw_deg = normalize_angle_deg(adjusted_yaw_deg)
         self._task_log("perception", quiet_info=True).info(
             "grasp detection binary crop PCA yaw applied",
             step="pca_yaw",
@@ -2705,7 +2618,7 @@ class TaskCoordinatorNode(Node):
             offset_deg=f"{PICK_GRASP_YAW_OFFSET_DEG:.1f}",
             adjusted_yaw_deg=f"{adjusted_yaw_deg:.1f}",
         )
-        return adjusted_yaw_deg
+        return final_grasp_yaw_deg
 
     def _generate_grasp_detection_mask_images_after_vlm_observe(
         self,
