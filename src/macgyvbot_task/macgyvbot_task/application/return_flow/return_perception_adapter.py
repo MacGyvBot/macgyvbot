@@ -101,59 +101,7 @@ class ReturnPerceptionAdapter:
         results = self.detector.detect(color_image)
         boxes = results[0].boxes if results else None
 
-        matched_box = self.pick_target_resolver.matching_box(boxes, tool_name)
-        if matched_box is None:
-            return self._resolve_store_tool_center_target(
-                boxes,
-                tool_name,
-                color_image,
-                depth_image,
-                intrinsics,
-            )
-
-        box, label = matched_box
-        selected = (
-            self.pick_target_resolver.grasp_point_selector.select_yolo_grasp_point(
-                boxes,
-                self.detector.names,
-                box,
-            )
-        )
-        if selected is None:
-            log_warn(
-                self.logger,
-                "return store YOLO grasp point unavailable; using bbox center",
-                step="store_tool_target",
-                event="fallback",
-                tool=tool_name,
-                reason="yolo_grasp_point_unavailable",
-            )
-            return self._resolve_store_tool_center_target(
-                boxes,
-                tool_name,
-                color_image,
-                depth_image,
-                intrinsics,
-            )
-
-        target = self.pick_target_resolver.target_from_selected_grasp(
-            label,
-            tool_name,
-            selected,
-            depth_image,
-            intrinsics,
-        )
-        return self.refine_store_tool_target(target, tool_name)
-
-    def _resolve_store_tool_center_target(
-        self,
-        boxes,
-        tool_name,
-        color_image,
-        depth_image,
-        intrinsics,
-    ):
-        return self.pick_target_resolver.target_from_boxes(
+        target = self.pick_target_resolver.target_from_boxes(
             boxes,
             tool_name,
             color_image,
@@ -161,6 +109,7 @@ class ReturnPerceptionAdapter:
             intrinsics,
             use_bbox_center=True,
         )
+        return self.refine_store_tool_target(target, tool_name)
 
     def resolve_drawer_marker_target(self, drawer_id):
         marker_id = DRAWER_ARUCO_MARKER_IDS.get(drawer_id)

@@ -323,7 +323,7 @@ def test_return_staged_tool_grasp_pregrasp_depth_adjusts_before_final_grasp(
     assert reporter.failures == []
 
 
-def test_return_store_tool_target_uses_yolo_grasp_point_then_refines():
+def test_return_store_tool_target_uses_center_point_then_refines_yaw():
     import numpy as np
 
     class FakeTensor:
@@ -349,41 +349,27 @@ def test_return_store_tool_target_uses_yolo_grasp_point_then_refines():
         def has_camera_state(self):
             return True
 
-    class FakeGraspSelector:
+    class FakePickTargetResolver:
         def __init__(self):
             self.calls = []
 
-        def select_yolo_grasp_point(self, boxes, names, target_box):
-            self.calls.append((boxes, names, target_box))
-            return (11, 22, "yolo", None)
-
-    class FakePickTargetResolver:
-        def __init__(self):
-            self.grasp_point_selector = FakeGraspSelector()
-            self.selected = []
-
-        def matching_box(self, boxes, target_label):
-            return boxes[0], target_label
-
-        def target_from_selected_grasp(
+        def target_from_boxes(
             self,
-            label,
+            boxes,
             target_label,
-            selected,
+            _color_image,
             _depth_image,
             _intrinsics,
+            use_bbox_center=False,
         ):
-            self.selected.append((label, target_label, selected))
+            self.calls.append((boxes, target_label, use_bbox_center))
             return types.SimpleNamespace(
                 found=True,
-                label=label,
-                pixel=(selected[0], selected[1]),
+                label=target_label,
+                pixel=(11, 22),
                 base_xyz=(0.3, 0.1, 0.2),
                 yaw_deg=None,
             )
-
-        def target_from_boxes(self, *_args, **_kwargs):
-            raise AssertionError("bbox center fallback should not be used")
 
     state = types.SimpleNamespace(
         color_image=np.zeros((4, 4, 3), dtype=np.uint8),
@@ -410,9 +396,8 @@ def test_return_store_tool_target_uses_yolo_grasp_point_then_refines():
 
     assert target.pixel == (11, 22)
     assert target.yaw_deg == 37.0
-    assert resolver.selected == [
-        ("screwdriver", "screwdriver", (11, 22, "yolo", None))
-    ]
+    assert len(resolver.calls) == 1
+    assert resolver.calls[0][1:] == ("screwdriver", True)
     assert refined[0][1] == "screwdriver"
 
 
