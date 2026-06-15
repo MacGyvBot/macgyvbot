@@ -698,3 +698,89 @@ def test_home_control_does_not_trigger_handoff_fallback(monkeypatch):
     assert node.published_statuses[-1][0] == "busy"
     assert node.published_statuses[-1][1]["action"] == "home"
     assert node.published_statuses[-1][1]["reason"] == "already_picking"
+
+
+def test_recovery_yolo_mode_uses_grasp_point_target(monkeypatch):
+    _install_task_coordinator_import_stubs(monkeypatch)
+    from macgyvbot_config.vlm import GRASP_POINT_MODE_YOLO
+    from macgyvbot_task.task_coordinator_node import TaskCoordinatorNode
+
+    node = object.__new__(TaskCoordinatorNode)
+    node.grasp_point_mode = GRASP_POINT_MODE_YOLO
+    node.detector = types.SimpleNamespace(names={0: "wrench"})
+    node.grasp_point_selector = types.SimpleNamespace(
+        select_yolo_grasp_point=lambda boxes, names, box: (
+            11,
+            22,
+            "yolo",
+            None,
+        )
+    )
+    calls = []
+    node.pick_target_resolver = types.SimpleNamespace(
+        matching_box=lambda boxes, target: (boxes[0], target),
+        target_from_selected_grasp=lambda label, target, selected, *_args: (
+            calls.append(("selected", label, target, selected))
+            or types.SimpleNamespace(
+                found=True,
+                pixel=(selected[0], selected[1]),
+                base_xyz=(0.31, 0.11, 0.2),
+                yaw_deg=None,
+            )
+        ),
+        target_from_boxes=lambda *_args, **_kwargs: (
+            calls.append(("center",))
+            or types.SimpleNamespace(found=True)
+        ),
+    )
+
+    target = node._resolve_recovery_grasp_point_target(
+        boxes=[object()],
+        target_tool="wrench",
+        color_image=object(),
+        depth_image=object(),
+        intrinsics={},
+    )
+
+    assert target.pixel == (11, 22)
+    assert calls == [("selected", "wrench", "wrench", (11, 22, "yolo", None))]
+
+
+def test_recovery_yolo_mode_falls_back_to_center_when_grasp_point_fails(
+    monkeypatch,
+):
+    _install_task_coordinator_import_stubs(monkeypatch)
+    from macgyvbot_config.vlm import GRASP_POINT_MODE_YOLO
+    from macgyvbot_task.task_coordinator_node import TaskCoordinatorNode
+
+    node = object.__new__(TaskCoordinatorNode)
+    node.grasp_point_mode = GRASP_POINT_MODE_YOLO
+    node.detector = types.SimpleNamespace(names={0: "wrench"})
+    node.grasp_point_selector = types.SimpleNamespace(
+        select_yolo_grasp_point=lambda *_args: None
+    )
+    node._task_log = lambda *_args, **_kwargs: FakeLogger()
+    calls = []
+    node.pick_target_resolver = types.SimpleNamespace(
+        matching_box=lambda boxes, target: (boxes[0], target),
+        target_from_boxes=lambda *args, **kwargs: (
+            calls.append(kwargs.get("use_bbox_center"))
+            or types.SimpleNamespace(
+                found=True,
+                pixel=(30, 40),
+                base_xyz=(0.3, 0.1, 0.2),
+                yaw_deg=None,
+            )
+        ),
+    )
+
+    target = node._resolve_recovery_grasp_point_target(
+        boxes=[object()],
+        target_tool="wrench",
+        color_image=object(),
+        depth_image=object(),
+        intrinsics={},
+    )
+
+    assert target.pixel == (30, 40)
+    assert calls == [True]

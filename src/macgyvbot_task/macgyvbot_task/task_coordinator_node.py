@@ -1847,7 +1847,119 @@ class TaskCoordinatorNode(Node):
         intrinsics = dict(self.state.intrinsics)
         results = self.detector.detect(color_image)
         boxes = results[0].boxes if results else None
-        target = self.pick_target_resolver.target_from_boxes(
+        target = self._resolve_recovery_grasp_point_target(
+            boxes,
+            target_tool,
+            color_image,
+            depth_image,
+            intrinsics,
+        )
+        if apply_pca_yaw:
+            target = self._target_with_mask_pca_result(target, target_tool)
+            self._set_recovery_tool_mask_lock_state(target, target_tool)
+            return target
+        return target
+
+    def _resolve_recovery_grasp_point_target(
+        self,
+        boxes,
+        target_tool,
+        color_image,
+        depth_image,
+        intrinsics,
+    ):
+        if self.grasp_point_mode == GRASP_POINT_MODE_YOLO:
+            target = self._resolve_recovery_yolo_grasp_point_target(
+                boxes,
+                target_tool,
+                depth_image,
+                intrinsics,
+            )
+            if target is not None and target.found:
+                return target
+
+            reason = (
+                getattr(target, "reason", "unknown")
+                if target is not None
+                else "unknown"
+            )
+            self._task_log("recovery").warn(
+                "recovery YOLO grasp point unavailable; using bbox center",
+                step="recovery_detect",
+                event="fallback",
+                target=target_tool,
+                reason=reason,
+            )
+            return self._resolve_recovery_center_target(
+                boxes,
+                target_tool,
+                color_image,
+                depth_image,
+                intrinsics,
+            )
+
+        return self.pick_target_resolver.target_from_boxes(
+            boxes,
+            target_tool,
+            color_image,
+            depth_image,
+            intrinsics,
+            use_bbox_center=False,
+        )
+
+    def _resolve_recovery_yolo_grasp_point_target(
+        self,
+        boxes,
+        target_tool,
+        depth_image,
+        intrinsics,
+    ):
+        matched_box = self.pick_target_resolver.matching_box(boxes, target_tool)
+        if matched_box is None:
+            return PickTarget(
+                found=False,
+                label=target_tool,
+                pixel=None,
+                base_xyz=None,
+                depth_m=None,
+                yaw_deg=None,
+                reason="target_not_found",
+            )
+
+        box, label = matched_box
+        selected = self.grasp_point_selector.select_yolo_grasp_point(
+            boxes,
+            self.detector.names,
+            box,
+        )
+        if selected is None:
+            return PickTarget(
+                found=False,
+                label=target_tool,
+                pixel=None,
+                base_xyz=None,
+                depth_m=None,
+                yaw_deg=None,
+                reason="grasp_selection_failed",
+            )
+
+        return self.pick_target_resolver.target_from_selected_grasp(
+            label,
+            target_tool,
+            selected,
+            depth_image,
+            intrinsics,
+        )
+
+    def _resolve_recovery_center_target(
+        self,
+        boxes,
+        target_tool,
+        color_image,
+        depth_image,
+        intrinsics,
+    ):
+        return self.pick_target_resolver.target_from_boxes(
             boxes,
             target_tool,
             color_image,
@@ -1855,11 +1967,6 @@ class TaskCoordinatorNode(Node):
             intrinsics,
             use_bbox_center=True,
         )
-        if apply_pca_yaw:
-            target = self._target_with_mask_pca_result(target, target_tool)
-            self._set_recovery_tool_mask_lock_state(target, target_tool)
-            return target
-        return target
 
     def _set_recovery_tool_mask_lock_state(self, target, target_tool):
         if target is None or not getattr(target, "found", False):
