@@ -266,6 +266,11 @@ def _make_cancel_node(TaskCoordinatorNode, *, active_step=False):
     node._step_thread = None
     node._suspended_step = object()
     node._suspended_task_name = "pick"
+    node._pending_drop_recovery_payload = {"event": "tool_dropped"}
+    node._active_drop_recovery_snapshot = {"action": "bring"}
+    node._drop_recovery_resume_step = object()
+    node._drop_recovery_resume_task_name = "pick"
+    node._drop_recovery_resume_queue = [("pick", object())]
     node.motion = FakeMotion()
     node.tool_hold_monitor = FakeToolHoldMonitor()
     node.state = types.SimpleNamespace(
@@ -409,6 +414,11 @@ def test_cancel_cleans_paused_suspended_state_without_active_step(monkeypatch):
     assert node._queue == deque()
     assert node._suspended_step is None
     assert node._suspended_task_name is None
+    assert node._pending_drop_recovery_payload is None
+    assert node._active_drop_recovery_snapshot is None
+    assert node._drop_recovery_resume_step is None
+    assert node._drop_recovery_resume_task_name is None
+    assert node._drop_recovery_resume_queue is None
     assert node.motion.cancel_reasons == ["취소"]
     assert node.tool_hold_monitor.stop_reasons == ["task_queue_finished"]
     assert node.published_statuses[-1][0] == "cancelled"
@@ -427,8 +437,28 @@ def test_cancel_defers_cleanup_while_step_is_active(monkeypatch):
     assert node._queue == deque()
     assert node._suspended_step is None
     assert node._suspended_task_name is None
+    assert node._pending_drop_recovery_payload is None
+    assert node._active_drop_recovery_snapshot is None
+    assert node._drop_recovery_resume_step is None
+    assert node._drop_recovery_resume_task_name is None
+    assert node._drop_recovery_resume_queue is None
     assert node.tool_hold_monitor.stop_reasons == []
     assert node.published_statuses[-1][0] == "cancelled"
+
+
+def test_recovery_mode_cancel_is_not_rejected(monkeypatch):
+    _install_task_coordinator_import_stubs(monkeypatch)
+    from macgyvbot_task.task_coordinator_node import TaskCoordinatorNode
+
+    node = _make_cancel_node(TaskCoordinatorNode, active_step=False)
+    node.state.recovery_mode = True
+
+    msg = types.SimpleNamespace(action="cancel", reason="cancel_requested")
+    node._task_control_cb(msg)
+
+    assert node.published_statuses[-1][0] == "cancelled"
+    assert node._queue == deque()
+    assert node._drop_recovery_resume_queue is None
 
 
 def test_resume_without_paused_task_returns_to_idle(monkeypatch):
