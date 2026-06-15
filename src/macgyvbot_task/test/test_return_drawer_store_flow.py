@@ -143,6 +143,7 @@ class FakeMotion:
         self.targets = []
         self.min_z_values = []
         self.wrist_rotations = []
+        self.home_calls = 0
 
     def plan_and_execute(
         self,
@@ -162,6 +163,10 @@ class FakeMotion:
         collision_scene_key=None,
     ):
         self.wrist_rotations.append(yaw_deg)
+        return True
+
+    def move_to_home_joints(self, _logger):
+        self.home_calls += 1
         return True
 
 
@@ -269,6 +274,48 @@ def test_return_sequence_builds_drawer_store_step_order():
         "return/home_after_drawer_close",
         "return/done",
     ]
+
+
+def test_return_receive_grasp_failure_recovers_home(monkeypatch):
+    import macgyvbot_task.application.return_flow.return_sequence as module
+
+    monkeypatch.setattr(
+        module,
+        "move_to_observation_pose",
+        lambda _motion, _robot, _logger: (
+            True,
+            types.SimpleNamespace(x=0.0, y=0.0, z=0.0),
+        ),
+    )
+    motion = FakeMotion()
+    runner = ReturnSequenceRunner(
+        robot=object(),
+        motion_controller=motion,
+        gripper=FakeReturnGripper(),
+        state=FakeState(),
+    )
+    runner.target_resolver = types.SimpleNamespace(
+        resolve=lambda _requested_tool, _log: types.SimpleNamespace(
+            source="hand",
+            tool_name="hammer",
+            hand_candidate=object(),
+        )
+    )
+    runner.handoff = types.SimpleNamespace(
+        move_to_candidate=lambda *_args, **_kwargs: (True, ""),
+        grasp_at_current_position=lambda *_args, **_kwargs: (
+            None,
+            "return_grasp_failed",
+        ),
+    )
+    context = {
+        "command": {"tool_name": "hammer"},
+        "requested_tool": "hammer",
+        "tool_name": None,
+    }
+
+    assert not runner._receive_tool(context)
+    assert motion.home_calls == 1
 
 
 def test_drawer_store_wrist_rotation_uses_return_policy():
