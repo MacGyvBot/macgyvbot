@@ -73,6 +73,22 @@ def _status_view_node(clock):
     return node
 
 
+class FakePublisher:
+    def __init__(self):
+        self.messages = []
+
+    def publish(self, msg):
+        self.messages.append(msg)
+
+
+class FakeWindow:
+    def __init__(self):
+        self.messages = []
+
+    def append_bot(self, text):
+        self.messages.append(text)
+
+
 class OperatorUiStatusMessageTest(unittest.TestCase):
     def test_failed_drawer_tool_not_found_chat_is_short(self):
         message = OperatorUiNode._robot_status_message(
@@ -183,6 +199,22 @@ class OperatorUiStatusMessageTest(unittest.TestCase):
         clock.now_ns += 10_000_000_000
         self.assertTrue(node._append_event_chat("handoff_inspection_pending", "retry?"))
         self.assertEqual(node.window.messages, ["retry?", "retry?"])
+
+    def test_home_control_publishes_task_control_not_stt_text(self):
+        node = object.__new__(OperatorUiNode)
+        node.window = FakeWindow()
+        node._tts_pub = FakePublisher()
+        node._task_control_pub = FakePublisher()
+        node._stt_pub = FakePublisher()
+        node._append_log = lambda *args, **kwargs: None
+        node._set_status = lambda *_args, **_kwargs: None
+
+        node.publish_control_action("home", "홈위치로 가")
+
+        self.assertEqual(len(node._task_control_pub.messages), 1)
+        self.assertEqual(node._task_control_pub.messages[0].action, "home")
+        self.assertEqual(node._task_control_pub.messages[0].reason, "홈위치로 가")
+        self.assertEqual(node._stt_pub.messages, [])
 
 
 if __name__ == "__main__":

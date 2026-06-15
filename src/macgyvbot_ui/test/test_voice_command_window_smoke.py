@@ -82,6 +82,21 @@ class VoiceCommandWindowSmokeTest(unittest.TestCase):
         self.assertEqual(self.published_texts, ["재개"])
         self.assertGreaterEqual(self.window._chat_layout.count(), 5)
 
+    def test_home_button_uses_control_action_not_text_path(self):
+        control_actions = []
+        window = VoiceCommandGuiWindow(
+            on_user_text=self.published_texts.append,
+            on_control_action=lambda action, text: control_actions.append(
+                (action, text)
+            ),
+        )
+        self.addCleanup(window.close)
+
+        window._home_button.click()
+
+        self.assertEqual(control_actions, [("home", "홈위치로 가")])
+        self.assertEqual(self.published_texts, [])
+
     def test_chat_timestamp_includes_seconds(self):
         self.assertRegex(self.window._timestamp(), r"^\d{2}:\d{2}:\d{2}$")
 
