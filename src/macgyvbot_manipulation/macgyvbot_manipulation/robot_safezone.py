@@ -1,6 +1,7 @@
 """Safety helpers for robot workspace limits."""
 
 from macgyvbot_config.drawer import (
+    DRAWER_0_SAFE_Z_MIN_M,
     DRAWER_1_SAFE_Z_OFFSET_M,
     DRAWER_2_SAFE_Z_OFFSET_M,
 )
@@ -9,6 +10,8 @@ from macgyvbot_config.robot import SAFE_X_MIN, SAFE_Y_MAX, SAFE_Y_MIN, SAFE_Z_MI
 
 def safe_z_min_for_drawer(drawer_id):
     """Return the minimum safe Z for a drawer-specific motion context."""
+    if drawer_id == 0:
+        return DRAWER_0_SAFE_Z_MIN_M
     if drawer_id == 1:
         return SAFE_Z_MIN + DRAWER_1_SAFE_Z_OFFSET_M
     if drawer_id == 2:

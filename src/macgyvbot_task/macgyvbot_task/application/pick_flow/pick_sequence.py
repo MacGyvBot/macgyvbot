@@ -638,7 +638,10 @@ class PickSequenceRunner:
         width_mm = measurement.get("width_mm")
         depth_mm = measurement.get("depth_mm")
         extra_descent_m = calculate_pregrasp_extra_descent(depth_mm)
-        redescend_min_z = drawer_safe_z_min - extra_descent_m
+        if context.get("drawer_id") == 0:
+            redescend_min_z = drawer_safe_z_min
+        else:
+            redescend_min_z = drawer_safe_z_min - extra_descent_m
         target_z = max(plan.grasp_z - extra_descent_m, redescend_min_z)
         actual_descent_m = plan.grasp_z - target_z
         log_info(
