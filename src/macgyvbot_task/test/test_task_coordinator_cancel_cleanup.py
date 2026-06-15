@@ -85,6 +85,11 @@ def _class(name):
 
 
 def _install_task_coordinator_import_stubs(monkeypatch):
+    monkeypatch.setitem(
+        sys.modules,
+        "numpy",
+        _module("numpy", load=lambda *_args, **_kwargs: None),
+    )
     rclpy_module = _module(
         "rclpy",
         ok=lambda: True,
@@ -633,3 +638,33 @@ def test_drop_recovery_success_restores_original_step_before_tail(monkeypatch):
     assert node._drop_recovery_resume_task_name is None
     assert node._drop_recovery_resume_queue is None
     assert node._active_drop_recovery_snapshot is None
+
+
+def test_home_control_does_not_trigger_handoff_fallback(monkeypatch):
+    _install_task_coordinator_import_stubs(monkeypatch)
+    from macgyvbot_task.task_coordinator_node import TaskCoordinatorNode
+
+    node = object.__new__(TaskCoordinatorNode)
+    node.handoff_retry_req = threading.Event()
+    node.handoff_fallback_req = threading.Event()
+    node.handoff_decision_pending = threading.Event()
+    node.handoff_decision_pending.set()
+    node.state = types.SimpleNamespace(
+        recovery_mode=False,
+        picking=True,
+        current_command={"action": "bring", "tool_name": "screwdriver"},
+    )
+    node.is_running = lambda: False
+    node._task_log = lambda *_args, **_kwargs: FakeLogger()
+    node.published_statuses = []
+    node._publish_robot_status = (
+        lambda status, **kwargs: node.published_statuses.append((status, kwargs))
+    )
+
+    msg = types.SimpleNamespace(action="home", reason="홈위치로 가")
+    node._task_control_cb(msg)
+
+    assert not node.handoff_fallback_req.is_set()
+    assert node.published_statuses[-1][0] == "busy"
+    assert node.published_statuses[-1][1]["action"] == "home"
+    assert node.published_statuses[-1][1]["reason"] == "already_picking"

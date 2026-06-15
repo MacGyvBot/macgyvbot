@@ -73,6 +73,44 @@ def _status_view_node(clock):
     return node
 
 
+class FakePublisher:
+    def __init__(self):
+        self.messages = []
+
+    def publish(self, msg):
+        self.messages.append(msg)
+
+
+class FakeWindow:
+    def __init__(self):
+        self.messages = []
+        self.commands = []
+        self.actions = []
+
+    def append_bot(self, text):
+        self.messages.append(text)
+
+    def append_command_result(self, command):
+        self.commands.append(command)
+
+    def append_control_actions(self, actions):
+        self.actions.append(tuple(actions))
+
+
+def _control_node(clock=None):
+    node = object.__new__(OperatorUiNode)
+    node.window = FakeWindow()
+    node._tts_pub = FakePublisher()
+    node._task_control_pub = FakePublisher()
+    node.logs = []
+    node.statuses = []
+    node._append_log = lambda *args, **kwargs: node.logs.append((args, kwargs))
+    node._set_status = lambda status: node.statuses.append(status)
+    if clock is not None:
+        node.get_clock = lambda: clock
+    return node
+
+
 class OperatorUiStatusMessageTest(unittest.TestCase):
     def test_failed_drawer_tool_not_found_chat_is_short(self):
         message = OperatorUiNode._robot_status_message(
@@ -105,20 +143,6 @@ class OperatorUiStatusMessageTest(unittest.TestCase):
         self.assertNotIn("…", status)
 
     def test_append_bot_publishes_same_text_for_tts(self):
-        class FakeWindow:
-            def __init__(self):
-                self.messages = []
-
-            def append_bot(self, text):
-                self.messages.append(text)
-
-        class FakePublisher:
-            def __init__(self):
-                self.messages = []
-
-            def publish(self, msg):
-                self.messages.append(msg)
-
         node = object.__new__(OperatorUiNode)
         node.window = FakeWindow()
         node._tts_pub = FakePublisher()
@@ -129,6 +153,142 @@ class OperatorUiStatusMessageTest(unittest.TestCase):
         self.assertEqual(len(node._tts_pub.messages), 1)
         self.assertEqual(node._tts_pub.messages[0].text, "공구를 받아주세요.")
         self.assertEqual(node._tts_pub.messages[0].source, "operator_ui_chat")
+
+    def test_pause_control_does_not_chat_delivery_ack(self):
+        node = _control_node()
+
+        node.publish_control_action("pause", "멈춰")
+
+        self.assertEqual(node._task_control_pub.messages[0].action, "pause")
+        self.assertNotIn("정지 요청을 로봇에 전달했습니다.", node.window.messages)
+        self.assertEqual(
+            node.window.messages,
+            ["작업을 재개할까요, 아니면 이번 작업을 취소할까요?"],
+        )
+        self.assertEqual(len(node._tts_pub.messages), 1)
+
+    def test_resume_control_waits_for_task_status_chat(self):
+        node = _control_node()
+
+        node.publish_control_action("resume", "재개")
+
+        self.assertEqual(node._task_control_pub.messages[0].action, "resume")
+        self.assertEqual(node.window.messages, [])
+        self.assertEqual(node._tts_pub.messages, [])
+
+    def test_cancel_control_does_not_chat_delivery_ack(self):
+        node = _control_node()
+
+        node.publish_control_action("cancel", "취소")
+
+        self.assertEqual(node._task_control_pub.messages[0].action, "cancel")
+        self.assertNotIn("현재 작업을 취소합니다.", node.window.messages)
+        self.assertEqual(node.window.messages, [])
+        self.assertEqual(node._tts_pub.messages, [])
+
+    def test_pause_feedback_does_not_chat_delivery_ack(self):
+        clock = FakeClock(now_ns=1_000_000_000)
+        node = _control_node(clock)
+        node._last_feedback_key = None
+        node._last_feedback_stamp_ns = 0
+        node._feedback_dedupe_ns = 1_000_000_000
+        node._feedback_payload = lambda msg: {
+            "status": "accepted",
+            "reason": "",
+            "message": "정지 요청을 로봇에 전달했습니다.",
+            "raw_text": "멈춰",
+            "command": {"action": "pause", "tool_name": "", "raw_text": "멈춰"},
+        }
+
+        node._feedback_cb(object())
+
+        self.assertNotIn("정지 요청을 로봇에 전달했습니다.", node.window.messages)
+        self.assertEqual(
+            node.window.messages,
+            ["작업을 재개할까요, 아니면 이번 작업을 취소할까요?"],
+        )
+
+    def test_resume_feedback_does_not_chat_delivery_ack(self):
+        clock = FakeClock(now_ns=1_000_000_000)
+        node = _control_node(clock)
+        node._last_feedback_key = None
+        node._last_feedback_stamp_ns = 0
+        node._feedback_dedupe_ns = 1_000_000_000
+        node._feedback_payload = lambda msg: {
+            "status": "accepted",
+            "reason": "",
+            "message": "재개 요청을 로봇에 전달했습니다.",
+            "raw_text": "재개",
+            "command": {"action": "resume", "tool_name": "", "raw_text": "재개"},
+        }
+
+        node._feedback_cb(object())
+
+        self.assertEqual(node.window.messages, [])
+        self.assertEqual(node._tts_pub.messages, [])
+
+    def test_cancel_feedback_does_not_chat_delivery_ack(self):
+        clock = FakeClock(now_ns=1_000_000_000)
+        node = _control_node(clock)
+        node._last_feedback_key = None
+        node._last_feedback_stamp_ns = 0
+        node._feedback_dedupe_ns = 1_000_000_000
+        node._feedback_payload = lambda msg: {
+            "status": "accepted",
+            "reason": "",
+            "message": "현재 작업을 취소합니다. 다음 명령을 기다리겠습니다.",
+            "raw_text": "취소",
+            "command": {"action": "cancel", "tool_name": "", "raw_text": "취소"},
+        }
+
+        node._feedback_cb(object())
+
+        self.assertEqual(node.window.messages, [])
+        self.assertEqual(node._tts_pub.messages, [])
+
+    def test_resumed_status_is_user_chat_message(self):
+        clock = FakeClock(now_ns=1_000_000_000)
+        node = _status_view_node(clock)
+
+        view = node._build_robot_status_view(
+            {
+                "status": "resumed",
+                "action": "bring",
+                "tool_name": "screwdriver",
+                "command": {
+                    "action": "bring",
+                    "tool_name": "screwdriver",
+                    "raw_text": "드라이버 가져다줘",
+                },
+            }
+        )
+
+        self.assertEqual(view["chat_message"], "작업을 재개합니다.")
+        self.assertTrue(view["show_chat"])
+
+    def test_failed_drawer_error_stays_out_of_chat(self):
+        clock = FakeClock(now_ns=1_000_000_000)
+        node = _status_view_node(clock)
+
+        view = node._build_robot_status_view(
+            {
+                "status": "failed",
+                "action": "bring",
+                "tool_name": "screwdriver",
+                "reason": "drawer_prepare_failed",
+                "message": "서랍 열기 실패",
+                "command": {
+                    "action": "bring",
+                    "tool_name": "screwdriver",
+                    "raw_text": "드라이버 가져다줘",
+                },
+            }
+        )
+
+        self.assertEqual(view["message"], "서랍을 여는 중 문제가 발생했습니다.")
+        self.assertEqual(view["chat_message"], "")
+        self.assertFalse(view["show_chat"])
+        self.assertTrue(view["show_log"])
 
     def test_same_task_chat_reopens_after_dedupe_window(self):
         clock = FakeClock(now_ns=1_000_000_000)
@@ -183,6 +343,22 @@ class OperatorUiStatusMessageTest(unittest.TestCase):
         clock.now_ns += 10_000_000_000
         self.assertTrue(node._append_event_chat("handoff_inspection_pending", "retry?"))
         self.assertEqual(node.window.messages, ["retry?", "retry?"])
+
+    def test_home_control_publishes_task_control_not_stt_text(self):
+        node = object.__new__(OperatorUiNode)
+        node.window = FakeWindow()
+        node._tts_pub = FakePublisher()
+        node._task_control_pub = FakePublisher()
+        node._stt_pub = FakePublisher()
+        node._append_log = lambda *args, **kwargs: None
+        node._set_status = lambda *_args, **_kwargs: None
+
+        node.publish_control_action("home", "홈위치로 가")
+
+        self.assertEqual(len(node._task_control_pub.messages), 1)
+        self.assertEqual(node._task_control_pub.messages[0].action, "home")
+        self.assertEqual(node._task_control_pub.messages[0].reason, "홈위치로 가")
+        self.assertEqual(node._stt_pub.messages, [])
 
 
 if __name__ == "__main__":
