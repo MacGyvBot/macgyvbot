@@ -26,6 +26,7 @@ class ReturnPerceptionAdapter:
         depth_projector,
         logger,
         wait_fn=None,
+        refine_store_tool_target=None,
     ):
         self.state = state
         self.detector = detector
@@ -38,6 +39,9 @@ class ReturnPerceptionAdapter:
         )
         self.logger = logger
         self.wait_fn = wait_fn or (lambda _duration: None)
+        self.refine_store_tool_target = refine_store_tool_target or (
+            lambda target, _tool_name: target
+        )
 
     def detect_store_tool_label(self):
         labels = self.detect_drawer_tool_labels()
@@ -97,7 +101,7 @@ class ReturnPerceptionAdapter:
         results = self.detector.detect(color_image)
         boxes = results[0].boxes if results else None
 
-        return self.pick_target_resolver.target_from_boxes(
+        target = self.pick_target_resolver.target_from_boxes(
             boxes,
             tool_name,
             color_image,
@@ -105,6 +109,7 @@ class ReturnPerceptionAdapter:
             intrinsics,
             use_bbox_center=True,
         )
+        return self.refine_store_tool_target(target, tool_name)
 
     def resolve_drawer_marker_target(self, drawer_id):
         marker_id = DRAWER_ARUCO_MARKER_IDS.get(drawer_id)

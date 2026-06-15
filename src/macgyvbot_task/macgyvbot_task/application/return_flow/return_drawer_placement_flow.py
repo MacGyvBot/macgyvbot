@@ -12,12 +12,16 @@ from macgyvbot_config.drawer import (
     DRAWER_STORE_MARKER_APPROACH_Z_OFFSET_M,
     DRAWER_STORE_MARKER_RELEASE_Z_OFFSET_M,
 )
-from macgyvbot_config.return_flow import RETURN_TOOL_RELEASE_WAIT_SEC
+from macgyvbot_config.return_flow import (
+    RETURN_DRAWER_PLACE_WRIST_YAW_DEG,
+    RETURN_TOOL_RELEASE_WAIT_SEC,
+)
 from macgyvbot_manipulation.grasp_verifier import GraspVerifier
 from macgyvbot_manipulation.robot_pose import (
     current_ee_orientation,
     get_ee_matrix,
     make_safe_pose,
+    normalize_angle_deg,
 )
 from macgyvbot_manipulation.robot_safezone import safe_z_min_for_drawer
 from macgyvbot_task.application.drawer_store_motion import (
@@ -59,8 +63,10 @@ class ReturnDrawerPlacementFlow:
             wait_fn,
             interrupted=self.interrupted,
         )
+        self._last_grasp_yaw_deg = 0.0
 
     def grasp_staged_tool(self, target, tool_name, command, logger):
+        self._last_grasp_yaw_deg = 0.0
         if target is None or not target.found or target.base_xyz is None:
             self.reporter.fail(
                 tool_name,
@@ -73,6 +79,10 @@ class ReturnDrawerPlacementFlow:
 
         bx, by, bz = target.base_xyz
         plan = self.target_planner.plan(bx, by, bz, logger)
+
+        if not self._apply_grasp_yaw(target, tool_name, command, logger):
+            return False
+
         ori = current_ee_orientation(self.robot)
 
         self.reporter.publish(
@@ -116,6 +126,47 @@ class ReturnDrawerPlacementFlow:
             self.tool_hold_monitor.start(tool_name, "return", command)
 
         return True
+
+    def _apply_grasp_yaw(self, target, tool_name, command, logger):
+        yaw_deg = getattr(target, "yaw_deg", None)
+        if yaw_deg is None:
+            return True
+
+        rotate_wrist = getattr(self.motion, "rotate_wrist_by_yaw_deg", None)
+        if rotate_wrist is None:
+            self.reporter.fail(
+                tool_name,
+                "Return staged tool grasp yaw cannot be applied.",
+                "return_store_tool_grasp_yaw_unavailable",
+                command,
+                logger,
+            )
+            return False
+
+        ok = rotate_wrist(
+            yaw_deg,
+            logger,
+            collision_scene_key="return/store_tool_grasp_yaw",
+        )
+        if ok:
+            self._last_grasp_yaw_deg = normalize_angle_deg(float(yaw_deg))
+            logger.info(
+                "Return staged tool grasp yaw applied: "
+                f"tool={tool_name}, yaw_deg={yaw_deg}"
+            )
+            return True
+
+        if self.interrupted():
+            return False
+
+        self.reporter.fail(
+            tool_name,
+            "Return staged tool grasp yaw rotation failed.",
+            "return_store_tool_grasp_yaw_failed",
+            command,
+            logger,
+        )
+        return False
 
     def _pregrasp_depth_adjust(self, plan, ori, tool_name, command, logger):
         logger.info("임시 공구 pre-grasp depth 측정")
@@ -362,11 +413,30 @@ class ReturnDrawerPlacementFlow:
         return False
 
     def _rotate_wrist_for_drawer_place(self, tool_name, command, logger):
-        ok = rotate_wrist_for_drawer_store(
-            self.motion,
-            logger,
-            label="return_drawer_place",
+        drawer_yaw_deg = normalize_angle_deg(
+            RETURN_DRAWER_PLACE_WRIST_YAW_DEG - self._last_grasp_yaw_deg
         )
+        if abs(self._last_grasp_yaw_deg) < 0.1:
+            ok = rotate_wrist_for_drawer_store(
+                self.motion,
+                logger,
+                label="return_drawer_place",
+            )
+        else:
+            rotate_wrist = getattr(self.motion, "rotate_wrist_by_yaw_deg", None)
+            if rotate_wrist is None:
+                ok = False
+            else:
+                logger.info(
+                    "Return drawer place wrist yaw adjusted from grasp yaw: "
+                    f"grasp_yaw_deg={self._last_grasp_yaw_deg:.1f}, "
+                    f"drawer_yaw_deg={drawer_yaw_deg:.1f}"
+                )
+                ok = rotate_wrist(
+                    drawer_yaw_deg,
+                    logger,
+                    collision_scene_key="return/drawer_place_wrist_yaw",
+                )
         if ok:
             return True
 

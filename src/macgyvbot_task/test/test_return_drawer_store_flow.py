@@ -77,6 +77,9 @@ from macgyvbot_manipulation.robot_safezone import safe_z_min_for_drawer
 from macgyvbot_task.application.return_flow.return_drawer_placement_flow import (
     ReturnDrawerPlacementFlow,
 )
+from macgyvbot_task.application.return_flow.return_perception_adapter import (
+    ReturnPerceptionAdapter,
+)
 from macgyvbot_task.application.drawer_store_motion import (
     drawer_wall_clearance_z_for_drawer,
     rotate_wrist_for_drawer_store,
@@ -151,7 +154,12 @@ class FakeMotion:
         self.min_z_values.append(min_z)
         return True
 
-    def rotate_wrist_by_yaw_deg(self, yaw_deg, _logger):
+    def rotate_wrist_by_yaw_deg(
+        self,
+        yaw_deg,
+        _logger,
+        collision_scene_key=None,
+    ):
         self.wrist_rotations.append(yaw_deg)
         return True
 
@@ -297,7 +305,12 @@ def test_return_staged_tool_grasp_pregrasp_depth_adjusts_before_final_grasp(
     flow.target_planner = FakeReturnTargetPlanner()
     target = types.SimpleNamespace(found=True, base_xyz=(0.30, 0.10, 0.20))
 
-    assert flow.grasp_staged_tool(target, "screwdriver", {"action": "return"}, FakeLogger())
+    assert flow.grasp_staged_tool(
+        target,
+        "screwdriver",
+        {"action": "return"},
+        FakeLogger(),
+    )
 
     z_targets = [pose.pose.position.z for pose in motion.targets]
     assert all(
@@ -308,3 +321,179 @@ def test_return_staged_tool_grasp_pregrasp_depth_adjusts_before_final_grasp(
     assert gripper.close_calls == 2
     assert gripper.open_calls == 1
     assert reporter.failures == []
+
+
+def test_return_store_tool_target_uses_center_point_then_refines_yaw():
+    import numpy as np
+
+    class FakeTensor:
+        def __init__(self, value):
+            self.value = value
+
+        def cpu(self):
+            return self
+
+        def numpy(self):
+            return np.array(self.value)
+
+    class FakeBox:
+        xyxy = [FakeTensor([1, 2, 21, 42])]
+
+    class FakeDetector:
+        names = {0: "screwdriver"}
+
+        def detect(self, _image):
+            return [types.SimpleNamespace(boxes=[FakeBox()])]
+
+    class FakeFrameProcessor:
+        def has_camera_state(self):
+            return True
+
+    class FakePickTargetResolver:
+        def __init__(self):
+            self.calls = []
+
+        def target_from_boxes(
+            self,
+            boxes,
+            target_label,
+            _color_image,
+            _depth_image,
+            _intrinsics,
+            use_bbox_center=False,
+        ):
+            self.calls.append((boxes, target_label, use_bbox_center))
+            return types.SimpleNamespace(
+                found=True,
+                label=target_label,
+                pixel=(11, 22),
+                base_xyz=(0.3, 0.1, 0.2),
+                yaw_deg=None,
+            )
+
+    state = types.SimpleNamespace(
+        color_image=np.zeros((4, 4, 3), dtype=np.uint8),
+        depth_image=np.zeros((4, 4), dtype=np.uint16),
+        intrinsics={"fx": 1.0, "fy": 1.0, "ppx": 0.0, "ppy": 0.0},
+    )
+    resolver = FakePickTargetResolver()
+    refined = []
+    adapter = ReturnPerceptionAdapter(
+        state,
+        FakeDetector(),
+        drawer_flow=object(),
+        frame_processor=FakeFrameProcessor(),
+        pick_target_resolver=resolver,
+        depth_projector=object(),
+        logger=FakeLogger(),
+        refine_store_tool_target=lambda target, tool: (
+            refined.append((target, tool))
+            or types.SimpleNamespace(**{**target.__dict__, "yaw_deg": 37.0})
+        ),
+    )
+
+    target = adapter.resolve_store_tool_target("screwdriver")
+
+    assert target.pixel == (11, 22)
+    assert target.yaw_deg == 37.0
+    assert len(resolver.calls) == 1
+    assert resolver.calls[0][1:] == ("screwdriver", True)
+    assert refined[0][1] == "screwdriver"
+
+
+def test_return_staged_tool_grasp_applies_target_yaw_before_motion(monkeypatch):
+    import macgyvbot_task.application.return_flow.return_drawer_placement_flow as module
+
+    monkeypatch.setattr(
+        module,
+        "current_ee_orientation",
+        lambda _robot: {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+    )
+    motion = FakeMotion()
+    gripper = FakeReturnGripper()
+    flow = ReturnDrawerPlacementFlow(
+        robot=object(),
+        motion_controller=motion,
+        gripper=gripper,
+        state=FakeState(),
+        reporter=FakeReporter(),
+        wait_fn=lambda _duration: None,
+    )
+    flow.target_planner = FakeReturnTargetPlanner()
+    target = types.SimpleNamespace(
+        found=True,
+        base_xyz=(0.30, 0.10, 0.20),
+        yaw_deg=31.0,
+    )
+
+    assert flow.grasp_staged_tool(
+        target,
+        "screwdriver",
+        {"action": "return"},
+        FakeLogger(),
+    )
+
+    assert motion.wrist_rotations == [31.0]
+    assert motion.targets
+
+
+def test_return_drawer_place_offsets_grasp_yaw_back_to_store_yaw(monkeypatch):
+    import numpy as np
+    import macgyvbot_task.application.return_flow.return_drawer_placement_flow as module
+
+    monkeypatch.setattr(
+        module,
+        "current_ee_orientation",
+        lambda _robot: {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+    )
+    monkeypatch.setattr(
+        module,
+        "get_ee_matrix",
+        lambda _robot: np.array(
+            [
+                [1.0, 0.0, 0.0, 0.30],
+                [0.0, 1.0, 0.0, 0.10],
+                [0.0, 0.0, 1.0, 0.40],
+                [0.0, 0.0, 0.0, 1.0],
+            ]
+        ),
+    )
+    motion = FakeMotion()
+    gripper = FakeReturnGripper()
+    flow = ReturnDrawerPlacementFlow(
+        robot=object(),
+        motion_controller=motion,
+        gripper=gripper,
+        state=FakeState(),
+        reporter=FakeReporter(),
+        wait_fn=lambda _duration: None,
+    )
+    flow.target_planner = FakeReturnTargetPlanner()
+    target = types.SimpleNamespace(
+        found=True,
+        base_xyz=(0.30, 0.10, 0.20),
+        yaw_deg=31.0,
+    )
+    marker_target = types.SimpleNamespace(
+        found=True,
+        base_xyz=(0.40, 0.20, 0.20),
+    )
+
+    assert flow.grasp_staged_tool(
+        target,
+        "screwdriver",
+        {"action": "return"},
+        FakeLogger(),
+    )
+    assert flow.place_tool_at_marker(
+        marker_target,
+        "screwdriver",
+        {"action": "return"},
+        FakeLogger(),
+        drawer_id=1,
+    )
+
+    assert motion.wrist_rotations == [
+        31.0,
+        RETURN_DRAWER_PLACE_WRIST_YAW_DEG - 31.0,
+    ]
