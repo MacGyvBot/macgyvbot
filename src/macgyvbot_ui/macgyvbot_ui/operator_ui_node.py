@@ -403,7 +403,8 @@ class OperatorUiNode(Node):
                 level = 'warn'
                 status = '작업 취소 요청'
 
-        self._append_bot(message)
+        if action not in {'pause', 'resume'}:
+            self._append_bot(message)
         self._append_log(
             level,
             message,
@@ -513,7 +514,6 @@ class OperatorUiNode(Node):
 
             if action == 'pause':
                 stop_message = '정지 요청을 로봇에 전달했습니다.'
-                self._append_bot(stop_message)
                 self._append_log(
                     'warn',
                     stop_message,
@@ -541,11 +541,6 @@ class OperatorUiNode(Node):
                 return
 
             if action == 'resume':
-                resume_message = (
-                    message
-                    or '재개 요청을 이해했습니다. 제어 인터페이스 연결 후 사용할 수 있습니다.'
-                )
-                self._append_bot(resume_message)
                 self._append_log(
                     'info',
                     '재개 명령 해석 완료',
@@ -1058,9 +1053,10 @@ class OperatorUiNode(Node):
         raw_message = str(status.get('message') or '').strip()
         reason = str(status.get('reason') or '').strip()
 
+        suppress_error_chat = state in {'failed', 'error'}
         abnormal_message = (
             ''
-            if state == 'handoff_inspection_pending'
+            if state == 'handoff_inspection_pending' or suppress_error_chat
             else robot_status_chat(state, reason, raw_message)
         )
         normal_chat_message = normal_robot_status_chat(state, action, reason)
@@ -1204,7 +1200,7 @@ class OperatorUiNode(Node):
             'error': '작업 중 오류가 발생했습니다.',
             'busy': '이미 다른 작업을 수행 중입니다.',
             'paused': '로봇이 일시정지되었습니다.',
-            'resumed': '작업을 다시 시작합니다.',
+            'resumed': '작업을 재개합니다.',
             'cancelled': '작업이 취소되었습니다.',
             'returned': '반납 작업을 완료했습니다.',
             'rejected': '요청을 수행할 수 없습니다.',
@@ -1339,11 +1335,10 @@ class OperatorUiNode(Node):
     @staticmethod
     def _operational_chat_statuses():
         return {
-            'failed',
-            'error',
             'busy',
             'rejected',
             'cancelled',
+            'resumed',
             'tool_dropped',
             'vlm_loading',
             'vlm_inferencing',
