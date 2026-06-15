@@ -64,6 +64,7 @@ sys.modules.setdefault("scipy.spatial", scipy_spatial_module)
 sys.modules.setdefault("scipy.spatial.transform", scipy_transform_module)
 
 from macgyvbot_config.drawer import (
+    DRAWER_0_SAFE_Z_MIN_M,
     DRAWER_1_SAFE_Z_OFFSET_M,
     DRAWER_2_SAFE_Z_OFFSET_M,
     DRAWER_STORE_MARKER_EXIT_OFFSET_XYZ_M,
@@ -220,7 +221,7 @@ def test_return_drawer_placement_uses_same_drawer_safe_z_min_as_pick():
     assert safe_z_min_for_drawer(2) == (
         SAFE_Z_MIN + DRAWER_2_SAFE_Z_OFFSET_M
     )
-    assert safe_z_min_for_drawer(0) == SAFE_Z_MIN
+    assert safe_z_min_for_drawer(0) == DRAWER_0_SAFE_Z_MIN_M
     assert safe_z_min_for_drawer(None) == SAFE_Z_MIN
     assert drawer_wall_clearance_z_for_drawer(1) == (
         SAFE_Z_MIN
@@ -228,7 +229,7 @@ def test_return_drawer_placement_uses_same_drawer_safe_z_min_as_pick():
         + DRAWER_WALL_CLEARANCE_Z_OFFSET_M
     )
     assert drawer_wall_clearance_z_for_drawer(0) == (
-        SAFE_Z_MIN + DRAWER_WALL_CLEARANCE_Z_OFFSET_M
+        DRAWER_0_SAFE_Z_MIN_M + DRAWER_WALL_CLEARANCE_Z_OFFSET_M
     )
     assert drawer_wall_clearance_z_for_drawer(2) == (
         SAFE_Z_MIN

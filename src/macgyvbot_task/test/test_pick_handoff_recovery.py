@@ -621,7 +621,7 @@ def test_pregrasp_depth_adjust_uses_drawer_safe_z_minus_depth_as_clamp():
     assert math.isclose(runner.motion.min_z_values[-1], expected_z)
 
 
-def test_pregrasp_depth_adjust_allows_target_below_global_safe_z_min():
+def test_pregrasp_depth_adjust_uses_drawer_zero_safe_z_clamp():
     runner = PickSequenceRunner.__new__(PickSequenceRunner)
     runner.motion = FakeMotion()
     runner.state = FakeState()
@@ -636,13 +636,15 @@ def test_pregrasp_depth_adjust_allows_target_below_global_safe_z_min():
     context = {
         "plan": plan,
         "safe_z_min": safe_z_min_for_drawer(0),
+        "drawer_id": 0,
         "ori": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
     }
 
     assert runner._pregrasp_depth_adjust(context)
 
-    assert math.isclose(runner.motion.targets[-1].pose.position.z, 0.230)
-    assert math.isclose(runner.motion.min_z_values[-1], 0.220)
+    expected_z = safe_z_min_for_drawer(0)
+    assert math.isclose(runner.motion.targets[-1].pose.position.z, expected_z)
+    assert math.isclose(runner.motion.min_z_values[-1], expected_z)
 
 
 def test_refine_failure_applies_fallback_pca_yaw(monkeypatch):
