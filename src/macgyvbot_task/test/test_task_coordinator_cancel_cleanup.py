@@ -461,6 +461,29 @@ def test_recovery_mode_cancel_is_not_rejected(monkeypatch):
     assert node._drop_recovery_resume_queue is None
 
 
+def test_recovery_mode_exit_is_not_rejected_and_clears_recovery_queue(monkeypatch):
+    _install_task_coordinator_import_stubs(monkeypatch)
+    from macgyvbot_task.task_coordinator_node import TaskCoordinatorNode
+
+    node = _make_cancel_node(TaskCoordinatorNode, active_step=False)
+    node.state.recovery_mode = True
+    started_exit_home = []
+    node._start_exit_home_recovery = lambda reason: started_exit_home.append(reason)
+
+    msg = types.SimpleNamespace(action="exit", reason="exit_requested")
+    node._task_control_cb(msg)
+
+    assert node.published_statuses[-1][0] == "cancelled"
+    assert node.published_statuses[-1][1]["action"] == "exit"
+    assert node._queue == deque()
+    assert node._pending_drop_recovery_payload is None
+    assert node._active_drop_recovery_snapshot is None
+    assert node._drop_recovery_resume_step is None
+    assert node._drop_recovery_resume_task_name is None
+    assert node._drop_recovery_resume_queue is None
+    assert started_exit_home == ["exit_requested"]
+
+
 def test_resume_without_paused_task_returns_to_idle(monkeypatch):
     _install_task_coordinator_import_stubs(monkeypatch)
     from macgyvbot_task.task_coordinator_node import TaskCoordinatorNode
