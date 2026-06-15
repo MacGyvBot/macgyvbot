@@ -73,6 +73,10 @@ class ReturnDrawerPlacementFlow:
 
         bx, by, bz = target.base_xyz
         plan = self.target_planner.plan(bx, by, bz, logger)
+
+        if not self._apply_grasp_yaw(target, tool_name, command, logger):
+            return False
+
         ori = current_ee_orientation(self.robot)
 
         self.reporter.publish(
@@ -116,6 +120,46 @@ class ReturnDrawerPlacementFlow:
             self.tool_hold_monitor.start(tool_name, "return", command)
 
         return True
+
+    def _apply_grasp_yaw(self, target, tool_name, command, logger):
+        yaw_deg = getattr(target, "yaw_deg", None)
+        if yaw_deg is None:
+            return True
+
+        rotate_wrist = getattr(self.motion, "rotate_wrist_by_yaw_deg", None)
+        if rotate_wrist is None:
+            self.reporter.fail(
+                tool_name,
+                "Return staged tool grasp yaw cannot be applied.",
+                "return_store_tool_grasp_yaw_unavailable",
+                command,
+                logger,
+            )
+            return False
+
+        ok = rotate_wrist(
+            yaw_deg,
+            logger,
+            collision_scene_key="return/store_tool_grasp_yaw",
+        )
+        if ok:
+            logger.info(
+                "Return staged tool grasp yaw applied: "
+                f"tool={tool_name}, yaw_deg={yaw_deg}"
+            )
+            return True
+
+        if self.interrupted():
+            return False
+
+        self.reporter.fail(
+            tool_name,
+            "Return staged tool grasp yaw rotation failed.",
+            "return_store_tool_grasp_yaw_failed",
+            command,
+            logger,
+        )
+        return False
 
     def _pregrasp_depth_adjust(self, plan, ori, tool_name, command, logger):
         logger.info("임시 공구 pre-grasp depth 측정")

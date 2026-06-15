@@ -516,6 +516,7 @@ class TaskCoordinatorNode(Node):
             self.depth_projector,
             self._task_log("return", quiet_info=True),
             wait_fn=cooperative_wait,
+            refine_store_tool_target=self._target_with_mask_pca_result,
         )
         self.pick_runner = PickSequenceRunner(
             self.robot,
