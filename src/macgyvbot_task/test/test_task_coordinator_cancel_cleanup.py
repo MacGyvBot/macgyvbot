@@ -59,6 +59,11 @@ def _class(name):
 
 
 def _install_task_coordinator_import_stubs(monkeypatch):
+    monkeypatch.setitem(
+        sys.modules,
+        "numpy",
+        _module("numpy", load=lambda *_args, **_kwargs: None),
+    )
     rclpy_module = _module(
         "rclpy",
         ok=lambda: True,
@@ -159,6 +164,7 @@ def _install_task_coordinator_import_stubs(monkeypatch):
         "macgyvbot_manipulation.onrobot_gripper": {"RG": _class("RG")},
         "macgyvbot_manipulation.robot_pose": {
             "get_ee_matrix": lambda *_args, **_kwargs: None,
+            "make_safe_pose": lambda *_args, **_kwargs: None,
             "orientation_from_joint_positions": lambda *_args, **_kwargs: None,
         },
         "macgyvbot_perception.depth_projection": {
@@ -196,6 +202,12 @@ def _install_task_coordinator_import_stubs(monkeypatch):
         "macgyvbot_task.application.return_flow.return_sequence": {
             "ReturnSequenceRunner": _class("ReturnSequenceRunner")
         },
+        "macgyvbot_task.application.recovery": {
+            "run_drop_recovery": lambda *_args, **_kwargs: None
+        },
+        "macgyvbot_task.application.recovery.recovery_utils": {
+            "RecoveryConfig": _class("RecoveryConfig")
+        },
         "macgyvbot_task.application.robot.robot_home_initializer": {
             "RobotHomeInitializer": _class("RobotHomeInitializer")
         },
@@ -218,6 +230,8 @@ def _make_cancel_node(TaskCoordinatorNode, *, active_step=False):
     node.exit_req = threading.Event()
     node.pause_req = threading.Event()
     node.resume_req = threading.Event()
+    node.drop_req = threading.Event()
+    node.drawer_prepare_paused = threading.Event()
     node._queue_lock = threading.RLock()
     node._queue = deque([("pick", object())])
     node._current_step = object() if active_step else None
@@ -368,3 +382,33 @@ def test_drawer_prepare_resume_wait_consumes_resume(monkeypatch):
     assert not node.resume_req.is_set()
     assert not node.pause_req.is_set()
     assert not node.drawer_prepare_paused.is_set()
+
+
+def test_home_control_does_not_trigger_handoff_fallback(monkeypatch):
+    _install_task_coordinator_import_stubs(monkeypatch)
+    from macgyvbot_task.task_coordinator_node import TaskCoordinatorNode
+
+    node = object.__new__(TaskCoordinatorNode)
+    node.handoff_retry_req = threading.Event()
+    node.handoff_fallback_req = threading.Event()
+    node.handoff_decision_pending = threading.Event()
+    node.handoff_decision_pending.set()
+    node.state = types.SimpleNamespace(
+        recovery_mode=False,
+        picking=True,
+        current_command={"action": "bring", "tool_name": "screwdriver"},
+    )
+    node.is_running = lambda: False
+    node._task_log = lambda *_args, **_kwargs: FakeLogger()
+    node.published_statuses = []
+    node._publish_robot_status = (
+        lambda status, **kwargs: node.published_statuses.append((status, kwargs))
+    )
+
+    msg = types.SimpleNamespace(action="home", reason="홈위치로 가")
+    node._task_control_cb(msg)
+
+    assert not node.handoff_fallback_req.is_set()
+    assert node.published_statuses[-1][0] == "busy"
+    assert node.published_statuses[-1][1]["action"] == "home"
+    assert node.published_statuses[-1][1]["reason"] == "already_picking"

@@ -51,6 +51,22 @@ _install_ros_stubs()
 from macgyvbot_ui.operator_ui_node import OperatorUiNode
 
 
+class FakePublisher:
+    def __init__(self):
+        self.messages = []
+
+    def publish(self, msg):
+        self.messages.append(msg)
+
+
+class FakeWindow:
+    def __init__(self):
+        self.messages = []
+
+    def append_bot(self, text):
+        self.messages.append(text)
+
+
 class OperatorUiStatusMessageTest(unittest.TestCase):
     def test_failed_drawer_tool_not_found_chat_is_short(self):
         message = OperatorUiNode._robot_status_message(
@@ -83,20 +99,6 @@ class OperatorUiStatusMessageTest(unittest.TestCase):
         self.assertNotIn("…", status)
 
     def test_append_bot_publishes_same_text_for_tts(self):
-        class FakeWindow:
-            def __init__(self):
-                self.messages = []
-
-            def append_bot(self, text):
-                self.messages.append(text)
-
-        class FakePublisher:
-            def __init__(self):
-                self.messages = []
-
-            def publish(self, msg):
-                self.messages.append(msg)
-
         node = object.__new__(OperatorUiNode)
         node.window = FakeWindow()
         node._tts_pub = FakePublisher()
@@ -107,6 +109,22 @@ class OperatorUiStatusMessageTest(unittest.TestCase):
         self.assertEqual(len(node._tts_pub.messages), 1)
         self.assertEqual(node._tts_pub.messages[0].text, "공구를 받아주세요.")
         self.assertEqual(node._tts_pub.messages[0].source, "operator_ui_chat")
+
+    def test_home_control_publishes_task_control_not_stt_text(self):
+        node = object.__new__(OperatorUiNode)
+        node.window = FakeWindow()
+        node._tts_pub = FakePublisher()
+        node._task_control_pub = FakePublisher()
+        node._stt_pub = FakePublisher()
+        node._append_log = lambda *args, **kwargs: None
+        node._set_status = lambda *_args, **_kwargs: None
+
+        node.publish_control_action("home", "홈위치로 가")
+
+        self.assertEqual(len(node._task_control_pub.messages), 1)
+        self.assertEqual(node._task_control_pub.messages[0].action, "home")
+        self.assertEqual(node._task_control_pub.messages[0].reason, "홈위치로 가")
+        self.assertEqual(node._stt_pub.messages, [])
 
 
 if __name__ == "__main__":

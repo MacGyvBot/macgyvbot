@@ -1063,6 +1063,16 @@ class TaskCoordinatorNode(Node):
             self._handle_handoff_fallback("home_requested_during_handoff_inspection")
             return
 
+        self._run_home_request(command, tool_name)
+
+    def _handle_home_control(self, reason):
+        command = dict(self.state.current_command or {})
+        command.setdefault("action", "home")
+        command.setdefault("raw_text", reason or "home")
+        tool_name = command.get("tool_name", "unknown")
+        self._run_home_request(command, tool_name)
+
+    def _run_home_request(self, command, tool_name):
         if self.is_running() or self.state.picking:
             self._publish_robot_status(
                 "busy",
@@ -1148,6 +1158,9 @@ class TaskCoordinatorNode(Node):
             return
         if action == "cancel":
             self._handle_cancel(reason)
+            return
+        if action == "home":
+            self._handle_home_control(reason)
             return
         if action == "exit":
             self._handle_exit(reason)

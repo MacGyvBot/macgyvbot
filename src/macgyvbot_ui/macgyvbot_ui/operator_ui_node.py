@@ -361,7 +361,7 @@ class OperatorUiNode(Node):
 
     def publish_control_action(self, action, text=''):
         action = str(action or '').strip()
-        if action not in {'pause', 'resume', 'retry', 'cancel'}:
+        if action not in {'pause', 'resume', 'retry', 'cancel', 'home'}:
             self.publish_user_text(text)
             return
 
@@ -388,6 +388,11 @@ class OperatorUiNode(Node):
             event = 'CONTROL_RETRY'
             level = 'info'
             status = '손 인식 재시도'
+        elif action == 'home':
+            message = 'Home으로 복귀합니다.'
+            event = 'CONTROL_HOME'
+            level = 'info'
+            status = 'Home 복귀 요청'
         else:
             if label == '복귀':
                 message = 'Home으로 복귀합니다.'
