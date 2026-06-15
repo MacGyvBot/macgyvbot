@@ -99,7 +99,10 @@ else:
             self._home_button = QPushButton('복귀')
             self._home_button.setObjectName('homeControlButton')
             self._home_button.clicked.connect(
-                lambda _checked=False: self._send_control_text('홈위치로 가')
+                lambda _checked=False: self._send_control_action(
+                    action='home',
+                    text='홈위치로 가',
+                )
             )
             self._cancel_button = QPushButton('취소')
             self._cancel_button.setObjectName('cancelControlButton')

@@ -364,7 +364,7 @@ class OperatorUiNode(Node):
 
     def publish_control_action(self, action, text=''):
         action = str(action or '').strip()
-        if action not in {'pause', 'resume', 'retry', 'cancel'}:
+        if action not in {'pause', 'resume', 'retry', 'cancel', 'home'}:
             self.publish_user_text(text)
             return
 
@@ -391,6 +391,11 @@ class OperatorUiNode(Node):
             event = 'CONTROL_RETRY'
             level = 'info'
             status = '손 인식 재시도'
+        elif action == 'home':
+            message = 'Home으로 복귀합니다.'
+            event = 'CONTROL_HOME'
+            level = 'info'
+            status = 'Home 복귀 요청'
         else:
             if label == '복귀':
                 message = 'Home으로 복귀합니다.'
@@ -403,7 +408,7 @@ class OperatorUiNode(Node):
                 level = 'warn'
                 status = '작업 취소 요청'
 
-        if action not in {'pause', 'resume'}:
+        if action not in {'pause', 'resume', 'cancel'}:
             self._append_bot(message)
         self._append_log(
             level,
@@ -562,7 +567,6 @@ class OperatorUiNode(Node):
                 cancel_message = (
                     message or '현재 작업을 취소합니다. 다음 명령을 기다리겠습니다.'
                 )
-                self._append_bot(cancel_message)
                 self._append_log(
                     'warn',
                     '현재 작업 취소 요청 발행: queue와 진행 motion 정리',
