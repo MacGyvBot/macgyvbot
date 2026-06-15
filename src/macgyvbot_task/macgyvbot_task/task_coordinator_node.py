@@ -1147,7 +1147,7 @@ class TaskCoordinatorNode(Node):
         reason = str(msg.reason or "").strip()
         if not action:
             return
-        if self.state.recovery_mode and action not in {"pause", "resume"}:
+        if self.state.recovery_mode and action not in {"pause", "resume", "cancel"}:
             self._task_log("control").warn(
                 "task control ignored during drop recovery",
                 step="task_control",
@@ -1342,8 +1342,8 @@ class TaskCoordinatorNode(Node):
         with self._queue_lock:
             active_step = self._current_step is not None or self._step_thread_alive()
             self._queue.clear()
-            self._suspended_step = None
-            self._suspended_task_name = None
+            self._clear_suspended_task_state_locked()
+            self._clear_drop_recovery_state_locked()
 
         if not active_step:
             self._run_cleanup_callbacks()
@@ -1757,15 +1757,22 @@ class TaskCoordinatorNode(Node):
     def _clear_failed_drop_recovery_queue(self):
         with self._queue_lock:
             self._queue.clear()
-            self._suspended_step = None
-            self._suspended_task_name = None
-            self._drop_recovery_resume_step = None
-            self._drop_recovery_resume_task_name = None
-            self._drop_recovery_resume_queue = None
-            self._active_drop_recovery_snapshot = None
+            self._clear_suspended_task_state_locked()
+            self._clear_drop_recovery_state_locked()
             self._current_step = None
             self._current_task_name = None
             self._step_thread = None
+
+    def _clear_suspended_task_state_locked(self):
+        self._suspended_step = None
+        self._suspended_task_name = None
+
+    def _clear_drop_recovery_state_locked(self):
+        self._pending_drop_recovery_payload = None
+        self._active_drop_recovery_snapshot = None
+        self._drop_recovery_resume_step = None
+        self._drop_recovery_resume_task_name = None
+        self._drop_recovery_resume_queue = None
 
     def _build_recovery_config(self, snapshot):
         command = snapshot["command"]
