@@ -223,10 +223,7 @@ class ReturnSequenceRunner:
             )
 
         if tool_name is None:
-            if self._interrupted() or failure_reason in {
-                "interrupted",
-                "return_grasp_failed",
-            }:
+            if self._interrupted() or failure_reason == "interrupted":
                 return False
 
             self._recover_to_home(
