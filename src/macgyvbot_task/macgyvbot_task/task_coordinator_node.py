@@ -1147,7 +1147,12 @@ class TaskCoordinatorNode(Node):
         reason = str(msg.reason or "").strip()
         if not action:
             return
-        if self.state.recovery_mode and action not in {"pause", "resume", "cancel"}:
+        if self.state.recovery_mode and action not in {
+            "pause",
+            "resume",
+            "cancel",
+            "exit",
+        }:
             self._task_log("control").warn(
                 "task control ignored during drop recovery",
                 step="task_control",
@@ -1374,8 +1379,8 @@ class TaskCoordinatorNode(Node):
         self.motion.cancel_current_goal(self._motion_log(), reason=reason or "exit")
         with self._queue_lock:
             self._queue.clear()
-            self._suspended_step = None
-            self._suspended_task_name = None
+            self._clear_suspended_task_state_locked()
+            self._clear_drop_recovery_state_locked()
 
         if publish_status:
             self._publish_robot_status(
