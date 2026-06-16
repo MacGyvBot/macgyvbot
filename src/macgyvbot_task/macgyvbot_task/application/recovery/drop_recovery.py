@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from macgyvbot_config.recovery import RECOVERY_UNREACHABLE_MESSAGE
 from macgyvbot_task.application.recovery.recovery_utils import (
     RecoveryConfig,
     attempt_grasp,
@@ -14,8 +15,10 @@ from macgyvbot_task.application.recovery.recovery_utils import (
     move_to_inspection_pose,
     normalize_tool_name,
     open_gripper_after_inspection,
+    log_recovery_target_coordinates,
     publish_recovery_grasp_success,
     publish_recovery_status,
+    recovery_target_is_unreachable,
     recovery_restart_requested,
     run_recovery_step_with_pause_retry,
     set_recovery_mode,
@@ -134,7 +137,26 @@ def run_drop_recovery(
             f"{task_type} recovery target not found",
         )
 
+    if recovery_target_is_unreachable(detection):
+        return _fail(
+            status,
+            motion_controller,
+            config,
+            logger,
+            task_type,
+            target_tool,
+            "recovery_target_unreachable",
+            "RECOVERY_TARGET_UNREACHABLE",
+            f"{task_type} recovery target is in unreachable cleanup area",
+        )
+
     if config.target_observe_fn is not None:
+        log_recovery_target_coordinates(
+            logger,
+            detection,
+            target_tool,
+            "moving_to_recovery_target_observe",
+        )
         publish_recovery_status(
             status,
             "recovering",
@@ -199,6 +221,24 @@ def run_drop_recovery(
                 "TARGET_NOT_FOUND",
                 f"{task_type} recovery target not found at observe pose",
             )
+        if recovery_target_is_unreachable(detection):
+            return _fail(
+                status,
+                motion_controller,
+                config,
+                logger,
+                task_type,
+                target_tool,
+                "recovery_target_unreachable",
+                "RECOVERY_TARGET_UNREACHABLE",
+                f"{task_type} recovery target is in unreachable cleanup area",
+            )
+        log_recovery_target_coordinates(
+            logger,
+            detection,
+            target_tool,
+            "recovery_target_redetected",
+        )
         publish_recovery_status(
             status,
             "recovering",
@@ -401,6 +441,9 @@ def _fail(
         event_type,
         drawer_open=bool(getattr(status, "drawer_open", False)),
     )
+    if status is not None:
+        status.last_recovery_failure_reason = reason
+        status.last_recovery_failure_message = failure_message or ""
     if failure_message is not None:
         publish_recovery_status(
             status,
@@ -409,13 +452,14 @@ def _fail(
             failure_message,
             reason=reason,
         )
-        close_open_drawer_after_recovery_failure(
-            status,
-            config,
-            logger,
-            target_tool,
-            reason,
-        )
+        if reason != "recovery_target_unreachable":
+            close_open_drawer_after_recovery_failure(
+                status,
+                config,
+                logger,
+                target_tool,
+                reason,
+            )
 
     log_recovery_event(
         logger,
@@ -448,6 +492,8 @@ def _monitor_action(task_type):
 
 
 def _recovery_failure_message(reason):
+    if reason == "recovery_target_unreachable":
+        return RECOVERY_UNREACHABLE_MESSAGE
     if reason in {"target_detection_failed", "target_redetection_failed"}:
         return "공구를 못찾겠습니다. 서랍을 닫고 홈 위치로 복귀합니다."
     if reason in {
@@ -461,6 +507,10 @@ def _recovery_failure_message(reason):
 
 
 def _recovery_failure_message_for_event(reason, event_type, drawer_open=False):
+    explicit_message = _recovery_failure_message(reason)
+    if explicit_message is not None:
+        return explicit_message
+
     if (
         reason in {"target_detection_failed", "target_redetection_failed"}
         or event_type == "TARGET_NOT_FOUND"
@@ -482,4 +532,4 @@ def _recovery_failure_message_for_event(reason, event_type, drawer_open=False):
         return "공구를 못잡겠습니다. 서랍을 닫고 홈 위치로 복귀합니다."
     if drawer_open:
         return "recovery가 실패했습니다. 서랍을 닫고 홈 위치로 복귀합니다."
-    return _recovery_failure_message(reason)
+    return None
