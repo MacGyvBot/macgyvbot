@@ -139,8 +139,79 @@ class OperatorUiStatusMessageTest(unittest.TestCase):
             "VLM grasp model inference is running now"
         )
 
-        self.assertEqual(status, "모델 grasp model inference is running now")
+        self.assertEqual(status, "파지점 탐색")
         self.assertNotIn("…", status)
+
+    def test_compact_status_shortens_long_korean_text(self):
+        status = OperatorUiNode._compact_status_text(
+            "drop recovery가 완료되어 중단된 작업을 자동으로 다시 실행합니다."
+        )
+
+        self.assertEqual(status, "작업 재개")
+
+    def test_drop_recovery_returned_status_uses_simple_panel_text(self):
+        clock = FakeClock(now_ns=1_000_000_000)
+        node = _status_view_node(clock)
+
+        view = node._build_robot_status_view(
+            {
+                "status": "returned",
+                "action": "bring",
+                "tool_name": "screwdriver",
+                "reason": "drop_recovery_succeeded",
+                "message": "drop recovery가 완료되었습니다.",
+                "command": {
+                    "action": "bring",
+                    "tool_name": "screwdriver",
+                    "raw_text": "드라이버 가져다줘",
+                },
+            }
+        )
+
+        self.assertEqual(view["panel_status"], "낙하 복구")
+        self.assertEqual(view["chat_message"], "")
+
+    def test_unreachable_recovery_status_unlocks_task_input(self):
+        node = object.__new__(OperatorUiNode)
+        node._task_execution_active = True
+        node._chat_input_hold_until_ns = 99_000_000_000
+
+        node._update_task_execution_state(
+            {
+                "status": "recovering",
+                "action": "bring",
+                "reason": "recovery_target_unreachable",
+            },
+            "recovering",
+        )
+
+        self.assertFalse(node._task_execution_active)
+        self.assertEqual(node._chat_input_hold_until_ns, 0)
+
+    def test_unreachable_recovery_status_uses_manual_cleanup_panel_text(self):
+        clock = FakeClock(now_ns=1_000_000_000)
+        node = _status_view_node(clock)
+
+        view = node._build_robot_status_view(
+            {
+                "status": "recovering",
+                "action": "bring",
+                "tool_name": "screwdriver",
+                "reason": "recovery_target_unreachable",
+                "message": "공구가 다시 주울 수 없는 공간에 있습니다. 직접 정리해주세요.",
+                "command": {
+                    "action": "bring",
+                    "tool_name": "screwdriver",
+                    "raw_text": "드라이버 가져다줘",
+                },
+            }
+        )
+
+        self.assertEqual(view["panel_status"], "수동 정리")
+        self.assertEqual(
+            view["chat_message"],
+            "공구가 다시 주울 수 없는 공간에 있습니다. 직접 정리해주세요.",
+        )
 
     def test_append_bot_publishes_same_text_for_tts(self):
         node = object.__new__(OperatorUiNode)

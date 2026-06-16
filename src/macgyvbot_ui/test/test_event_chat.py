@@ -79,6 +79,10 @@ class EventChatTest(unittest.TestCase):
             normal_robot_status_chat("returned", "bring"),
             BRING_RETURNED_HOME_MESSAGE,
         )
+        self.assertEqual(
+            normal_robot_status_chat("returned", "bring", "drop_recovery_succeeded"),
+            "",
+        )
         self.assertEqual(normal_robot_status_chat("moving_to_drawer", "bring"), "")
 
     def test_normal_return_status_messages_are_minimal(self):
