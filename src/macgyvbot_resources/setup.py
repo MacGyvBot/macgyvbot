@@ -47,7 +47,7 @@ setup(
     + gather_data_files(
         "calibration",
         f"share/{package_name}/calibration",
-        ["*.npy", "*.md"],
+        ["**/*.npy", "**/*.md", "**/*.py"],
     )
     + gather_data_files(
         "urdf",
