@@ -5,6 +5,7 @@ Shared non-code assets for migrated MacGyvBot packages.
 ## Scope
 
 - `calibration/`
+- `calibration/tutorial/`
 - `weights/`
 - `weights/vlm/`
 
@@ -18,6 +19,10 @@ package; runtime code only depends on the marker IDs configured in
 Runtime packages should use `macgyvbot_resources.calibration` and
 `macgyvbot_resources.resources` helpers instead of duplicating package-share or
 source-tree fallback lookup logic.
+
+Calibration regeneration and validation reference scripts live under
+`calibration/tutorial/`. They are hardware-specific utilities, not normal
+runtime nodes.
 
 ## YOLO RealSense Smoke Test
 
