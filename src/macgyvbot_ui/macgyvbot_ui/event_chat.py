@@ -86,6 +86,8 @@ def normal_robot_status_chat(status, action="", reason=""):
         )
 
     if normalized_action == "bring":
+        if normalized_reason.startswith("drop_recovery"):
+            return ""
         if normalized_status == "searching_hand":
             return BRING_WAIT_HANDOFF_MESSAGE
         if normalized_status == "waiting_handoff":

@@ -793,7 +793,7 @@ class OperatorUiNode(Node):
             detail=self._format_detail(payload),
         )
         if event == 'tool_dropped':
-            self._append_event_chat('tool_dropped', message, force=True)
+            self._append_event_chat('tool_dropped', message)
 
     @staticmethod
     def _tool_command_payload(msg):
@@ -1068,7 +1068,10 @@ class OperatorUiNode(Node):
             abnormal_message
             or self._robot_status_message(state, target_label, raw_message, reason)
         )
-        panel_status = self._robot_panel_status(state, message)
+        if reason.startswith('drop_recovery'):
+            panel_status = '낙하 복구'
+        else:
+            panel_status = self._robot_panel_status(state, message)
         stage_text = self._robot_stage_text(state, message)
         severity = self._robot_status_severity(state)
         log_message = self._robot_log_message(status, state, target_label, message, reason)
@@ -1648,7 +1651,7 @@ class OperatorUiNode(Node):
         raw = str(text or '').strip()
         if not raw:
             return '대기'
-        normalized = raw.replace(' ', '').lower()
+        normalized = raw.replace(' ', '').replace('.', '').lower()
         mapping = {
             '명령대기': '대기',
             '대기': '대기',
@@ -1675,13 +1678,48 @@ class OperatorUiNode(Node):
             'vlm준비완료': 'VLM 준비 완료',
             'vlm경고': 'VLM 경고',
             'vlm오류': 'VLM 오류',
+            'droprecovery가완료되었습니다': '낙하 복구 완료',
+            'droprecovery가완료되어중단된작업을자동으로다시실행합니다': '작업 재개',
+            'droprecovery중다시drop이감지되어새recovery를시작합니다': '낙하 재복구',
+            '공구를떨어트렸습니다.inspection하여다시찾습니다': '공구 낙하',
+            '사용자의손을인식하지못했습니다.다시인식할까요,복귀할까요?': '손 재인식 대기',
         }
         compact = mapping.get(normalized)
         if compact:
             return compact
         koreanized = raw.replace('Home', '홈').replace('VLM', '모델')
         koreanized = ' '.join(koreanized.split())
-        return OperatorUiNode._limit_words(koreanized, 7)
+        return OperatorUiNode._limit_status_text(koreanized)
+
+    @staticmethod
+    def _limit_status_text(text):
+        compact = str(text or '').strip()
+        if not compact:
+            return ''
+
+        normalized = compact.replace(' ', '').replace('.', '').lower()
+        keyword_map = (
+            (('droprecovery', '공구낙하', '낙하'), '낙하 복구'),
+            (('vlm', 'graspmodel', '파지점', 'inference'), '파지점 탐색'),
+            (('drawer', '서랍', '공구함'), '서랍 작업'),
+            (('handoff', '전달'), '전달 작업'),
+            (('hand', '손'), '손 탐색'),
+            (('home', '홈', '복귀'), '홈 복귀'),
+            (('moving', 'move', '이동'), '이동 중'),
+            (('planning', 'plan', '경로'), '경로 계획'),
+            (('waiting', '대기'), '대기'),
+            (('failed', 'failure', 'error', '실패', '오류'), '오류'),
+        )
+        for keywords, label in keyword_map:
+            if any(keyword in normalized for keyword in keywords):
+                return label
+
+        has_korean = any('\uac00' <= ch <= '\ud7a3' for ch in compact)
+        if has_korean and len(compact.replace(' ', '')) > 15:
+            compact = OperatorUiNode._limit_words(compact, 5)
+            if len(compact.replace(' ', '')) > 15:
+                compact = compact[:15].rstrip()
+        return OperatorUiNode._limit_words(compact, 5)
 
     @staticmethod
     def _limit_words(text, max_words):

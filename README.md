@@ -214,7 +214,7 @@ ros2 launch macgyvbot_bringup macgyvbot.launch.py use_tts:=false
 ros2 launch macgyvbot_bringup macgyvbot.launch.py \
   use_tts:=true \
   tts_engine:=edge \
-  tts_voice:=ko-KR-SunHiNeural
+  tts_voice:=ko-KR-InJoonNeural
 ```
 
 마이크가 너무 민감하거나 명령을 너무 늦게 확정하면 STT threshold를 조정합니다.
