@@ -1068,7 +1068,9 @@ class OperatorUiNode(Node):
             abnormal_message
             or self._robot_status_message(state, target_label, raw_message, reason)
         )
-        if reason.startswith('drop_recovery'):
+        if reason == 'recovery_target_unreachable':
+            panel_status = '수동 정리'
+        elif reason.startswith('drop_recovery'):
             panel_status = '낙하 복구'
         else:
             panel_status = self._robot_panel_status(state, message)
@@ -1138,6 +1140,11 @@ class OperatorUiNode(Node):
 
     def _update_task_execution_state(self, status, state):
         action = self._status_action(status)
+        reason = str(status.get('reason') or '').strip().lower()
+        if reason == 'recovery_target_unreachable':
+            self._task_execution_active = False
+            self._chat_input_hold_until_ns = 0
+            return
         if state in self._TASK_FINAL_STATES:
             self._task_execution_active = False
             return
