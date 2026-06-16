@@ -29,10 +29,12 @@ from macgyvbot_task.application.recovery.recovery_utils import (
     clear_recovery_perception_lock,
     is_graspable,
     log_recovery_event,
+    log_recovery_target_coordinates,
     move_to_inspection_pose,
     open_gripper_after_inspection,
     publish_recovery_grasp_success,
     publish_recovery_status,
+    recovery_target_is_unreachable,
     recovery_restart_requested,
     return_home,
     set_recovery_mode,
@@ -203,12 +205,31 @@ class DropRecoverySequenceRunner:
         )
         if not ok:
             self.detection = None
+            return False
+        if recovery_target_is_unreachable(self.detection):
+            return _fail(
+                self.status,
+                self.motion_controller,
+                self.config,
+                self.logger,
+                self.task_type,
+                self.target_tool,
+                "recovery_target_unreachable",
+                "RECOVERY_TARGET_UNREACHABLE",
+                f"{self.task_type} recovery target is in unreachable cleanup area",
+            )
         return ok
 
     def _move_to_target_observe(self):
         if self.config.target_observe_fn is None:
             return True
 
+        log_recovery_target_coordinates(
+            self.logger,
+            self.detection,
+            self.target_tool,
+            "moving_to_recovery_target_observe",
+        )
         publish_recovery_status(
             self.status,
             "recovering",
@@ -254,7 +275,25 @@ class DropRecoverySequenceRunner:
         if not ok:
             self.detection = None
             return False
+        if recovery_target_is_unreachable(self.detection):
+            return _fail(
+                self.status,
+                self.motion_controller,
+                self.config,
+                self.logger,
+                self.task_type,
+                self.target_tool,
+                "recovery_target_unreachable",
+                "RECOVERY_TARGET_UNREACHABLE",
+                f"{self.task_type} recovery target is in unreachable cleanup area",
+            )
 
+        log_recovery_target_coordinates(
+            self.logger,
+            self.detection,
+            self.target_tool,
+            "recovery_target_redetected",
+        )
         publish_recovery_status(
             self.status,
             "recovering",
