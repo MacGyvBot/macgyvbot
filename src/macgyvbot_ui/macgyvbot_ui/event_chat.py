@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import re
 
+from macgyvbot_config.recovery import RECOVERY_UNREACHABLE_MESSAGE
+
 
 HAND_NOT_FOUND_MESSAGE = "손이 인식되지 않았습니다. 움직여서 카메라에 나오게 하세요!"
 HAND_DETECTED_MESSAGE = "손이 인식되었습니다."
@@ -40,6 +42,9 @@ _GRASP_FAILURE_REASONS = {
     "grasp_failed",
     "gripper_grasp_failed",
 }
+_MANUAL_CLEANUP_REASONS = {
+    "recovery_target_unreachable",
+}
 _GRASP_ATTEMPT_RE = re.compile(r"(\d+)\s*/\s*(\d+)")
 
 
@@ -68,6 +73,8 @@ def robot_status_chat(status, reason="", message=""):
         return HAND_NOT_FOUND_MESSAGE
     if normalized_reason in _GRASP_FAILURE_REASONS:
         return GRASP_FAILED_MESSAGE
+    if normalized_reason in _MANUAL_CLEANUP_REASONS:
+        return raw_message or RECOVERY_UNREACHABLE_MESSAGE
     if normalized_status == "grasping" and _is_retry_attempt(raw_message):
         return GRASP_RETRY_MESSAGE
     return ""

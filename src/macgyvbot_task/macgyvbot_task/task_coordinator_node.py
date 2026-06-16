@@ -1663,16 +1663,24 @@ class TaskCoordinatorNode(Node):
             self._restart_pending_drop_recovery()
             return False
 
+        final_reason = "drop_recovery_succeeded"
+        final_message = "drop recovery가 완료되었습니다."
+        if not ok:
+            final_reason = (
+                getattr(self.state, "last_recovery_failure_reason", "")
+                or "drop_recovery_failed"
+            )
+            final_message = (
+                getattr(self.state, "last_recovery_failure_message", "")
+                or "drop recovery가 실패했습니다. 로봇은 가능한 안전 정리 절차를 수행했습니다."
+            )
+
         self._publish_robot_status(
-            "returned" if ok else "failed",
+            "returned" if ok else "recovering",
             tool_name=snapshot["tool_name"],
             action=action,
-            message=(
-                "drop recovery가 완료되었습니다."
-                if ok
-                else "drop recovery가 실패했습니다. 로봇은 가능한 안전 정리 절차를 수행했습니다."
-            ),
-            reason="drop_recovery_succeeded" if ok else "drop_recovery_failed",
+            message=final_message,
+            reason=final_reason,
             command=snapshot["command"],
         )
         self._restore_drop_recovery_resume_state(snapshot)

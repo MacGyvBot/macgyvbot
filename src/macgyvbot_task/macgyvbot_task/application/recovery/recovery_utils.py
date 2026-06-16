@@ -13,6 +13,10 @@ from macgyvbot_config.grasp import GRASP_RETRY_LIMIT
 from macgyvbot_config.hand_grasp import HAND_GRASP_MASK_LOCK_TIMEOUT_SEC
 from macgyvbot_config.handoff import HANDOFF_WAIT_POLL_SEC
 from macgyvbot_config.pick import PICK_PREGRASP_REOPEN_WAIT_SEC
+from macgyvbot_config.recovery import (
+    RECOVERY_UNREACHABLE_X_MIN_M,
+    RECOVERY_UNREACHABLE_Y_MIN_M,
+)
 from macgyvbot_config.robot import RECOVERY_INSPECTION_JOINTS
 from macgyvbot_manipulation.grasp_verifier import GraspVerifier
 from macgyvbot_manipulation.handover_targeting import move_to_observation_pose
@@ -305,6 +309,64 @@ def is_graspable(detection, motion_controller, grasp_planner, config) -> bool:
         )
         return False
     return True
+
+
+def recovery_target_is_unreachable(detection) -> bool:
+    """Return True when a detected recovery target must be cleared manually."""
+    base_xyz = getattr(detection, "base_xyz", None)
+    if base_xyz is None or len(base_xyz) < 2:
+        return False
+
+    try:
+        x = float(base_xyz[0])
+        y = float(base_xyz[1])
+    except (TypeError, ValueError):
+        return False
+
+    return x >= RECOVERY_UNREACHABLE_X_MIN_M and y >= RECOVERY_UNREACHABLE_Y_MIN_M
+
+
+def log_recovery_target_coordinates(logger, detection, target_tool, reason):
+    """Log recovery target coordinates in the robot base frame when available."""
+    base_xyz = getattr(detection, "base_xyz", None)
+    if base_xyz is None or len(base_xyz) < 3:
+        log_warn(
+            logger,
+            "recovery target coordinates unavailable",
+            step="recovery_observe",
+            event="target_coordinates_missing",
+            target=target_tool,
+            reason=reason,
+        )
+        return
+
+    try:
+        base_x = float(base_xyz[0])
+        base_y = float(base_xyz[1])
+        base_z = float(base_xyz[2])
+    except (TypeError, ValueError):
+        log_warn(
+            logger,
+            "recovery target coordinates invalid",
+            step="recovery_observe",
+            event="target_coordinates_invalid",
+            target=target_tool,
+            reason=reason,
+            base_xyz=base_xyz,
+        )
+        return
+
+    log_info(
+        logger,
+        "recovery target coordinates",
+        step="recovery_observe",
+        event="target_coordinates",
+        target=target_tool,
+        reason=reason,
+        base_x=base_x,
+        base_y=base_y,
+        base_z=base_z,
+    )
 
 
 def attempt_grasp(
