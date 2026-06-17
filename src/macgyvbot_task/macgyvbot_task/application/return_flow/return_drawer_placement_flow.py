@@ -13,6 +13,7 @@ from macgyvbot_config.drawer import (
     DRAWER_STORE_MARKER_RELEASE_Z_OFFSET_M,
 )
 from macgyvbot_config.return_flow import (
+    RETURN_DRAWER_PLACE_RECOVERY_EXTRA_YAW_DEG,
     RETURN_DRAWER_PLACE_WRIST_YAW_DEG,
     RETURN_TOOL_RELEASE_WAIT_SEC,
 )
@@ -267,6 +268,7 @@ class ReturnDrawerPlacementFlow:
         command,
         logger,
         drawer_id=None,
+        recovery_place=False,
     ):
         if marker_target is None or not marker_target.found:
             self.reporter.fail(
@@ -325,7 +327,12 @@ class ReturnDrawerPlacementFlow:
         ):
             return False
 
-        if not self._rotate_wrist_for_drawer_place(tool_name, command, logger):
+        if not self._rotate_wrist_for_drawer_place(
+            tool_name,
+            command,
+            logger,
+            recovery_place=recovery_place,
+        ):
             return False
         ori = current_ee_orientation(self.robot)
 
@@ -412,11 +419,23 @@ class ReturnDrawerPlacementFlow:
         )
         return False
 
-    def _rotate_wrist_for_drawer_place(self, tool_name, command, logger):
+    def _rotate_wrist_for_drawer_place(
+        self,
+        tool_name,
+        command,
+        logger,
+        recovery_place=False,
+    ):
         drawer_yaw_deg = normalize_angle_deg(
-            RETURN_DRAWER_PLACE_WRIST_YAW_DEG - self._last_grasp_yaw_deg
+            RETURN_DRAWER_PLACE_WRIST_YAW_DEG
+            - self._last_grasp_yaw_deg
+            + (
+                RETURN_DRAWER_PLACE_RECOVERY_EXTRA_YAW_DEG
+                if recovery_place
+                else 0.0
+            )
         )
-        if abs(self._last_grasp_yaw_deg) < 0.1:
+        if abs(self._last_grasp_yaw_deg) < 0.1 and not recovery_place:
             ok = rotate_wrist_for_drawer_store(
                 self.motion,
                 logger,
@@ -430,7 +449,8 @@ class ReturnDrawerPlacementFlow:
                 logger.info(
                     "Return drawer place wrist yaw adjusted from grasp yaw: "
                     f"grasp_yaw_deg={self._last_grasp_yaw_deg:.1f}, "
-                    f"drawer_yaw_deg={drawer_yaw_deg:.1f}"
+                    f"drawer_yaw_deg={drawer_yaw_deg:.1f}, "
+                    f"recovery_place={recovery_place}"
                 )
                 ok = rotate_wrist(
                     drawer_yaw_deg,
