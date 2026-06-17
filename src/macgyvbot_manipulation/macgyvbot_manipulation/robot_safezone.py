@@ -5,7 +5,13 @@ from macgyvbot_config.drawer import (
     DRAWER_1_SAFE_Z_OFFSET_M,
     DRAWER_2_SAFE_Z_OFFSET_M,
 )
-from macgyvbot_config.robot import SAFE_X_MIN, SAFE_Y_MAX, SAFE_Y_MIN, SAFE_Z_MIN
+from macgyvbot_config.robot import (
+    SAFE_X_MAX,
+    SAFE_X_MIN,
+    SAFE_Y_MAX,
+    SAFE_Y_MIN,
+    SAFE_Z_MIN,
+)
 
 
 def safe_z_min_for_drawer(drawer_id):
@@ -32,6 +38,12 @@ def clamp_to_safe_workspace(x: float, y: float, z: float, logger, min_z=None):
             f"({SAFE_X_MIN:.3f} m)보다 낮아 SAFE_X_MIN으로 제한합니다."
         )
         safe_x = SAFE_X_MIN
+    elif safe_x > SAFE_X_MAX:
+        logger.warning(
+            f"요청 x ({safe_x:.3f} m)가 안전 상한 "
+            f"({SAFE_X_MAX:.3f} m)보다 높아 SAFE_X_MAX로 제한합니다."
+        )
+        safe_x = SAFE_X_MAX
 
     if safe_y < SAFE_Y_MIN:
         logger.warning(

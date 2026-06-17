@@ -9,7 +9,7 @@ from moveit.core.robot_state import RobotState
 
 from macgyvbot_config.drawer import (
     DRAWER_CLOSE_LIFT_OFFSET_M,
-    DRAWER_CLOSE_PREPARE_WRIST_YAW_DEG,
+    DRAWER_CLOSE_PREPARE_WRIST_J6_DEG,
     DRAWER_GRIPPER_SETTLE_SEC,
     DRAWER_HANDLE_PREAPPROACH_X_OFFSET_M,
     DRAWER_HANDLE_JOINT_DEGREES,
@@ -300,23 +300,23 @@ class DrawerMotionFlow:
     def _prepare_wrist_for_close(self, drawer_id, logger):
         logger.info(
             f"drawer {drawer_id} close prepare: "
-            f"J6를 {DRAWER_CLOSE_PREPARE_WRIST_YAW_DEG:.1f}도 회전합니다."
+            f"J6를 {DRAWER_CLOSE_PREPARE_WRIST_J6_DEG:.1f}도로 이동합니다."
         )
         if self.dry_run:
             return True
 
-        rotate_wrist = getattr(self.motion, "rotate_wrist_by_yaw_deg", None)
-        if rotate_wrist is None:
+        move_wrist = getattr(self.motion, "move_wrist_to_joint_rad", None)
+        if move_wrist is None:
             _log_drawer_motion_failed(
                 logger,
                 stage="close_prepare_wrist",
                 drawer_id=drawer_id,
-                reason="wrist_rotation_api_unavailable",
+                reason="wrist_joint_target_api_unavailable",
             )
             return False
 
-        ok = rotate_wrist(
-            DRAWER_CLOSE_PREPARE_WRIST_YAW_DEG,
+        ok = move_wrist(
+            math.radians(DRAWER_CLOSE_PREPARE_WRIST_J6_DEG),
             logger,
             collision_scene_key="drawer/close_prepare_wrist",
         )
@@ -325,8 +325,8 @@ class DrawerMotionFlow:
                 logger,
                 stage="close_prepare_wrist",
                 drawer_id=drawer_id,
-                reason="wrist_rotation_failed",
-                yaw_deg=DRAWER_CLOSE_PREPARE_WRIST_YAW_DEG,
+                reason="wrist_joint_target_failed",
+                target_j6_deg=DRAWER_CLOSE_PREPARE_WRIST_J6_DEG,
                 collision_scene_key="drawer/close_prepare_wrist",
             )
         return ok
