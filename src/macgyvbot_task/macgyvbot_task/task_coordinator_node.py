@@ -1687,6 +1687,8 @@ class TaskCoordinatorNode(Node):
         pending_drop_recovery = self._pending_drop_recovery_payload is not None
         self._active_drop_recovery_snapshot = None
         if ok and not pending_drop_recovery:
+            if action == "return":
+                self.state.return_drawer_place_after_recovery = True
             if self._drop_recovery_resume_step is not None:
                 self._queue.append(
                     (
@@ -2381,6 +2383,7 @@ class TaskCoordinatorNode(Node):
         self.state.target_label = None
         self.state.target_tool = None
         self.state.recovery_mode = False
+        self.state.return_drawer_place_after_recovery = False
         self.state.human_grasped_tool = False
         self.state.current_command = None
         self.state.drawer_prepared_tool = None

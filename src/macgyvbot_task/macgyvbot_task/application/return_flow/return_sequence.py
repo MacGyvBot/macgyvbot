@@ -527,13 +527,20 @@ class ReturnSequenceRunner:
 
     def _place_tool_at_drawer_marker(self, context):
         observed_tool = context.get("observed_tool") or context["requested_tool"]
-        return self.drawer_placement.place_tool_at_marker(
+        recovery_place = bool(
+            getattr(self.state, "return_drawer_place_after_recovery", False)
+        )
+        ok = self.drawer_placement.place_tool_at_marker(
             context.get("drawer_marker_target"),
             observed_tool,
             context["command"],
             self.state.logger(),
             drawer_id=context.get("drawer_id"),
+            recovery_place=recovery_place,
         )
+        if ok and recovery_place:
+            self.state.return_drawer_place_after_recovery = False
+        return ok
 
     def _close_observed_tool_drawer(self, context):
         drawer_id = context.get("drawer_id")

@@ -41,6 +41,7 @@ class TaskRuntimeState:
     drawer_prepared_tool: str | None = None
     drawer_preparing_tool: str | None = None
     recovery_mode: bool = False
+    return_drawer_place_after_recovery: bool = False
     held_tool: str | None = None
     gripper_holding: bool = False
     drawer_open: bool = False
